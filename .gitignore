@@ -53,6 +53,7 @@ proxy/cliproxyapi/*.pre-v*
 proxy/cliproxyapi/static/
 
 # Runtime logs and scratch
+.logs/
 backend/logs/
 logs/
 .tmp/

@@ -55,3 +55,11 @@
     scroll-behavior: auto !important;
   }
 }
+/* 引擎标识：自指螺旋。两套透明底 PNG 按主题切换，不依赖 filter / 混合模式，
+   这样在任何渲染器（含无头截图）里表现一致。 */
+.logo-spiral {
+  user-select: none;
+  -webkit-user-drag: none;
+  display: block;
+}
+.logo-spiral-light { display: none; }

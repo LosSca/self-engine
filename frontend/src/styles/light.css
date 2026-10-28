@@ -42,7 +42,9 @@ html[data-theme="light"] .hero-bg {
 html[data-theme="light"] .hero-mask { background-image: none !important; background-color: transparent !important; }
 html[data-theme="light"] .hero-title { color: #141414; }
 html[data-theme="light"] .hero-emblem { color: #141414; }
-html[data-theme="light"] .hero-logo-img { filter: invert(1) brightness(0.15); }
+/* 自指螺旋：两套透明底 PNG 按主题切换（深色=白螺旋，浅色=黑螺旋） */
+html[data-theme="light"] .logo-spiral-dark { display: none; }
+html[data-theme="light"] .logo-spiral-light { display: block; }
 
 /* 表单控件与滚动条 */
 html[data-theme="light"] textarea,

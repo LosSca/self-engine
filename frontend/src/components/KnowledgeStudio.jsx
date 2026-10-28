@@ -430,14 +430,25 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     <div className="fixed inset-0 z-50 bg-black/80 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
       <div className="w-full max-w-5xl bg-[#0b0b0b] border border-white/10 rounded-[2rem] shadow-2xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 border-b border-white/10">
-          <div>
-            <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-2">
-              知识 · 模式 · 预设
+          <div className="flex items-start gap-4">
+            <img
+              src="/self-reference-mark.png"
+              alt=""
+              aria-hidden="true"
+              width="44"
+              height="44"
+              className="mt-1 opacity-70 shrink-0"
+              draggable="false"
+            />
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-2">
+                知识 · 模式 · 预设
+              </div>
+              <h2 className="text-2xl font-bold text-white">{scenarioTitle || '情景配置'}</h2>
+              <p className="text-xs text-white/40 mt-2">
+                知识只作为叙事背景注入；模式的推进由权威状态与规则决定。
+              </p>
             </div>
-            <h2 className="text-2xl font-bold text-white">{scenarioTitle || '情景配置'}</h2>
-            <p className="text-xs text-white/40 mt-2">
-              知识只作为叙事背景注入；模式的推进由权威状态与规则决定。
-            </p>
           </div>
           <button
             onClick={onClose}

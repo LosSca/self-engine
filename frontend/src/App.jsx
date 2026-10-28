@@ -152,28 +152,26 @@ function Home() {
       <div className="w-full max-w-5xl px-4 sm:px-8 relative z-10 flex flex-col items-center">
 
         <header className="mb-12 flex flex-col items-center text-center">
-          <div className="hero-emblem mb-7 text-white/80">
-            <svg width="88" height="88" viewBox="0 0 96 96" fill="none" aria-hidden="true">
-              <circle cx="48" cy="48" r="27" stroke="currentColor" strokeWidth="1.1" opacity="0.85" />
-              <circle cx="48" cy="48" r="35" stroke="currentColor" strokeWidth="0.6" opacity="0.3" />
-              <path
-                d="M48 13a35 35 0 0 1 33.2 23.8"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                opacity="0.9"
-              />
-              <path d="M81.2 37.4 81.2 27.6 72.4 32.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" fill="none" />
-              <path
-                d="M48 83a35 35 0 0 1-33.2-23.8"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                opacity="0.45"
-              />
-              <circle cx="48" cy="48" r="3.2" fill="currentColor" opacity="0.9" />
-              <path d="M48 21v8M48 67v8M21 48h8M67 48h8" stroke="currentColor" strokeWidth="1" opacity="0.35" />
-            </svg>
+          {/* 引擎标识：自指螺旋。深色用白螺旋 / 浅色用黑螺旋，均为透明底 PNG，
+              由 CSS 按 data-theme 切换，不依赖 filter 或混合模式。 */}
+          <div className="hero-emblem mb-7">
+            <img
+              src="/self-reference-logo-dark.png"
+              alt="自指引擎"
+              width="112"
+              height="112"
+              className="hero-logo-img logo-spiral logo-spiral-dark"
+              draggable="false"
+            />
+            <img
+              src="/self-reference-logo.png"
+              alt=""
+              aria-hidden="true"
+              width="112"
+              height="112"
+              className="hero-logo-img logo-spiral logo-spiral-light"
+              draggable="false"
+            />
           </div>
 
           <p className="hero-emblem text-[10px] font-mono tracking-[0.55em] uppercase text-white/40 mb-4">

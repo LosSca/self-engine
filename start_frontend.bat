@@ -1,7 +1,13 @@
 @echo off
+REM Frontend only (ASCII only: see start.bat for why).
+setlocal
+title Self-Reference Engine - Frontend
+cd /d "%~dp0"
 chcp 65001 >nul
-title 自指引擎 - 前端
-cd /d "%~dp0frontend"
-echo 自指引擎前端 @ http://localhost:5173  (Ctrl+C 停止)
-npm run dev
-pause
+set "PY="
+if exist "%~dp0backend\.venv\Scripts\python.exe" set "PY=%~dp0backend\.venv\Scripts\python.exe"
+if not defined PY if exist "%~dp0backend\venv\Scripts\python.exe" set "PY=%~dp0backend\venv\Scripts\python.exe"
+if not defined PY set "PY=python"
+"%PY%" "%~dp0launch.py" --frontend-only %*
+if errorlevel 1 pause
+endlocal
