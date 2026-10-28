@@ -198,6 +198,117 @@ def get_world(world_id: str):
         store.close()
 
 
+def _world_or_404_detail(world_id: str):
+    """Load a world for read-only projection, mapping LookupError to 404."""
+    store = _get_store()
+    try:
+        return world_service.get_world(store, world_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        store.close()
+
+
+@router.get("/worlds/{world_id}/map", response_model=Dict[str, Any])
+def get_world_map(world_id: str):
+    """Navigation graph for one world (locations, exits, doors, occupants).
+
+    This is a *projection* of the authoritative world document plus the
+    static catalogues (items/entities/doors) resolved into names, so a client
+    can draw a map without re-implementing reference resolution. Nothing here
+    is authoritative run-time state: campaign state lives under /campaigns.
+    """
+    world = _world_or_404_detail(world_id)
+    items = {item.id: item for item in world.items}
+    doors = {door.id: door for door in world.doors}
+    entities = {entity.id: entity for entity in world.entities}
+
+    def _item_ref(item_id: str) -> Dict[str, Any]:
+        item = items.get(item_id)
+        return {
+            "id": item_id,
+            "name": item.name if item else item_id,
+            "known": item is not None,
+        }
+
+    def _door_ref(door_id: str) -> Optional[Dict[str, Any]]:
+        door = doors.get(door_id)
+        if door is None:
+            return {"id": door_id, "name": door_id, "known": False}
+        return {
+            "id": door.id,
+            "name": door.name,
+            "location_id": door.location_id,
+            "locked": door.locked,
+            "key_item_id": door.key_item_id,
+            "key_item": _item_ref(door.key_item_id) if door.key_item_id else None,
+            "known": True,
+        }
+
+    locations: List[Dict[str, Any]] = []
+    for location in world.locations:
+        exits = []
+        for exit_def in location.exits:
+            exits.append(
+                {
+                    "target_id": exit_def.target_id,
+                    "label": exit_def.label or "",
+                    "door": _door_ref(exit_def.door_id) if exit_def.door_id else None,
+                    "requires_item": (
+                        _item_ref(exit_def.requires_item_id)
+                        if exit_def.requires_item_id
+                        else None
+                    ),
+                }
+            )
+        npcs = []
+        for entity_id in location.npc_ids:
+            entity = entities.get(entity_id)
+            npcs.append(
+                {
+                    "id": entity_id,
+                    "name": entity.name if entity else entity_id,
+                    "kind": entity.kind if entity else "npc",
+                    "known": entity is not None,
+                }
+            )
+        locations.append(
+            {
+                "id": location.id,
+                "name": location.name,
+                "description": location.description,
+                "tags": list(location.tags),
+                "is_start": location.id == world.start_location_id,
+                "exits": exits,
+                "items": [_item_ref(item_id) for item_id in location.item_ids],
+                "npcs": npcs,
+                "doors": [
+                    _door_ref(door_id) for door_id in location.door_ids if door_id
+                ],
+            }
+        )
+
+    return {
+        "world_id": world.world_id,
+        "scenario_id": world.scenario_id,
+        "name": world.name,
+        "description": world.description,
+        "start_location_id": world.start_location_id,
+        "locations": locations,
+        "items": [item.model_dump(mode="json") for item in world.items],
+        "doors": [door.model_dump(mode="json") for door in world.doors],
+        "entities": [entity.model_dump(mode="json") for entity in world.entities],
+        "counts": {
+            "locations": len(world.locations),
+            "items": len(world.items),
+            "doors": len(world.doors),
+            "entities": len(world.entities),
+            "quests": len(world.quests),
+            "events": len(world.events),
+        },
+    }
+
+
 @router.get("/worlds/{world_id}/events", response_model=List[Dict[str, Any]])
 def list_world_events(world_id: str):
     store = _get_store()
@@ -548,6 +659,119 @@ def list_campaign_events(
         return store.list_events(campaign_id, limit=limit, after_version=after_version)
     finally:
         store.close()
+
+
+@router.get(
+    "/campaigns/{campaign_id}/quest-progress", response_model=Dict[str, Any]
+)
+def get_quest_progress(campaign_id: str):
+    """Quest definitions joined with this campaign's committed progress.
+
+    Progress is read from the authoritative state; it is never recomputed from
+    narration or from the request log.
+    """
+    game_store = _get_store()
+    try:
+        state = game_store.get_state(campaign_id)
+        if state is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"campaign '{campaign_id}' has no bound world",
+            )
+        world = _world_or_404(game_store, state.world_id)
+    finally:
+        game_store.close()
+
+    quests: List[Dict[str, Any]] = []
+    for quest in world.quests:
+        progress = state.quests.get(quest.id)
+        objectives = []
+        for objective in quest.objectives:
+            count = progress.objectives.get(objective.id, 0) if progress else 0
+            objectives.append(
+                {
+                    "id": objective.id,
+                    "kind": objective.kind,
+                    "target": objective.target,
+                    "description": objective.description,
+                    "required_count": objective.required_count,
+                    "count": count,
+                    "done": count >= objective.required_count,
+                }
+            )
+        quests.append(
+            {
+                "quest_id": quest.id,
+                "title": quest.title,
+                "description": quest.description,
+                "enabled": quest.enabled,
+                "status": progress.status if progress else "inactive",
+                "objectives": objectives,
+                "completed_objectives": sum(1 for item in objectives if item["done"]),
+                "total_objectives": len(objectives),
+                "rewards": [reward.model_dump(mode="json") for reward in quest.rewards],
+            }
+        )
+
+    return {
+        "campaign_id": campaign_id,
+        "world_id": state.world_id,
+        "version": state.version,
+        "quests": quests,
+        "active": [q["quest_id"] for q in quests if q["status"] == "active"],
+        "completed": [q["quest_id"] for q in quests if q["status"] == "completed"],
+        "failed": [q["quest_id"] for q in quests if q["status"] == "failed"],
+    }
+
+
+@router.get(
+    "/campaigns/{campaign_id}/event-executions",
+    response_model=List[Dict[str, Any]],
+)
+def list_event_executions(
+    campaign_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    status: Optional[str] = Query(None),
+    after_version: int = Query(0, ge=0),
+):
+    """Event execution history, newest first.
+
+    Derived from the committed `event.fired`/`event.failed`/`event.skipped`
+    domain events, so it can only ever show what actually happened.
+    """
+    wanted = (status or "").strip().lower()
+    store = _get_store()
+    try:
+        rows = store.list_domain_events(
+            campaign_id,
+            event_type_prefix="event.",
+            limit=500 if wanted else limit,
+            after_version=after_version,
+        )
+    finally:
+        store.close()
+
+    executions: List[Dict[str, Any]] = []
+    for row in rows:
+        outcome = row["event_type"].split(".", 1)[1] if "." in row["event_type"] else ""
+        if wanted and outcome != wanted:
+            continue
+        payload = row.get("payload") or {}
+        executions.append(
+            {
+                "event_id": payload.get("event_id", ""),
+                "name": payload.get("name", ""),
+                "status": outcome,
+                "reason": payload.get("reason", ""),
+                "effects": payload.get("effects", []),
+                "state_version": row["state_version"],
+                "request_id": row["request_id"],
+                "created_at": row["created_at"],
+            }
+        )
+        if len(executions) >= limit:
+            break
+    return executions
 
 
 @router.get("/actions/{request_id}", response_model=Dict[str, Any])

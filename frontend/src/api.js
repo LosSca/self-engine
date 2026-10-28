@@ -671,3 +671,133 @@ export async function fetchCampaignStory(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/story`)
   return jsonOrThrow(r, '读取故事线进度失败')
 }
+// ---------------------------------------------------------------- 世界工坊 / v1 引擎
+export async function fetchWorlds(scenarioId) {
+  const query = scenarioId ? `?scenario_id=${encodeURIComponent(scenarioId)}` : ''
+  const r = await fetch(`${V1}/worlds${query}`)
+  return jsonOrThrow(r, '读取世界列表失败')
+}
+
+export async function fetchWorld(worldId) {
+  const r = await fetch(`${V1}/worlds/${worldId}`)
+  return jsonOrThrow(r, '读取世界定义失败')
+}
+
+export async function createWorld(definition) {
+  const r = await fetch(`${V1}/worlds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(definition),
+  })
+  return jsonOrThrow(r, '创建世界失败')
+}
+
+export async function replaceWorld(worldId, definition) {
+  const r = await fetch(`${V1}/worlds/${worldId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(definition),
+  })
+  return jsonOrThrow(r, '保存世界失败')
+}
+
+export async function validateWorld(definition) {
+  const r = await fetch(`${V1}/worlds/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(definition),
+  })
+  return jsonOrThrow(r, '校验世界失败')
+}
+
+export async function fetchWorldMap(worldId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/map`)
+  return jsonOrThrow(r, '读取世界地图失败')
+}
+
+function worldChild(worldId, kind, id, body) {
+  const path = `${V1}/worlds/${worldId}/${kind}${id ? `/${encodeURIComponent(id)}` : ''}`
+  return fetch(path, body === undefined ? {} : {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function saveWorldLocation(worldId, locationId, body) {
+  return jsonOrThrow(await worldChild(worldId, 'locations', locationId, body), '保存地点失败')
+}
+export async function deleteWorldLocation(worldId, locationId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/locations/${encodeURIComponent(locationId)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除地点失败')
+}
+export async function saveWorldItem(worldId, itemId, body) {
+  return jsonOrThrow(await worldChild(worldId, 'items', itemId, body), '保存物品失败')
+}
+export async function deleteWorldItem(worldId, itemId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除物品失败')
+}
+export async function saveWorldDoor(worldId, doorId, body) {
+  return jsonOrThrow(await worldChild(worldId, 'doors', doorId, body), '保存门失败')
+}
+export async function deleteWorldDoor(worldId, doorId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/doors/${encodeURIComponent(doorId)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除门失败')
+}
+export async function saveWorldEntity(worldId, entityId, body) {
+  return jsonOrThrow(await worldChild(worldId, 'entities', entityId, body), '保存实体失败')
+}
+export async function deleteWorldEntity(worldId, entityId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/entities/${encodeURIComponent(entityId)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除实体失败')
+}
+export async function saveWorldEvent(worldId, eventId, body) {
+  return jsonOrThrow(await worldChild(worldId, 'events', eventId, body), '保存事件失败')
+}
+export async function deleteWorldEvent(worldId, eventId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除事件失败')
+}
+export async function saveWorldQuest(worldId, questId, body) {
+  return jsonOrThrow(await worldChild(worldId, 'quests', questId, body), '保存任务失败')
+}
+export async function deleteWorldQuest(worldId, questId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/quests/${encodeURIComponent(questId)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除任务失败')
+}
+
+export async function validateWorldEvent(worldId, eventId) {
+  const r = await fetch(`${V1}/worlds/${worldId}/events/${encodeURIComponent(eventId)}/validate`, { method: 'POST' })
+  return jsonOrThrow(r, '校验事件失败')
+}
+
+export async function simulateWorldEvent(worldId, eventId, campaignId) {
+  const query = campaignId ? `?campaign_id=${encodeURIComponent(campaignId)}` : ''
+  const r = await fetch(`${V1}/worlds/${worldId}/events/${encodeURIComponent(eventId)}/simulate${query}`, { method: 'POST' })
+  return jsonOrThrow(r, '模拟事件失败')
+}
+
+export async function fetchCampaignEngineState(campaignId) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/state`)
+  return jsonOrThrow(r, '读取权威状态失败')
+}
+
+export async function fetchQuestProgress(campaignId) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/quest-progress`)
+  return jsonOrThrow(r, '读取任务进度失败')
+}
+
+export async function fetchEventExecutions(campaignId, { status = '', limit = 100, afterVersion = 0 } = {}) {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  params.set('limit', String(limit))
+  if (afterVersion) params.set('after_version', String(afterVersion))
+  const r = await fetch(`${V1}/campaigns/${campaignId}/event-executions?${params.toString()}`)
+  return jsonOrThrow(r, '读取事件执行历史失败')
+}
+
+export async function fetchCampaignDiagnostics(campaignId) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/diagnostics`)
+  return jsonOrThrow(r, '读取状态诊断失败')
+}

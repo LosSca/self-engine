@@ -7,6 +7,7 @@ import GameCanvas from './components/GameCanvas'
 import ScenarioBuilder from './components/ScenarioBuilder'
 import SetupWizard from './components/SetupWizard'
 import KnowledgeStudio from './components/KnowledgeStudio'
+import WorldStudio from './components/WorldStudio'
 import { ALL_TYPES, WORLD_TYPE_LABELS } from './lib/scenarioTypes'
 
 const ArchiveIcon = () => (
@@ -31,6 +32,8 @@ function Home() {
   const [campaignsMap, setCampaignsMap] = useState({})
   const [studioScenario, setStudioScenario] = useState(null)
   const [studioTab, setStudioTab] = useState('knowledge')
+  // 世界工坊：打开时带上情景 id（可为空，表示看全部世界）
+  const [worldStudio, setWorldStudio] = useState(null)
 
   useEffect(() => {
     fetchScenarios()
@@ -279,6 +282,14 @@ function Home() {
                         )}
 
                         <button
+                          onClick={(e) => { e.stopPropagation(); setWorldStudio({ scenarioId: s.id }) }}
+                          className="px-4 py-3 rounded-2xl border border-white/10 hover:border-white/30 text-white/50 hover:text-white transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
+                          title="编辑世界地图、地点、物品、门、实体、事件与任务"
+                        >
+                          世界工坊
+                        </button>
+
+                        <button
                           onClick={(e) => { e.stopPropagation(); setStudioScenario(s) }}
                           className="px-4 py-3 rounded-2xl border border-white/10 hover:border-white/30 text-white/50 hover:text-white transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
                           title="编辑知识库、运行模式与模型预设"
@@ -320,6 +331,13 @@ function Home() {
           )}
         </div>
       </div>
+
+      <WorldStudio
+        open={Boolean(worldStudio)}
+        scenarioId={worldStudio?.scenarioId}
+        campaignId={undefined}
+        onClose={() => setWorldStudio(null)}
+      />
 
       <KnowledgeStudio
         open={Boolean(studioScenario)}

@@ -394,6 +394,44 @@ class GameStateStore:
             for row in rows
         ]
 
+    def list_domain_events(
+        self,
+        campaign_id: str,
+        *,
+        event_type_prefix: str = "",
+        limit: int = 100,
+        after_version: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Most recent first, optionally filtered by an event_type prefix.
+
+        `list_events` is the forward (replay) view used by clients that poll
+        incrementally; history screens and debug consoles want the newest rows
+        instead, which is what `LIMIT` should mean here.
+        """
+        sql = (
+            "SELECT * FROM domain_events"
+            " WHERE campaign_id = ? AND state_version > ?"
+        )
+        params: List[Any] = [campaign_id, after_version]
+        if event_type_prefix:
+            sql += " AND event_type LIKE ?"
+            params.append(event_type_prefix.replace("%", "") + "%")
+        sql += " ORDER BY rowid DESC LIMIT ?"
+        params.append(int(limit))
+        rows = self._conn.execute(sql, tuple(params)).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "campaign_id": row["campaign_id"],
+                "request_id": row["request_id"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload_json"]),
+                "state_version": row["state_version"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def get_action_request_result(
         self, campaign_id: str, request_id: str
     ) -> Optional[Dict[str, Any]]:
