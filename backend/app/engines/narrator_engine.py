@@ -1,0 +1,832 @@
+from __future__ import annotations
+import logging
+import re
+from enum import Enum
+from typing import AsyncIterator
+
+from app.utils.json_parsing import parse_json_dict
+
+logger = logging.getLogger(__name__)
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for English, ~3 for CJK-heavy text."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+class NarrativeMode(str, Enum):
+    NARRATIVE = "NARRATIVE"
+    COMBAT = "COMBAT"
+    META = "META"
+
+
+_DEFAULT_META = {"mode": "NARRATIVE", "ambush": False, "narrative_time_seconds": 60}
+
+_LANGUAGE_INSTRUCTIONS = {
+    "en": "Respond in English.",
+    "pt-br": "Responda em português brasileiro (pt-br).",
+}
+
+# FASE 2: cache_control marker for the stable prompt zones. 1h TTL survives the
+# player's think time between turns; the router adds the extended-ttl beta header.
+_CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
+
+
+class NarratorEngine:
+    def __init__(self, llm):
+        self._llm = llm
+
+    async def detect_mode(self, player_input: str, story_context: str = "") -> tuple[NarrativeMode, dict]:
+        context_hint = ""
+        if story_context:
+            context_hint = f" Recent story context: {story_context}"
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Classify the player's action and return ONLY JSON: "
+                    '{"mode": "NARRATIVE|COMBAT|META", "ambush": bool, "narrative_time_seconds": int, '
+                    '"opponent_name": str, "opponent_power": int}. '
+                    "COMBAT: action initiates or continues a fight. "
+                    "META: player speaks to the AI narrator directly (out of character). "
+                    "NARRATIVE: everything else (exploration, dialogue, travel, etc.). "
+                    "ambush: true ONLY if an NPC attacks the player by surprise (not player-initiated). "
+                    "narrative_time_seconds: realistic story time this action takes in seconds. "
+                    "opponent_name: if COMBAT, the name or description of the opponent being fought (e.g. 'Kael Noir', 'four-legged creature', 'bandit'). Empty string if not COMBAT. "
+                    "opponent_power: if COMBAT, estimate the opponent's power level 1-10. "
+                    "If a WORLD POWER SCALE is provided in the context, use those NPCs as anchors "
+                    "to calibrate the opponent relative to the world. "
+                    "Use 3 if truly uncertain. 0 if not COMBAT."
+                    + context_hint
+                ),
+            },
+            {"role": "user", "content": player_input},
+        ]
+        try:
+            raw = await self._llm.complete(messages=messages, max_tokens=256, reasoning=False)
+        except Exception:
+            return self._heuristic_detect_mode(player_input)
+
+        data = parse_json_dict(raw)
+        if not data:
+            return self._heuristic_detect_mode(player_input)
+
+        mode_raw = str(data.get("mode", "NARRATIVE")).upper()
+        try:
+            mode = NarrativeMode(mode_raw)
+        except ValueError:
+            mode = NarrativeMode.NARRATIVE
+
+        try:
+            seconds = int(data.get("narrative_time_seconds", 60))
+        except (TypeError, ValueError):
+            seconds = 60
+
+        opponent_name = str(data.get("opponent_name", "")).strip()
+        try:
+            opponent_power = max(1, min(10, int(data.get("opponent_power", 3))))
+        except (TypeError, ValueError):
+            opponent_power = 3
+
+        return mode, {
+            "mode": mode.value,
+            "ambush": bool(data.get("ambush", False)),
+            "narrative_time_seconds": seconds,
+            "opponent_name": opponent_name,
+            "opponent_power": opponent_power,
+        }
+
+    # Narration paragraphs allowed per response, by token budget. Dialogue lines
+    # are excluded from the count so trimming falls on description.
+    _PARAGRAPH_BUDGET = ((512, 2), (1000, 3), (1500, 5), (3000, 7))
+
+    @staticmethod
+    def _paragraph_budget(max_tokens: int) -> int:
+        for ceiling, paragraphs in NarratorEngine._PARAGRAPH_BUDGET:
+            if max_tokens <= ceiling:
+                return paragraphs
+        return 0
+
+    @staticmethod
+    def _length_instruction(max_tokens: int, language: str = "en") -> str:
+        """Return the length constraint for narrative_text, scaled to the token budget.
+
+        States the budget as a spending order rather than a ceiling. A ceiling alone
+        gets filled with ambient description, leaving nothing for the beat that
+        carries the scene, and the response then runs past the output limit.
+        """
+        if max_tokens <= 0:
+            return ""
+        paragraphs = NarratorEngine._paragraph_budget(max_tokens)
+        if language == "pt-br":
+            head = (
+                f"EXTENSÃO (vinculante): a resposta precisa estar COMPLETA dentro de no máximo "
+                f"{paragraphs} parágrafos de narração no campo 'narrative_text'. Linhas de diálogo "
+                "não entram nessa conta.\n"
+            ) if paragraphs else (
+                "EXTENSÃO (vinculante): a resposta precisa estar COMPLETA dentro do limite de saída.\n"
+            )
+            return (
+                head
+                + f"  O limite duro de saída é de {max_tokens} tokens e o bloco de status conta nele. "
+                "Decida a batida final antes de começar a escrever e conduza a resposta até ela. "
+                "Resposta que fica sem espaço no meio é resposta falhada.\n"
+                "  Gaste o orçamento nesta ordem: primeiro renderize a fala ou ação do jogador, "
+                "depois o que muda por causa dela, depois a batida em que a resposta termina. "
+                "Descrição de ambiente fica com o que sobrar, que em geral é nada.\n"
+                "  Esse teto não é meta. Use menos parágrafos quando a batida for pequena."
+            )
+        head = (
+            f"LENGTH (binding): the response must be COMPLETE within at most {paragraphs} narration "
+            "paragraphs in the 'narrative_text' field. Dialogue lines do not count toward that "
+            "budget.\n"
+        ) if paragraphs else (
+            "LENGTH (binding): the response must be COMPLETE within the output limit.\n"
+        )
+        return (
+            head
+            + f"  The hard output limit is {max_tokens} tokens and the status block counts against it. "
+            "Decide the closing beat before you start writing and steer the response to it. A "
+            "response that runs out of room partway is a failed response.\n"
+            "  Spend the budget in this order: first render the player's line or action, then what "
+            "changes because of it, then the beat the response ends on. Ambient description gets "
+            "what is left over, which is usually nothing.\n"
+            "  That ceiling is not a target. Use fewer paragraphs when the beat is small."
+        )
+
+    _NARRATOR_RULES = {
+        "en": (
+            "\nNARRATOR RULES:\n"
+            "- Write immersive, evocative prose. Never break character.\n"
+            "- React meaningfully to player choices. Consequences are real.\n"
+            "- The world is alive — NPCs have their own agendas and memories.\n"
+            "- ALWAYS render the player's input on-screen before showing reactions. If the player input is `[SAY] ...text...`, the narrative MUST OPEN with the player character speaking those exact words as a direct quote (e.g. `\"...text...\", he says.`), then continue with NPC reactions. If the input is `[DO] ...text...`, the narrative MUST OPEN by describing the player performing that action. NEVER skip straight to NPC reactions as if the player's words/actions happened off-screen — the player must SEE their own line/action rendered in the narration. You may lightly polish punctuation/capitalization but must preserve the wording, intent and tone (including emphasis, exclamations, slang).\n"
+            "- ALWAYS use FULL character names (first + last) in narration. You may use short names in dialogue spoken by characters, but the narration itself must use full names.\n"
+            "- When mentioning a character by name in narration, prefix their name with @ (e.g. @Satoru Gojo). This applies to ALL named characters and NPCs. Do NOT use @ in dialogue lines spoken by characters, only in narration text.\n"
+            "- Stay consistent with the established tone.\n"
+            "- Do NOT summarize. Narrate in present tense.\n"
+            "- End each response on a complete sentence, never mid-action.\n"
+            "- ALWAYS finish your response with a complete sentence. Never stop mid-word or mid-sentence.\n"
+            "{length_instruction}"
+            "\nSCENE ECONOMY (binding):\n"
+            "- The closing line of every response belongs to a person: an NPC acting, an NPC speaking, or a choice left open in front of the player. Never close on weather, scenery, an object at rest, or a held shot after the last person has stopped moving.\n"
+            "- Ambient description never occupies a paragraph of its own. A setting detail rides inside a sentence that also carries action, speech, or a decision.\n"
+            "- A place, a weather condition, or a physical trait is established once. Later responses in the same location return to it only when it changes or when someone acts on it.\n"
+            "- Size the response to the beat. A brief remark or a small gesture gets a short response; only a real turn in the story or a change of scene earns a long one.\n"
+            "\nPROSE TEXTURE:\n"
+            "- NPCs respond according to their immediate goals, personality, and social role. Their reaction may be simple. Not every line needs a challenge, lesson, slogan, or dramatic statement.\n"
+            "- Let sentence rhythm follow the meaning of each moment, clipped and taut where tension lands, longer where a character is thinking or explaining.\n"
+            "- When a physical sensation matters to the scene, ground it in concrete perception: the feel, weight, and texture of a thing. A sensation that changes neither what the player understands nor what they can decide stays out.\n"
+            "\nCHARACTER FIDELITY (binding):\n"
+            "- The traits listed on an NPC's story card govern how that NPC behaves on screen: their register, their vocabulary, how much they volunteer unasked, and how they hold themselves toward others. Read the traits before writing the line.\n"
+            "- Standing and role decide who gives instructions in a scene. An NPC issues orders, corrects, or takes charge only when their listed traits and their position support it. Everyone else asks, offers, hedges, or stays quiet.\n"
+            "- Two NPCs with different listed traits must not sound interchangeable. Give each a distinct register that a reader could tell apart with the name removed.\n"
+            "- When the listed traits pull against what would make the moment more dramatic, the traits win. Reshape the beat around the character rather than the character around the beat.\n"
+            "\nSTYLE DISCIPLINE (each line states what healthy prose does; the vice is its mechanical opposite):\n"
+            "- Statements assert what a thing is. Never reach for lift by first naming what it is not and then asserting what it is, and never append a trailing clause that raises an alternative only to discard it.\n"
+            "- A gesture stands on its own. Never follow a physical action with a subordinate clause that interprets what it was supposed to mean.\n"
+            "- Scenes close on someone's last beat. Never end on a portable maxim, and never personify the setting, the world, or fate as something that waits, watches, judges, or promises.\n"
+            "- Cadence follows meaning. Never repeat a fixed three-part structure as a rhythmic hammer.\n"
+            "- A word carries once. Never repeat the same word in sequence purely for emphasis.\n"
+            "- The em dash stays scarce. Ordinary punctuation carries most pauses; reserve it for a single well-placed break.\n"
+            "- Replies advance on intent. Never open by replaying the player's actions as a sequential list before reacting.\n"
+            "\nREADABILITY AND COMPLEXITY:\n"
+            "- Plain, readable causality is the default. Introduce at most one new unanswered narrative question at a time. Resolve or develop the current beat before adding another.\n"
+            "- Natural, conversational dialogue is the default. Reserve aphorisms, slogans, theatrical rebukes, and quotable one-liners for rare moments that earn them.\n"
+            "- Do not turn an ordinary activity into a conspiracy, investigation, hidden mechanism, or ominous sign unless an established active plot directly requires it.\n"
+            "- Prefer familiar world terms and observable effects. Do not invent technical jargon or extra mechanisms when existing rules explain the event.\n"
+            "\nCOHERENCE RULES (CRITICAL):\n"
+            "- NEVER contradict facts established in PLAYER INVENTORY or in MEMORY tier crystals (WORLD MEMORY).\n"
+            "- An item's \"source\" / origin reason in INVENTORY is canonical. NPCs may interpret or speculate, but cannot rewrite the item's documented purpose.\n"
+            "- If a fact appears in MEMORY tier crystals, treat it as immutable canon. If a player asks about it again, reuse the same explanation — do not invent a new one.\n"
+            "- An NPC may only reference information they could plausibly know: things they witnessed on-screen, things told to them on-screen, or public lore from their region. Never have an NPC mention a player detail (vehicle, item, lineage, route, prior location) that the player did not reveal in dialogue or that the NPC did not visibly observe.\n"
+            "- A newly introduced NPC begins with no private campaign knowledge. They know only public lore, their own role, what is visibly present, and what they are told on-screen. If they infer beyond direct observation, show the basis and state the inference with uncertainty.\n"
+            "- Avoid recycling sensory phrases. If a sensory image (a recurring weather beat, a recurring eye-color line, a recurring artifact pulse) appeared in any recent narrator response, pick a different one. Repetition breaks immersion.\n"
+            "- Tone must match TONE AND STYLE. Do not inject solemn / mysterious / ominous framing for ordinary requests unless the lore explicitly marks the topic as sacred or dangerous.\n"
+            "- When the player ACQUIRES an item, emit: [ITEM_ADD:item_name|category|source_description]\n"
+            "- When an item is CONSUMED or EXPENDED, emit: [ITEM_USE:item_name]\n"
+            "- When an item is LOST, STOLEN, or DESTROYED, emit: [ITEM_LOSE:item_name]\n"
+            "- Categories: weapon, armor, consumable, quest, tool, misc\n"
+            "- If the player tries to use an item NOT in their inventory, reject the action narratively.\n"
+            "- Place item tags at the end of the relevant sentence, inline with the narrative.\n"
+            "- IMPORTANT: If you mention an item from the WORLD LORE / story cards that the player is carrying or using for the FIRST TIME in the story (e.g. a keepsake, a weapon described in the scenario), emit [ITEM_ADD] for it so it appears in the inventory. Story card items that the player already has but haven't been registered yet MUST be tagged.\n"
+        ),
+        "pt-br": (
+            "\nREGRAS DO NARRADOR:\n"
+            "- Escreva prosa imersiva e evocativa. Nunca quebre o personagem.\n"
+            "- Reaja de forma significativa às escolhas do jogador. Consequências são reais.\n"
+            "- O mundo é vivo — NPCs têm suas próprias agendas e memórias.\n"
+            "- SEMPRE renderize o input do jogador em cena antes de mostrar qualquer reação. Se o input do jogador for `[SAY] ...texto...`, a narrativa DEVE COMEÇAR com o personagem do jogador falando aquelas palavras exatas como citação direta (ex: `\"...texto...\", ele diz.`), e só depois seguir com as reações dos NPCs. Se o input for `[DO] ...texto...`, a narrativa DEVE COMEÇAR descrevendo o jogador executando aquela ação. NUNCA pule direto para reações de NPCs como se a fala/ação do jogador tivesse acontecido fora de cena — o jogador precisa VER a própria fala/ação renderizada na narração. É permitido ajustar levemente pontuação/capitalização, mas mantenha as palavras, a intenção e o tom (incluindo ênfase, exclamações, gírias).\n"
+            "- SEMPRE use nomes COMPLETOS dos personagens (nome + sobrenome) na narração. Nomes curtos são permitidos apenas em diálogos falados pelos personagens, mas a narração em si deve usar nomes completos.\n"
+            "- Ao mencionar um personagem pelo nome na narração, prefixe com @ (ex: @Satoru Gojo). Isso se aplica a TODOS os personagens e NPCs nomeados. NÃO use @ em falas de diálogo dos personagens, apenas no texto narrativo.\n"
+            "- Mantenha consistência com o tom estabelecido.\n"
+            "- NÃO resuma. Narre no tempo presente.\n"
+            "- Termine cada resposta em frase completa, nunca no meio de uma ação.\n"
+            "- SEMPRE termine sua resposta com uma frase completa. Nunca pare no meio de uma palavra ou frase.\n"
+            "{length_instruction}"
+            "\nECONOMIA DE CENA (vinculante):\n"
+            "- A última linha de toda resposta pertence a uma pessoa: um NPC agindo, um NPC falando, ou uma escolha deixada aberta diante do jogador. Nunca feche em clima, cenário, objeto parado ou plano suspenso depois que a última pessoa parou de se mexer.\n"
+            "- Descrição de ambiente nunca ocupa um parágrafo próprio. O detalhe de cenário vai dentro de uma frase que também carrega ação, fala ou decisão.\n"
+            "- Um lugar, uma condição de clima ou um traço físico se estabelece uma vez. Respostas seguintes no mesmo local só voltam a ele quando ele muda ou quando alguém age sobre ele.\n"
+            "- Dimensione a resposta pela batida. Um comentário curto ou um gesto pequeno recebe resposta curta; só uma virada real da história ou uma mudança de cena merece resposta longa.\n"
+            "\nTEXTURA DA PROSA:\n"
+            "- NPCs respondem conforme seus objetivos imediatos, personalidade e posição social. A reação pode ser simples. Nem toda fala precisa conter desafio, lição, lema ou declaração dramática.\n"
+            "- Deixe o ritmo das frases seguir o sentido de cada momento, curto e tenso onde a tensão pesa, mais longo onde um personagem pensa ou explica.\n"
+            "- Quando uma sensação física importar para a cena, ancore-a na percepção concreta: o toque, o peso, a textura. Sensação que não muda o que o jogador entende nem o que ele pode decidir fica de fora.\n"
+            "\nFIDELIDADE DE PERSONAGEM (vinculante):\n"
+            "- Os traços listados no story card de um NPC governam como ele age em cena: o registro de fala, o vocabulário, o quanto ele oferece sem ser perguntado e a postura que assume diante dos outros. Leia os traços antes de escrever a fala.\n"
+            "- Posição e função decidem quem dá instrução numa cena. Um NPC manda, corrige ou assume o comando apenas quando os traços listados e o cargo dele sustentam isso. Os demais perguntam, oferecem, ponderam ou ficam calados.\n"
+            "- Dois NPCs com traços listados diferentes não podem soar intercambiáveis. Dê a cada um um registro próprio, que o leitor distinguiria mesmo sem o nome na frente.\n"
+            "- Quando os traços listados puxarem contra o que deixaria o momento mais dramático, os traços vencem. Remodele a cena em torno do personagem, e não o personagem em torno da cena.\n"
+            "\nDISCIPLINA DE ESTILO (cada linha afirma o que a prosa saudável faz; o vício é o oposto mecânico dela):\n"
+            "- Afirmações declaram o que a coisa é. Nunca busque impulso retórico nomeando primeiro o que ela não é para depois afirmar o que é, e nunca acrescente um aposto final que levanta uma alternativa só para descartá-la.\n"
+            "- Um gesto se sustenta sozinho. Nunca emende numa ação física uma oração subordinada que interpreta o que ela deveria significar.\n"
+            "- Cenas fecham na última batida de alguém. Nunca encerre em máxima portátil, e nunca personifique o cenário, o mundo ou o destino como algo que espera, observa, julga ou promete.\n"
+            "- A cadência segue o sentido. Nunca repita uma estrutura fixa de três membros como marreta rítmica.\n"
+            "- Uma palavra pesa uma vez. Nunca repita a mesma palavra em sequência apenas para enfatizar.\n"
+            "- O travessão fica escasso. A pontuação comum dá conta da maior parte das pausas; reserve-o para uma única quebra bem colocada.\n"
+            "- Respostas avançam pela intenção. Nunca abra reproduzindo as ações do jogador como lista sequencial antes de reagir.\n"
+            "\nLEGIBILIDADE E COMPLEXIDADE:\n"
+            "- Causas e consequências claras são o padrão. Introduza no máximo uma nova questão narrativa sem resposta por vez. Desenvolva ou resolva o acontecimento atual antes de acrescentar outro.\n"
+            "- Falas naturais e conversacionais são o padrão. Reserve aforismos, lemas, repreensões teatrais e frases de efeito para momentos raros que realmente os justifiquem.\n"
+            "- Por padrão, não transforme uma atividade comum em conspiração, investigação, mecanismo oculto ou sinal ameaçador, a menos que uma trama ativa já estabelecida exija isso diretamente.\n"
+            "- Prefira termos conhecidos do mundo e efeitos observáveis. Não invente jargão técnico ou mecanismos adicionais quando as regras existentes explicarem o acontecimento.\n"
+            "\nREGRAS DE COERÊNCIA (CRÍTICAS):\n"
+            "- NUNCA contradiga fatos estabelecidos em PLAYER INVENTORY ou em crystals do tier MEMORY (WORLD MEMORY).\n"
+            "- A \"source\" / razão de origem de um item no INVENTORY é canônica. NPCs podem interpretar ou especular, mas não podem reescrever o propósito documentado do item.\n"
+            "- Se um fato aparece em crystals do tier MEMORY, trate-o como cânone imutável. Se o jogador perguntar sobre ele de novo, reaproveite a mesma explicação — não invente uma nova.\n"
+            "- Um NPC só pode referenciar informação que ele plausivelmente saberia: coisas que ele testemunhou em cena, coisas que lhe foram ditas em cena, ou lore pública da região dele. NUNCA faça um NPC mencionar um detalhe do jogador (veículo, item, linhagem, rota, localização anterior) que o jogador não revelou em diálogo ou que o NPC não observou visivelmente.\n"
+            "- Um NPC recém-introduzido começa sem conhecimento privado da campanha. Ele conhece apenas a lore pública, o próprio ofício, o que está visível e o que lhe foi dito em cena. Se deduzir algo além da observação direta, mostre em que a dedução se baseia e apresente-a como incerta.\n"
+            "- Evite reciclar frases sensoriais. Se uma imagem sensorial (uma batida recorrente do clima, uma linha recorrente sobre cor de olhos, um pulso recorrente de artefato) já apareceu em respostas recentes do narrador, escolha outra. Repetição quebra imersão.\n"
+            "- O tom deve seguir TONE AND STYLE. Não injete enquadramento solene / misterioso / ameaçador para pedidos comuns, a menos que a lore marque explicitamente o tópico como sagrado ou perigoso.\n"
+            "- Quando o jogador ADQUIRIR um item, emita: [ITEM_ADD:nome_item|categoria|descrição_origem]\n"
+            "- Quando um item for CONSUMIDO ou GASTO, emita: [ITEM_USE:nome_item]\n"
+            "- Quando um item for PERDIDO, ROUBADO ou DESTRUÍDO, emita: [ITEM_LOSE:nome_item]\n"
+            "- Categorias: weapon, armor, consumable, quest, tool, misc\n"
+            "- Se o jogador tentar usar um item que NÃO está no inventário, rejeite a ação narrativamente.\n"
+            "- Coloque as tags de item no final da frase relevante, inline com a narrativa.\n"
+            "- IMPORTANTE: Se você mencionar um item do WORLD LORE / story cards que o jogador está carregando ou usando PELA PRIMEIRA VEZ na história (ex: um amuleto, uma arma descrita no cenário), emita [ITEM_ADD] para que apareça no inventário. Itens de story cards que o jogador já possui mas ainda não foram registrados DEVEM ser taggeados.\n"
+        ),
+    }
+
+    def _build_narrator_rules(self, max_tokens: int, language: str = "en", include_length: bool = True) -> str:
+        """Build the static narrator rules block in the appropriate language.
+
+        include_length=False omits the per-request length instruction so the block
+        stays byte-stable for the cached zone; the length directive is emitted
+        separately into the volatile zone via length_directive().
+        """
+        length_instruction = self._length_instruction(max_tokens, language) if include_length else ""
+        length_line = f"- {length_instruction}\n" if length_instruction else ""
+        template = self._NARRATOR_RULES.get(language, self._NARRATOR_RULES["en"])
+        return template.format(length_instruction=length_line)
+
+    def length_directive(self, max_tokens: int, language: str = "en") -> str:
+        """Per-request length instruction (volatile). Belongs in zone 2, not cached zone 0."""
+        instruction = self._length_instruction(max_tokens, language)
+        return f"- {instruction}" if instruction else ""
+
+    _OPENING_CANON_HEADER = (
+        "\nOPENING NARRATIVE (CANONICAL — characters, names, places and facts "
+        "introduced below are TRUE for this campaign. When the player references "
+        "anyone or anything from this opening, REUSE the same names from here "
+        "instead of substituting them with similarly-described entities from the "
+        "story cards):\n"
+    )
+
+    def build_system_prompt(
+        self,
+        tone_instructions: str,
+        memory_context: str,
+        language: str,
+        inventory_context: str = "",
+        max_tokens: int = 2000,
+        narrator_hints: str = "",
+        graph_context: str = "",
+        npc_context: str = "",
+        journal_context: str = "",
+        story_cards_context: str = "",
+        character_setup: str = "",
+        opening_narrative: str = "",
+    ) -> str:
+        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            language,
+            f"Respond in the language: {language}.",
+        )
+        sections = [
+            f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
+        ]
+        if character_setup:
+            sections.append(f"\n{character_setup}")
+        if tone_instructions:
+            sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        if opening_narrative:
+            sections.append(self._OPENING_CANON_HEADER + opening_narrative)
+        if memory_context:
+            sections.append(f"\nWORLD MEMORY:\n{memory_context}")
+        if inventory_context:
+            sections.append(f"\nPLAYER INVENTORY:\n{inventory_context}")
+        if npc_context:
+            sections.append(f"\n{npc_context}")
+        if journal_context:
+            sections.append(f"\n{journal_context}")
+        if narrator_hints:
+            sections.append(narrator_hints)
+        if graph_context:
+            sections.append(f"\nWORLD RELATIONSHIPS (who knows who, connections between entities):\n{graph_context}")
+        if story_cards_context:
+            sections.append(f"\n{story_cards_context}")
+
+        sections.append(self._build_narrator_rules(max_tokens, language))
+        return "\n".join(sections)
+
+    def build_system_prompt_parts(
+        self,
+        tone_instructions: str,
+        memory_context: str,
+        language: str,
+        inventory_context: str = "",
+        max_tokens: int = 2000,
+        narrator_hints: str = "",
+        graph_context: str = "",
+        npc_context: str = "",
+        journal_context: str = "",
+        story_cards_context: str = "",
+        character_setup: str = "",
+        opening_narrative: str = "",
+    ) -> tuple[str, str]:
+        """Build system prompt split into (static, dynamic) parts for prompt caching.
+
+        Static part: role + language + tone + narrator rules (fixed per scenario).
+        Dynamic part: memory, inventory, NPCs, journal, hints, graph, story cards (changes per action).
+        No artificial character limit — the context budget is managed at the
+        session level based on the provider's actual context window.
+        """
+        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            language,
+            f"Respond in the language: {language}.",
+        )
+
+        # Static: same for every action in this scenario
+        static_sections = [
+            f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
+        ]
+        if character_setup:
+            static_sections.append(f"\n{character_setup}")
+        if tone_instructions:
+            static_sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        if opening_narrative:
+            static_sections.append(self._OPENING_CANON_HEADER + opening_narrative)
+        static_sections.append(self._build_narrator_rules(max_tokens, language))
+        static_part = "\n".join(static_sections)
+
+        # Dynamic: changes every action
+        dynamic_sections: list[str] = []
+        if memory_context:
+            dynamic_sections.append(f"\nWORLD MEMORY:\n{memory_context}")
+        if inventory_context:
+            dynamic_sections.append(f"\nPLAYER INVENTORY:\n{inventory_context}")
+        if npc_context:
+            dynamic_sections.append(f"\n{npc_context}")
+        if journal_context:
+            dynamic_sections.append(f"\n{journal_context}")
+        if narrator_hints:
+            dynamic_sections.append(narrator_hints)
+        if graph_context:
+            dynamic_sections.append(f"\nWORLD RELATIONSHIPS (who knows who, connections between entities):\n{graph_context}")
+        if story_cards_context:
+            dynamic_sections.append(f"\n{story_cards_context}")
+
+        dynamic_part = "\n".join(dynamic_sections)
+        return static_part, dynamic_part
+
+    def build_zone0(
+        self,
+        tone_instructions: str,
+        language: str,
+        character_setup: str = "",
+        opening_narrative: str = "",
+    ) -> str:
+        """FASE 2 cache zone 0: role + language + tone + opening + narrator rules.
+
+        Byte-identical across every turn of a campaign, so it becomes a cache read
+        from the 2nd turn. Excludes the per-request length instruction (volatile),
+        which the caller emits into zone 2 via length_directive().
+        """
+        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            language,
+            f"Respond in the language: {language}.",
+        )
+        sections = [
+            f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
+        ]
+        if character_setup:
+            sections.append(f"\n{character_setup}")
+        if tone_instructions:
+            sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        if opening_narrative:
+            sections.append(self._OPENING_CANON_HEADER + opening_narrative)
+        sections.append(self._build_narrator_rules(0, language, include_length=False))
+        return "\n".join(sections)
+
+    def build_meta_prompt(
+        self,
+        language: str,
+        memory_context: str = "",
+        inventory_context: str = "",
+        journal_context: str = "",
+        npc_context: str = "",
+        graph_context: str = "",
+        story_cards_context: str = "",
+    ) -> str:
+        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            language,
+            f"Respond in the language: {language}.",
+        )
+        sections = [
+            f"You are a Game Master assistant for this RPG campaign. {lang_instruction}",
+            "\nMETA MODE RULES:",
+            "- Respond OUT-OF-CHARACTER. You are a helpful game master, not a narrator.",
+            "- Be factual and direct. No narrative prose, no 'you feel', no scene-setting.",
+            "- Reference action numbers and locations when citing events.",
+            "- Use bullet points and structured formatting.",
+            "- Answer questions about game state using the structured data below.",
+            "- Use ONLY the provided world data to answer. Do NOT invent or guess facts.",
+        ]
+        if memory_context:
+            sections.append(f"\nWORLD MEMORY:\n{memory_context}")
+        if inventory_context:
+            sections.append(f"\n{inventory_context}")
+        if journal_context:
+            sections.append(f"\nJOURNAL (recent entries):\n{journal_context}")
+        if npc_context:
+            sections.append(f"\nACTIVE NPCs:\n{npc_context}")
+        if graph_context:
+            sections.append(f"\nWORLD RELATIONSHIPS:\n{graph_context}")
+        if story_cards_context:
+            sections.append(f"\n{story_cards_context}")
+        return "\n".join(sections)
+
+    @staticmethod
+    def _max_history_for_window(context_window: int) -> int:
+        """Hard cap on history messages, scaled to provider context window.
+
+        The crystal memory pyramid handles anything older; this cap only
+        prevents an enormous campaign from blowing the window. On 1M-token
+        providers we keep ~300 exchanges in raw form, which eliminates the
+        cliché-recycling that small windows force.
+        """
+        if context_window >= 1_000_000:
+            return 600
+        if context_window >= 200_000:
+            return 200
+        return 100
+
+    @staticmethod
+    def _dynamic_history_slice(history: list[dict], context_window: int, system_tokens: int) -> list[dict]:
+        """Return recent history messages, capped at the window-scaled max.
+
+        The crystal memory pyramid (SHORT→MEDIUM→LONG→MEMORY) in the system
+        prompt provides long-term context for actions older than the cap.
+        The cap exists so very long campaigns (200+ actions) don't blow the
+        context window even on 1M-token providers; for shorter sessions the
+        token-budget trim below is the binding constraint.
+
+        Budget allocation:
+        - Hard cap: _max_history_for_window(context_window) (newest messages)
+        - Then: fit within (context_window - system_tokens - output_reserve)
+        - Minimum: 4 messages (2 exchanges) for coherence
+        """
+        max_msgs = NarratorEngine._max_history_for_window(context_window)
+        output_reserve = 2500
+        budget = context_window - system_tokens - output_reserve
+        if budget <= 0:
+            return history[-4:]
+
+        # Start from the most recent messages, capped at max_msgs
+        candidates = history[-max_msgs:] if len(history) > max_msgs else history
+
+        # Further trim by token budget
+        selected: list[dict] = []
+        used = 0
+        for msg in reversed(candidates):
+            msg_tokens = estimate_tokens(msg.get("content", ""))
+            if used + msg_tokens > budget:
+                break
+            selected.append(msg)
+            used += msg_tokens
+        selected.reverse()
+
+        if len(selected) < 4 and len(history) >= 4:
+            selected = history[-4:]
+        return selected
+
+    async def stream_narrative(
+        self,
+        player_input: str,
+        system_prompt: str,
+        history: list[dict],
+        context_window: int = 64_000,
+    ) -> AsyncIterator[str]:
+        system_tokens = estimate_tokens(system_prompt)
+        history_slice = self._dynamic_history_slice(history, context_window, system_tokens)
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history_slice)
+        messages.append({"role": "user", "content": player_input})
+
+        # Debug logging: log full LLM request context
+        logger.debug(
+            "=== NARRATOR STREAM REQUEST ===\n"
+            "System prompt (%d tokens, %d chars):\n%s\n"
+            "History slice: %d messages (of %d total)\n"
+            "Player input: %s\n"
+            "Context window: %d",
+            system_tokens, len(system_prompt), system_prompt,
+            len(history_slice), len(history),
+            player_input,
+            context_window,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            for idx, msg in enumerate(history_slice):
+                content = msg.get("content", "")
+                logger.debug(
+                    "  History[%d] role=%s len=%d: %s",
+                    idx, msg.get("role", "?"), len(content),
+                    content[:200] + ("..." if len(content) > 200 else ""),
+                )
+
+        full_response = ""
+        try:
+            async for chunk in self._llm.stream(messages=messages, orchestrator=True, reasoning=False):
+                full_response += chunk
+                yield chunk
+        except Exception:
+            logger.exception("stream_narrative LLM call failed; emitting fallback")
+            yield self._fallback_narrative(player_input)
+
+        # Debug logging: log full response
+        logger.debug(
+            "=== NARRATOR STREAM RESPONSE ===\n"
+            "Response length: %d chars\n%s",
+            len(full_response),
+            full_response[:500] + ("..." if len(full_response) > 500 else ""),
+        )
+
+    async def stream_narrative_cached(
+        self,
+        player_input: str,
+        zone0: str,
+        zone1: str,
+        zone2: str,
+        history: list[dict],
+        context_window: int = 64_000,
+    ) -> AsyncIterator[str]:
+        """FASE 2 streaming path: system prompt split into cacheable zones.
+
+        Zone 0 (role/tone/rules) and zone 1 (LORE + permanent memory) carry
+        cache_control. Zone 2 is volatile. The router applies the provider
+        transform (Anthropic cloaking + beta header, or a flat system string
+        for OpenAI-compatible providers).
+        """
+        system_tokens = (
+            estimate_tokens(zone0) + estimate_tokens(zone1) + estimate_tokens(zone2)
+        )
+        history_slice = self._dynamic_history_slice(history, context_window, system_tokens)
+
+        blocks = [{"type": "text", "text": zone0, "cache_control": _CACHE_CONTROL}]
+        if zone1:
+            blocks.append({"type": "text", "text": zone1, "cache_control": _CACHE_CONTROL})
+        if zone2:
+            blocks.append({"type": "text", "text": zone2})
+
+        messages = [{"role": "system", "content": blocks}]
+        messages.extend(history_slice)
+        messages.append({"role": "user", "content": player_input})
+
+        logger.debug(
+            "=== NARRATOR CACHED STREAM REQUEST ===\n"
+            "Zone0=%d chars, Zone1=%d chars, Zone2=%d chars\n"
+            "History slice: %d messages (of %d total)\n"
+            "Player input: %s\n"
+            "Context window: %d",
+            len(zone0), len(zone1), len(zone2),
+            len(history_slice), len(history),
+            player_input, context_window,
+        )
+
+        full_response = ""
+        try:
+            async for chunk in self._llm.stream(messages=messages, orchestrator=True, reasoning=False):
+                full_response += chunk
+                yield chunk
+        except Exception:
+            logger.exception("stream_narrative_cached LLM call failed; emitting fallback")
+            yield self._fallback_narrative(player_input)
+
+        logger.debug(
+            "=== NARRATOR CACHED STREAM RESPONSE ===\n"
+            "Response length: %d chars\n%s",
+            len(full_response),
+            full_response[:500] + ("..." if len(full_response) > 500 else ""),
+        )
+
+    _SINGLE_CALL_FORMAT = (
+        "\n\n=== RESPONSE FORMAT ===\n"
+        "You MUST return ONLY valid JSON (no markdown fences) with this exact schema:\n"
+        "{\n"
+        '  "mode": "NARRATIVE|COMBAT|META",\n'
+        '  "narrative_time_seconds": <int, realistic story time this action takes>,\n'
+        '  "ambush": <bool, true only if NPC attacks player by surprise>,\n'
+        '  "narrative_text": "<your full narrative prose response — MUST respect the word limit from LENGTH instructions>",\n'
+        '  "npc_thoughts": [{"name": "<full NPC name>", "thoughts": {"feeling": "...", "goal": "...", "opinion_of_player": "...", "secret_plan": "..."}}],\n'
+        '  "entities": [{"name": "<full name>", "type": "NPC|LOCATION|FACTION|ITEM|EVENT", "attributes": {}}],\n'
+        '  "relationships": [{"source": "<full name>", "target": "<full name>", "rel_type": "KNOWS|MET|ALLIED_WITH|GUARDS|LOCATED_IN|etc"}],\n'
+        '  "world_changes": "<brief description of background world changes, or empty string if none>",\n'
+        '  "suggestions": [{"action": "<short third-person action the player could take>", "speech": "<what the player says, or empty string>"}]\n'
+        "}\n\n"
+        "IMPORTANT RULES FOR THIS FORMAT:\n"
+        "- narrative_text: Write your full immersive narrative here. All narrator rules still apply.\n"
+        "- mode: COMBAT if action is a fight, META if player speaks out-of-character, NARRATIVE otherwise.\n"
+        "- npc_thoughts: Only include NPCs that APPEAR or are MENTIONED in this scene.\n"
+        "- entities/relationships: Extract named entities from your narrative. Use FULL canonical names.\n"
+        "- world_changes: Only if significant time passes or major events affect the wider world. Empty string otherwise.\n"
+        "- suggestions: EXACTLY 3 options for what the player does next, in the player's own voice and in the "
+        "narrative's language. Each is one short action plus optional speech, and they must differ in intent "
+        "(not three phrasings of the same move). Write them as concrete responses to the scene you just wrote; "
+        "never resolve their outcome. Leave the list empty only in META mode.\n"
+        "- The narrative_text must be complete, immersive prose — not a summary.\n"
+        "- CRITICAL: The narrative_text MUST stay within the word/token limit specified in the LENGTH instructions above. "
+        "The other JSON fields (npc_thoughts, entities, etc.) do NOT count toward that limit — only narrative_text does."
+    )
+
+    async def complete_single_call(
+        self,
+        player_input: str,
+        static_prompt: str,
+        dynamic_prompt: str,
+        history: list[dict],
+        canonical_names: list[str] | None = None,
+        max_tokens: int = 2000,
+        context_window: int = 200_000,
+    ) -> dict:
+        """Single LLM call that returns narrative + all side-effect data as JSON.
+
+        Uses Anthropic prompt caching: the static part (role + tone + rules + format)
+        is marked with cache_control so it's cached across actions in the same scenario.
+        The dynamic part (memory, NPCs, etc.) changes every action and is not cached.
+        History window is dynamically sized based on the provider's context window.
+        """
+        names_hint = ""
+        if canonical_names:
+            names_str = ", ".join(canonical_names[:40])
+            names_hint = (
+                f"\nKNOWN ENTITIES (use these exact names for entity extraction): [{names_str}]"
+            )
+
+        # Static part: role + tone + narrator rules + JSON format (cached per scenario)
+        cached_text = static_prompt + self._SINGLE_CALL_FORMAT
+
+        # Dynamic part: memory + NPCs + hints + entity names (changes every action)
+        dynamic_text = dynamic_prompt + names_hint
+
+        # Dynamic history window based on context budget
+        system_tokens = estimate_tokens(cached_text) + estimate_tokens(dynamic_text)
+        history_slice = self._dynamic_history_slice(history, context_window, system_tokens)
+
+        # Build messages with cache_control on the static block
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": cached_text,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": dynamic_text,
+                    },
+                ],
+            },
+        ]
+        messages.extend(history_slice)
+        messages.append({"role": "user", "content": player_input})
+
+        # Debug logging: log full single-call LLM request context
+        logger.debug(
+            "=== NARRATOR SINGLE-CALL REQUEST ===\n"
+            "Static prompt (%d chars): %s\n"
+            "Dynamic prompt (%d chars): %s\n"
+            "History slice: %d messages (of %d total)\n"
+            "Player input: %s\n"
+            "Context window: %d, max_tokens: %d",
+            len(cached_text), cached_text[:300] + ("..." if len(cached_text) > 300 else ""),
+            len(dynamic_text), dynamic_text[:500] + ("..." if len(dynamic_text) > 500 else ""),
+            len(history_slice), len(history),
+            player_input,
+            context_window, max_tokens,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            for idx, msg in enumerate(history_slice):
+                content = msg.get("content", "")
+                logger.debug(
+                    "  History[%d] role=%s len=%d: %s",
+                    idx, msg.get("role", "?"), len(content),
+                    content[:200] + ("..." if len(content) > 200 else ""),
+                )
+
+        try:
+            # User's narrative budget + 1500 tokens overhead for JSON metadata
+            api_max_tokens = max_tokens + 1500
+            raw = await self._llm.complete(
+                messages=messages, max_tokens=api_max_tokens, orchestrator=True, reasoning=False
+            )
+
+            # Debug logging: log full response
+            logger.debug(
+                "=== NARRATOR SINGLE-CALL RESPONSE ===\n"
+                "Response length: %d chars\n%s",
+                len(raw) if raw else 0,
+                (raw or "")[:500] + ("..." if raw and len(raw) > 500 else ""),
+            )
+
+            parsed = parse_json_dict(raw)
+            if parsed and parsed.get("narrative_text"):
+                return parsed
+            # JSON parsed but no narrative_text — log for debugging
+            if parsed:
+                logger.warning("Single-call: JSON parsed but missing narrative_text. Keys: %s", list(parsed.keys()))
+            else:
+                logger.warning(
+                    "Single-call: Failed to parse JSON from LLM response (length=%d). First 500 chars: %s",
+                    len(raw) if raw else 0,
+                    (raw or "")[:500],
+                )
+        except Exception:
+            logger.warning("Single-call narrative failed, using fallback", exc_info=True)
+
+        # Fallback: return minimal structure with fallback narrative
+        return {
+            "mode": "NARRATIVE",
+            "narrative_time_seconds": 60,
+            "ambush": False,
+            "narrative_text": self._fallback_narrative(player_input),
+            "npc_thoughts": [],
+            "entities": [],
+            "relationships": [],
+            "world_changes": "",
+        }
+
+    @staticmethod
+    def _heuristic_detect_mode(player_input: str) -> tuple[NarrativeMode, dict]:
+        text = player_input.lower()
+
+        combat_markers = (
+            "attack", "strike", "slash", "parry", "fight", "combat", "duel",
+            "shoot", "stab", "counter", "ambush", "battle",
+        )
+        meta_markers = ("ooc", "meta", "as ai", "narrator", "system")
+
+        mode = NarrativeMode.NARRATIVE
+        if any(marker in text for marker in combat_markers):
+            mode = NarrativeMode.COMBAT
+        elif any(marker in text for marker in meta_markers):
+            mode = NarrativeMode.META
+
+        seconds = NarratorEngine._extract_narrative_seconds(text)
+        return mode, {
+            "mode": mode.value,
+            "ambush": False,
+            "narrative_time_seconds": seconds,
+            "opponent_name": "",
+            "opponent_power": 3,
+        }
+
+    @staticmethod
+    def _extract_narrative_seconds(text: str) -> int:
+        patterns = [
+            (r"(\\d+)\\s*(day|days|dia|dias)", 86400),
+            (r"(\\d+)\\s*(hour|hours|hora|horas)", 3600),
+            (r"(\\d+)\\s*(minute|minutes|minuto|minutos)", 60),
+            (r"(\\d+)\\s*(week|weeks|semana|semanas)", 604800),
+        ]
+        for pattern, multiplier in patterns:
+            match = re.search(pattern, text)
+            if match:
+                try:
+                    value = int(match.group(1))
+                    return max(60, value * multiplier)
+                except ValueError:
+                    continue
+        return 60
+
+    @staticmethod
+    def _fallback_narrative(player_input: str) -> str:
+        return (
+            "The world shifts in response to your action. "
+            f"You proceed with intent: {player_input} "
+            "Tension rises as the consequences begin to unfold."
+        )

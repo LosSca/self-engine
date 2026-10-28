@@ -1,0 +1,19 @@
+{
+  "pa0": {
+    "idx": 10,
+    "a_arm": "raw",
+    "b_arm": "after",
+    "claimed": [
+      "world_contradiction"
+    ]
+  },
+  "pa1": {
+    "idx": 13,
+    "a_arm": "after",
+    "b_arm": "raw",
+    "claimed": [
+      "player_agency",
+      "em_dash_tic"
+    ]
+  }
+}

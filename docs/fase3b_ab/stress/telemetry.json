@@ -1,0 +1,28 @@
+{
+  "n": 18,
+  "verdicts": {
+    "corrected": 1,
+    "clean": 17
+  },
+  "rewritten": 1,
+  "rewrite_rate": 0.056,
+  "marker_guard_rejected": 0,
+  "corrections_total": 2,
+  "corrections_by_rule": {
+    "em_dash_tic": 1,
+    "gesture_gloss": 1
+  },
+  "tag_invariant_violations": 0,
+  "mention_drops": 0,
+  "rewrite_len_delta_chars": {
+    "mean": -33.0,
+    "samples": [
+      -33
+    ]
+  },
+  "latency_s": {
+    "min": 12.08,
+    "max": 54.69,
+    "mean": 28.21
+  }
+}

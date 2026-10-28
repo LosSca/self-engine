@@ -1,0 +1,38 @@
+{
+  "counts": {
+    "OLD": 18,
+    "NEW": 18
+  },
+  "totals": {
+    "OLD": {
+      "confirmed_recaps": 2,
+      "npc_recaps": 3,
+      "rule_of_three": 34,
+      "fake_metrics": 8,
+      "em_dash_interruptive": 2
+    },
+    "NEW": {
+      "confirmed_recaps": 1,
+      "npc_recaps": 1,
+      "rule_of_three": 23,
+      "fake_metrics": 4,
+      "em_dash_interruptive": 0
+    }
+  },
+  "per_resp": {
+    "OLD": {
+      "confirmed_recaps": 0.1111111111111111,
+      "npc_recaps": 0.16666666666666666,
+      "rule_of_three": 1.8888888888888888,
+      "fake_metrics": 0.4444444444444444,
+      "em_dash_interruptive": 0.1111111111111111
+    },
+    "NEW": {
+      "confirmed_recaps": 0.05555555555555555,
+      "npc_recaps": 0.05555555555555555,
+      "rule_of_three": 1.2777777777777777,
+      "fake_metrics": 0.2222222222222222,
+      "em_dash_interruptive": 0.0
+    }
+  }
+}

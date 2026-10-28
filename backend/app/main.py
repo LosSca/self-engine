@@ -1,0 +1,96 @@
+import logging
+import mimetypes
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from app.config import settings
+
+if settings.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+from app.api.routes_scenarios import router as scenarios_router
+from app.api.routes_game import router as game_router, _llm, apply_model_policy
+from app.engines.llm_router import LLMProvider
+
+app = FastAPI(title="Project Lunar", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(scenarios_router, prefix="/api/scenarios", tags=["scenarios"])
+app.include_router(game_router, prefix="/api/game", tags=["game"])
+
+# Windows registry often lacks these; StaticFiles would fall back to text/plain.
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("image/avif", ".avif")
+
+_media_root = Path(settings.media_dir).expanduser()
+if _media_root.is_dir():
+    app.mount("/media", StaticFiles(directory=str(_media_root)), name="media")
+else:
+    logging.getLogger(__name__).info("Media dir %s not found; /media disabled", _media_root)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/health/neo4j")
+async def health_neo4j():
+    uri = settings.neo4j_uri
+    user = settings.neo4j_user
+    password = settings.neo4j_password
+    try:
+        from neo4j import AsyncGraphDatabase
+        driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        async with driver.session() as session:
+            await session.run("RETURN 1")
+        await driver.close()
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
+
+
+class SettingsUpdateRequest(BaseModel):
+    provider: str = "deepseek"
+    model: str = "deepseek-v4-flash"
+    temperature: float = 0.85
+    max_tokens: int = 2000
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsUpdateRequest):
+    try:
+        provider = LLMProvider(req.provider)
+    except ValueError:
+        provider = LLMProvider.DEEPSEEK
+    _llm.config.temperature = req.temperature
+    _llm.config.max_tokens = req.max_tokens
+    apply_model_policy(provider, req.model)
+    model = _llm.config.orchestrator_model or _llm.config.primary_model
+    return {"status": "ok", "provider": provider.value, "model": model}
+
+
+@app.get("/api/settings")
+def get_settings():
+    return {
+        "provider": _llm.config.primary_provider.value,
+        "model": _llm.config.orchestrator_model or _llm.config.primary_model,
+        "auxiliary_model": _llm.config.primary_model,
+        "temperature": _llm.config.temperature,
+        "max_tokens": _llm.config.max_tokens,
+    }

@@ -1,0 +1,26 @@
+{
+  "raw": {
+    "n": 18,
+    "words": 4831,
+    "rule_of_three": 12,
+    "fake_metrics": 0,
+    "em_dash": 31,
+    "per_resp": {
+      "rule_of_three": 0.667,
+      "fake_metrics": 0.0,
+      "em_dash": 1.722
+    }
+  },
+  "audited": {
+    "n": 18,
+    "words": 4821,
+    "rule_of_three": 12,
+    "fake_metrics": 0,
+    "em_dash": 27,
+    "per_resp": {
+      "rule_of_three": 0.667,
+      "fake_metrics": 0.0,
+      "em_dash": 1.5
+    }
+  }
+}

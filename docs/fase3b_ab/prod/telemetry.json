@@ -1,0 +1,27 @@
+{
+  "n": 18,
+  "verdicts": {
+    "clean": 17,
+    "corrected": 1
+  },
+  "rewritten": 1,
+  "rewrite_rate": 0.056,
+  "marker_guard_rejected": 0,
+  "corrections_total": 1,
+  "corrections_by_rule": {
+    "player_agency": 1
+  },
+  "tag_invariant_violations": 0,
+  "mention_drops": 0,
+  "rewrite_len_delta_chars": {
+    "mean": -85.0,
+    "samples": [
+      -85
+    ]
+  },
+  "latency_s": {
+    "min": 4.78,
+    "max": 39.07,
+    "mean": 14.58
+  }
+}
