@@ -767,6 +767,20 @@ export async function deleteWorldQuest(worldId, questId) {
   return jsonOrThrow(r, '删除任务失败')
 }
 
+export async function fetchCampaignWorldState(campaignId) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/state`)
+  return jsonOrThrow(r, '读取冒险状态失败')
+}
+
+export async function bindCampaignWorld(campaignId, worldId, reset = false) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/world`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ world_id: worldId, reset }),
+  })
+  return jsonOrThrow(r, '绑定世界失败')
+}
+
 export async function validateWorldEvent(worldId, eventId) {
   const r = await fetch(`${V1}/worlds/${worldId}/events/${encodeURIComponent(eventId)}/validate`, { method: 'POST' })
   return jsonOrThrow(r, '校验事件失败')

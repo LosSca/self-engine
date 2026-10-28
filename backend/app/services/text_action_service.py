@@ -74,16 +74,39 @@ def _clean_target(text: str) -> str:
     return value.strip()
 
 
+def _aliases(names: Sequence[str]) -> List[str]:
+    """Normalised lookup names, including underscore/spaced spellings.
+
+    Authors write ids as iron_key; players type "iron key". Both spellings
+    should resolve to the same candidate, so every name also contributes a
+    space-joined and an underscore-joined variant.
+    """
+    out: List[str] = []
+    seen = set()
+    for name in names:
+        if not name:
+            continue
+        base = name.strip().lower()
+        if not base:
+            continue
+        for variant in (base, base.replace("_", " "), base.replace(" ", "_")):
+            cleaned = " ".join(variant.split())
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                out.append(cleaned)
+    return out
+
+
 class _Candidate:
     __slots__ = ("id", "names", "kind")
 
     def __init__(self, item_id: str, names: Sequence[str], kind: str):
         self.id = item_id
-        self.names = [name.strip().lower() for name in names if name and name.strip()]
+        self.names = _aliases(names)
         self.kind = kind
 
     def match(self, fragment: str) -> int:
-        fragment = fragment.strip().lower()
+        fragment = fragment.strip().lower().replace("_", " ")
         if not fragment:
             return 0
         best = 0

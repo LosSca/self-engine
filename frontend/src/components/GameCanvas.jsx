@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, RefreshCw, Terminal, UserRound } from 'lucide-react'
+import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, RefreshCw, Terminal, UserRound, Globe } from 'lucide-react'
 import { useGameStore } from '../store'
 import {
   streamAction,
@@ -27,6 +27,7 @@ import WorldMapModal from './WorldMapModal'
 import InventoryPanel from './InventoryPanel'
 import DevtoolsPanel from './DevtoolsPanel'
 import CharacterProfilePanel from './CharacterProfilePanel'
+import WorldStudio from './WorldStudio'
 
 /** Render text with @mentions highlighted in indigo */
 function MentionText({ children }) {
@@ -188,6 +189,7 @@ export default function GameCanvas() {
   const [inventoryOpen, setInventoryOpen] = useState(false)
   const [devtoolsOpen, setDevtoolsOpen] = useState(false)
   const [characterOpen, setCharacterOpen] = useState(false)
+  const [worldStudioOpen, setWorldStudioOpen] = useState(false)
   const [playerCharacter, setPlayerCharacter] = useState(null)
   const [rewinding, setRewinding] = useState(false)
   const [scenarioView, setScenarioView] = useState(null)
@@ -564,6 +566,14 @@ export default function GameCanvas() {
               )}
             </button>
             <button
+              onClick={() => setWorldStudioOpen(true)}
+              title="世界工坊 — 编辑地图、地点、物品、门、实体、事件、任务与调试"
+              aria-label="打开世界工坊"
+              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-violet-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+            >
+              <Globe size={14} />
+            </button>
+            <button
               onClick={() => setSettingsOpen(true)}
               title="设置"
               aria-label="打开设置"
@@ -719,6 +729,13 @@ export default function GameCanvas() {
       <WorldMapModal open={mapOpen} onClose={() => setMapOpen(false)} campaignId={activeCampaignId} />
       <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} />
       <JournalPanel open={journalOpen} onClose={() => setJournalOpen(false)} entries={journal} onRefresh={refreshJournal} />
+      <WorldStudio
+        open={worldStudioOpen}
+        scenarioId={activeScenario?.id}
+        campaignId={activeCampaignId}
+        onClose={() => setWorldStudioOpen(false)}
+      />
+
       <DevtoolsPanel
         open={devtoolsOpen}
         onClose={() => setDevtoolsOpen(false)}

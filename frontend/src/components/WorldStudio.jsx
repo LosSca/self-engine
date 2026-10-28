@@ -21,6 +21,8 @@ import {
   saveWorldQuest,
   simulateWorldEvent,
   validateWorldEvent,
+  bindCampaignWorld,
+  fetchCampaignEngineState,
 } from '../api'
 
 const CONDITION_KINDS = [
@@ -870,8 +872,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [editor, setEditor] = useState(null)
   const [saving, setSaving] = useState(false)
   const [sim, setSim] = useState(null)
-  const [debug, setDebug] = useState({ progress: null, executions: [], diagnostics: null })
+  const [debug, setDebug] = useState({ progress: null, executions: [], diagnostics: null, state: null })
   const [debugBusy, setDebugBusy] = useState(false)
+  const [debugNonce, setDebugNonce] = useState(0)
+  const [binding, setBinding] = useState(false)
 
   const report = useCallback((err) => {
     if (Array.isArray(err && err.detail)) setErrors(err.detail)
@@ -928,12 +932,13 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     ;(async () => {
       setDebugBusy(true)
       try {
-        const [progress, executions, diagnostics] = await Promise.all([
+        const [progress, executions, diagnostics, state] = await Promise.all([
           fetchQuestProgress(campaignId).catch(() => null),
           fetchEventExecutions(campaignId, { limit: 50 }).catch(() => []),
           fetchCampaignDiagnostics(campaignId).catch(() => null),
+          fetchCampaignEngineState(campaignId).catch(() => null),
         ])
-        if (!cancelled) setDebug({ progress, executions: executions || [], diagnostics })
+        if (!cancelled) setDebug({ progress, executions: executions || [], diagnostics, state })
       } finally {
         if (!cancelled) setDebugBusy(false)
       }
@@ -941,7 +946,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     return () => {
       cancelled = true
     }
-  }, [open, tab, campaignId])
+  }, [open, tab, campaignId, debugNonce])
 
   const selectWorld = async (id) => {
     setErrors([])
@@ -1054,6 +1059,22 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       setNotice('事件「' + eventId + '」模拟完成；模拟不会写入真实状态')
     } catch (err) {
       report(err)
+    }
+  }
+
+  const bindWorld = async () => {
+    if (!campaignId || !worldId) return
+    setErrors([])
+    setNotice('')
+    setBinding(true)
+    try {
+      await bindCampaignWorld(campaignId, worldId)
+      setNotice('已把世界「' + (world?.name || worldId) + '」绑定到当前冒险')
+      setDebugNonce((n) => n + 1)
+    } catch (err) {
+      report(err)
+    } finally {
+      setBinding(false)
     }
   }
 
@@ -1372,6 +1393,35 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 调试面板读取的是已经提交的权威状态与事件记录；这里不能直接改状态。
                 {!campaignId && ' 当前没有进行中的冒险，任务进度与事件历史为空。'}
               </SectionNote>
+
+              {campaignId && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center gap-3 mb-2">
+                    <span className="text-sm font-bold text-white">冒险绑定</span>
+                    {debug.state ? (
+                      debug.state.world_id === worldId ? (
+                        <Badge tone="good">已绑定此世界</Badge>
+                      ) : (
+                        <Badge tone="warn">绑定了 {debug.state.world_id}</Badge>
+                      )
+                    ) : (
+                      <Badge tone="muted">未绑定世界</Badge>
+                    )}
+                    <Badge>版本 {debug.state ? debug.state.version : '—'}</Badge>
+                    {debug.state && <Badge>回合 {debug.state.turn}</Badge>}
+                  </div>
+                  <p className="text-xs text-white/40 mb-3">
+                    绑定后游戏内的行动会走确定性链路：规则判定 → 事务提交 → 事件与任务 → 叙事。
+                  </p>
+                  <button
+                    onClick={bindWorld}
+                    disabled={binding || !worldId || (debug.state && debug.state.world_id === worldId)}
+                    className={primaryButton}
+                  >
+                    {binding ? '绑定中…' : '把这个世界绑定到当前冒险'}
+                  </button>
+                </div>
+              )}
 
               {debug.diagnostics && (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
