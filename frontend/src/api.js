@@ -767,6 +767,30 @@ export async function deleteWorldQuest(worldId, questId) {
   return jsonOrThrow(r, '删除任务失败')
 }
 
+export async function fetchCampaignSnapshots(campaignId, limit = 50) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/snapshots?limit=${limit}`)
+  return jsonOrThrow(r, '读取状态快照失败')
+}
+
+export async function fetchCampaignStateDiff(campaignId, fromVersion, toVersion) {
+  const query = `?from_version=${fromVersion}&to_version=${toVersion}`
+  const r = await fetch(`${V1}/campaigns/${campaignId}/state-diff${query}`)
+  return jsonOrThrow(r, '对比状态差异失败')
+}
+
+export async function rollbackCampaign(campaignId, version, reason = '') {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  })
+  return jsonOrThrow(r, '回滚状态失败')
+}
+
+export async function fetchActionDetail(requestId) {
+  const r = await fetch(`${V1}/actions/${encodeURIComponent(requestId)}`)
+  return jsonOrThrow(r, '读取行动详情失败')
+}
 export async function fetchCampaignWorldState(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/state`)
   return jsonOrThrow(r, '读取冒险状态失败')

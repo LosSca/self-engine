@@ -23,6 +23,10 @@ import {
   validateWorldEvent,
   bindCampaignWorld,
   fetchCampaignEngineState,
+  fetchCampaignSnapshots,
+  fetchCampaignStateDiff,
+  rollbackCampaign,
+  fetchActionDetail,
 } from '../api'
 
 const CONDITION_KINDS = [
@@ -872,7 +876,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [editor, setEditor] = useState(null)
   const [saving, setSaving] = useState(false)
   const [sim, setSim] = useState(null)
-  const [debug, setDebug] = useState({ progress: null, executions: [], diagnostics: null, state: null })
+  const [debug, setDebug] = useState({ progress: null, executions: [], diagnostics: null, state: null, snapshots: [] })
+  const [diff, setDiff] = useState(null)
+  const [busyVersion, setBusyVersion] = useState(null)
   const [debugBusy, setDebugBusy] = useState(false)
   const [debugNonce, setDebugNonce] = useState(0)
   const [binding, setBinding] = useState(false)
@@ -932,13 +938,15 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     ;(async () => {
       setDebugBusy(true)
       try {
-        const [progress, executions, diagnostics, state] = await Promise.all([
+        const [progress, executions, diagnostics, state, snapshots] = await Promise.all([
           fetchQuestProgress(campaignId).catch(() => null),
           fetchEventExecutions(campaignId, { limit: 50 }).catch(() => []),
           fetchCampaignDiagnostics(campaignId).catch(() => null),
           fetchCampaignEngineState(campaignId).catch(() => null),
+          fetchCampaignSnapshots(campaignId, 30).catch(() => []),
         ])
-        if (!cancelled) setDebug({ progress, executions: executions || [], diagnostics, state })
+        if (!cancelled)
+          setDebug({ progress, executions: executions || [], diagnostics, state, snapshots: snapshots || [] })
       } finally {
         if (!cancelled) setDebugBusy(false)
       }
@@ -1059,6 +1067,49 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       setNotice('事件「' + eventId + '」模拟完成；模拟不会写入真实状态')
     } catch (err) {
       report(err)
+    }
+  }
+
+  const compareWithPrevious = async (version) => {
+    if (!campaignId) return
+    setErrors([])
+    setBusyVersion(version)
+    try {
+      const result = await fetchCampaignStateDiff(campaignId, version - 1, version)
+      setDiff({ from: version - 1, to: version, changed: result.changed || {} })
+    } catch (err) {
+      report(err)
+      setDiff(null)
+    } finally {
+      setBusyVersion(null)
+    }
+  }
+
+  const rollbackTo = async (version) => {
+    if (!campaignId) return
+    if (!window.confirm('把当前冒险回滚到版本 ' + version + '？回滚会生成一个新的版本，历史记录不会删除。')) return
+    setErrors([])
+    setBusyVersion(version)
+    try {
+      const result = await rollbackCampaign(campaignId, version, 'via world studio debug')
+      setNotice('已回滚到版本 ' + version + '，当前版本 ' + (result.state?.version ?? result.restored_version ?? ''))
+      setDebugNonce((n) => n + 1)
+    } catch (err) {
+      report(err)
+    } finally {
+      setBusyVersion(null)
+    }
+  }
+
+  const inspectAction = async (requestId) => {
+    if (!requestId) return
+    setErrors([])
+    try {
+      const result = await fetchActionDetail(requestId)
+      setDiff({ action: requestId, detail: result })
+    } catch (err) {
+      report(err)
+      setDiff(null)
     }
   }
 
@@ -1420,6 +1471,76 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   >
                     {binding ? '绑定中…' : '把这个世界绑定到当前冒险'}
                   </button>
+                </div>
+              )}
+
+              {campaignId && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center gap-3 mb-2">
+                    <span className="text-sm font-bold text-white">状态版本与回滚</span>
+                    <Badge>{(debug.snapshots || []).length} 个快照</Badge>
+                    <Badge>当前 {debug.state ? debug.state.version : '—'}</Badge>
+                  </div>
+                  {(debug.snapshots || []).length === 0 ? (
+                    <p className="text-xs text-white/40">还没有提交过任何版本。</p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {(debug.snapshots || []).map((snapshot) => (
+                        <div
+                          key={snapshot.version}
+                          className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 px-3 py-2"
+                        >
+                          <Badge tone={debug.state && snapshot.version === debug.state.version ? 'good' : 'muted'}>
+                            v{snapshot.version}
+                          </Badge>
+                          {snapshot.request_id && (
+                            <button
+                              onClick={() => inspectAction(snapshot.request_id)}
+                              className="text-[11px] font-mono text-cyan-300/80 hover:text-cyan-200 underline underline-offset-4"
+                              title="查看这次行动的判定与结果"
+                            >
+                              {snapshot.request_id}
+                            </button>
+                          )}
+                          <span className="text-[10px] text-white/30 font-mono">
+                            {snapshot.created_at}
+                          </span>
+                          <div className="flex items-center gap-2 ml-auto">
+                            <button
+                              onClick={() => compareWithPrevious(snapshot.version)}
+                              disabled={snapshot.version === 0 || busyVersion === snapshot.version}
+                              className={ghostButton}
+                            >
+                              对比上一版
+                            </button>
+                            <button
+                              onClick={() => rollbackTo(snapshot.version)}
+                              disabled={busyVersion === snapshot.version || (debug.state && snapshot.version === debug.state.version)}
+                              className={ghostButton}
+                            >
+                              回滚到此版本
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {diff && (
+                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4">
+                  <div className="flex flex-wrap items-center gap-3 mb-2">
+                    <span className="text-sm font-bold text-white">
+                      {diff.action ? '行动详情 ' + diff.action : '差异 v' + diff.from + ' → v' + diff.to}
+                    </span>
+                    <button onClick={() => setDiff(null)} className={ghostButton}>
+                      关闭
+                    </button>
+                  </div>
+                  <pre className="text-[11px] leading-relaxed text-white/60 whitespace-pre-wrap break-words max-h-64 overflow-auto">
+                    {JSON.stringify(diff.action ? diff.detail : diff.changed, null, 2)}
+                  </pre>
                 </div>
               )}
 
