@@ -6,6 +6,8 @@ import ErrorBoundary from './components/ErrorBoundary'
 import GameCanvas from './components/GameCanvas'
 import ScenarioBuilder from './components/ScenarioBuilder'
 import SetupWizard from './components/SetupWizard'
+import KnowledgeStudio from './components/KnowledgeStudio'
+import { ALL_TYPES, WORLD_TYPE_LABELS } from './lib/scenarioTypes'
 
 const ArchiveIcon = () => (
   <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
@@ -27,11 +29,24 @@ function Home() {
     useGameStore()
   const navigate = useNavigate()
   const [campaignsMap, setCampaignsMap] = useState({})
+  const [studioScenario, setStudioScenario] = useState(null)
+  const [studioTab, setStudioTab] = useState('knowledge')
 
   useEffect(() => {
     fetchScenarios()
       .then((data) => {
         setScenarios(data)
+        // Deep link for the studio: /?studio=<scenario id>
+        const params = new URLSearchParams(window.location.search)
+        const studioId = params.get('studio')
+        if (studioId) {
+          const target = data.find((s) => s.id === studioId)
+          if (target) {
+            setStudioScenario(target)
+            const tab = params.get('tab')
+            if (tab === 'mode' || tab === 'presets' || tab === 'knowledge') setStudioTab(tab)
+          }
+        }
         data.forEach((s) =>
           fetchCampaigns(s.id)
             .then((camps) => setCampaignsMap((prev) => ({ ...prev, [s.id]: camps })))
@@ -45,10 +60,9 @@ function Home() {
     const ok = await checkNeo4j()
     if (!ok) {
       alert(
-        'Neo4j is not running.\n\n' +
-        'The World Map will not be available during this session. ' +
-        'Entity relationships and graph data will not be stored.\n\n' +
-        'To enable it, start Neo4j via Docker:\n' +
+        '未检测到 Neo4j 服务。\n\n' +
+        '本次游玩期间世界地图不可用，实体关系与图谱数据不会写入。\n\n' +
+        '如需启用，请用 Docker 启动 Neo4j：\n' +
         'docker-compose up -d neo4j'
       )
     }
@@ -59,12 +73,11 @@ function Home() {
       await warnIfNeo4jDown()
       const campaigns = campaignsMap[scenario.id] || []
       if (campaigns.length > 0) {
-        // Resume the most recent campaign
+        // 继续最近一次冒险
         setActiveScenario(scenario)
         setActiveCampaignId(campaigns[0].id)
         navigate('/play')
       } else {
-        // No campaigns yet — create one
         const campaign = await createCampaign(scenario.id)
         setActiveScenario(scenario)
         setActiveCampaignId(campaign.id)
@@ -72,12 +85,12 @@ function Home() {
         navigate('/play')
       }
     } catch {
-      alert('Failed to start adventure')
+      alert('无法开始冒险，请检查后端服务是否已启动。')
     }
   }
 
   const startNewCampaign = async (scenario) => {
-    if (!confirm('Start a new adventure? Your current progress will be kept separately.')) return
+    if (!confirm('开始一段新的冒险？当前进度会被单独保存，不会被覆盖。')) return
     try {
       await warnIfNeo4jDown()
       const campaign = await createCampaign(scenario.id)
@@ -86,30 +99,29 @@ function Home() {
       clearMessages()
       navigate('/play')
     } catch {
-      alert('Failed to create adventure')
+      alert('创建冒险失败。')
     }
   }
 
   const handleDeleteAdventures = async (scenarioId) => {
     const campaigns = campaignsMap[scenarioId] || []
     if (campaigns.length === 0) return
-    if (!confirm(`Delete all ${campaigns.length} adventure(s) for this scenario? All progress will be lost.`)) return
+    if (!confirm(`删除这个情景下的全部 ${campaigns.length} 段冒险记录？所有进度都会丢失。`)) return
     try {
       for (const c of campaigns) {
         await deleteCampaign(scenarioId, c.id)
       }
       setCampaignsMap((prev) => ({ ...prev, [scenarioId]: [] }))
     } catch {
-      alert('Failed to delete adventures.')
+      alert('删除冒险记录失败。')
     }
   }
 
   const handleDeleteScenario = async (scenarioId) => {
-    if (!confirm('Delete this scenario and ALL its adventures? This cannot be undone.')) return
+    if (!confirm('删除这个情景以及它名下的全部冒险？此操作无法撤销。')) return
     try {
       await deleteScenario(scenarioId)
       setScenarios(scenarios.filter((s) => s.id !== scenarioId))
-      // Clear localStorage if the deleted scenario was the active one
       try {
         const stored = localStorage.getItem('lunar_activeScenario')
         if (stored) {
@@ -118,68 +130,114 @@ function Home() {
             useGameStore.getState().clearSession()
           }
         }
-      } catch {}
+      } catch {
+        // 本地存档不可解析时忽略，不影响删除
+      }
     } catch {
-      alert('Failed to delete scenario.')
+      alert('删除情景失败。')
     }
   }
 
   return (
-    <div className="min-h-screen bg-black text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden flex flex-col items-center justify-center">
-      
-      {/* High-Quality Background Image from Nano Banana 2 (Imagen 3) */}
-      <div 
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-60 mix-blend-screen animate-pulse-slow" 
+    <div className="min-h-screen bg-black text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden flex flex-col items-center justify-center py-16">
+
+      {/* 背景层：深色主题铺山峦照片，浅色主题由 .hero-bg 换成纸面暖光 */}
+      <div
+        className="hero-bg absolute inset-0 bg-cover bg-center bg-no-repeat opacity-60 mix-blend-screen animate-pulse-slow"
         style={{ backgroundImage: "url('/lunar-bg.jpg')" }}
       ></div>
-      
-      {/* Dark Gradient Overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-black/90 pointer-events-none"></div>
 
-      <div className="w-full max-w-4xl px-4 sm:px-8 relative z-10 flex flex-col items-center">
-        
-        {/* Main Interface Header */}
-        <header className="mb-16 flex flex-col items-center text-center">
-          <div className="mb-8">
-            <img 
-              src="/lunar-logo.png"
-              alt="Lunar Logo"
-              className="w-64 h-64 md:w-80 md:h-80 object-contain drop-shadow-[0_0_15px_rgba(255,255,255,0.4)]"            />
+      <div className="hero-mask absolute inset-0 bg-gradient-to-t from-black via-black/60 to-black/90 pointer-events-none"></div>
+
+      <div className="w-full max-w-5xl px-4 sm:px-8 relative z-10 flex flex-col items-center">
+
+        <header className="mb-12 flex flex-col items-center text-center">
+          <div className="hero-emblem mb-7 text-white/80">
+            <svg width="88" height="88" viewBox="0 0 96 96" fill="none" aria-hidden="true">
+              <circle cx="48" cy="48" r="27" stroke="currentColor" strokeWidth="1.1" opacity="0.85" />
+              <circle cx="48" cy="48" r="35" stroke="currentColor" strokeWidth="0.6" opacity="0.3" />
+              <path
+                d="M48 13a35 35 0 0 1 33.2 23.8"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                opacity="0.9"
+              />
+              <path d="M81.2 37.4 81.2 27.6 72.4 32.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" fill="none" />
+              <path
+                d="M48 83a35 35 0 0 1-33.2-23.8"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                opacity="0.45"
+              />
+              <circle cx="48" cy="48" r="3.2" fill="currentColor" opacity="0.9" />
+              <path d="M48 21v8M48 67v8M21 48h8M67 48h8" stroke="currentColor" strokeWidth="1" opacity="0.35" />
+            </svg>
           </div>
-          
-          <h1 className="text-4xl sm:text-6xl md:text-8xl font-bold text-white mb-6 tracking-tighter drop-shadow-2xl">
-            Lunar Project
-          </h1>
-          
-          <p className="text-gray-400 max-w-2xl text-base sm:text-lg md:text-xl font-light leading-relaxed mb-8 sm:mb-12 drop-shadow-md px-2">
-            Localized storytelling core. Multi-agent narrative orchestration with persistent world state and creativity-based resolution.
+
+          <p className="hero-emblem text-[10px] font-mono tracking-[0.55em] uppercase text-white/40 mb-4">
+            Self-Reference Engine
           </p>
-          
-          <Link
-            to="/create"
-            className="group px-12 py-4 bg-white text-black hover:bg-gray-200 transition-all rounded-full font-bold flex items-center gap-4 uppercase text-sm tracking-[0.2em] shadow-[0_0_40px_rgba(255,255,255,0.15)]"
-          >
-            <span className="text-2xl group-hover:rotate-90 transition-transform duration-300">+</span> 
-            Construct Scenario
-          </Link>
+          <h1 className="hero-title text-4xl sm:text-6xl md:text-7xl font-bold text-white mb-5 tracking-tighter drop-shadow-2xl">
+            自指引擎
+          </h1>
+
+          <p className="text-gray-400 max-w-2xl text-base sm:text-lg font-light leading-relaxed mb-4 drop-shadow-md px-2">
+            规则决定事实，事件记录变化，状态保存结果，模型只负责叙事。
+          </p>
+          <p className="text-white/30 max-w-xl text-xs sm:text-sm font-light leading-relaxed px-2">
+            先选择一种世界类型，或从空白开始搭建你自己的文字冒险。
+          </p>
         </header>
 
-        {/* Centered Scenario Archive */}
-        <div className="w-full max-w-2xl flex flex-col items-center">
-          <div className="flex items-center gap-4 mb-10 pb-4 border-b border-white/10 w-full justify-center">
-            <ArchiveIcon />
-            <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-white/60">Narrative Archives</h2>
+        {/* 世界类型选择 */}
+        <section className="w-full mb-12">
+          <div className="flex items-center gap-4 mb-6 pb-3 border-b border-white/10">
+            <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-white/60">选择世界类型</h2>
             <div className="w-1.5 h-1.5 rounded-full bg-white/20"></div>
             <span className="text-[10px] text-white/40 font-mono tracking-widest">
-              UNITS: {scenarios.length.toString().padStart(2, '0')}
+              {ALL_TYPES.length} 种预设
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {ALL_TYPES.map((type) => (
+              <button
+                key={type.id}
+                onClick={() => navigate(`/create?type=${type.id}`)}
+                className="group text-left p-5 rounded-3xl bg-white/[0.03] border border-white/5 hover:border-white/25 hover:bg-white/[0.07] transition-all backdrop-blur-xl"
+              >
+                <div className="flex items-start gap-4">
+                  <span className="world-type-icon text-3xl leading-none opacity-80 group-hover:opacity-100 transition-opacity">
+                    {type.icon}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-white font-bold text-lg mb-1">{type.name}</div>
+                    <p className="text-xs text-gray-400 leading-relaxed line-clamp-2">{type.tagline}</p>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* 情景档案 */}
+        <div className="w-full max-w-3xl flex flex-col items-center">
+          <div className="flex items-center gap-4 mb-8 pb-4 border-b border-white/10 w-full justify-center">
+            <ArchiveIcon />
+            <h2 className="text-xs font-bold uppercase tracking-[0.3em] text-white/60">情景档案</h2>
+            <div className="w-1.5 h-1.5 rounded-full bg-white/20"></div>
+            <span className="text-[10px] text-white/40 font-mono tracking-widest">
+              共 {scenarios.length} 个
             </span>
           </div>
 
           {scenarios.length === 0 ? (
-            <div className="py-20 w-full flex flex-col items-center justify-center text-white/30 bg-white/[0.02] backdrop-blur-md rounded-[2rem] border border-white/5">
-              <p className="mb-4 tracking-[0.2em] text-xs uppercase font-semibold">No narrative units detected.</p>
+            <div className="py-16 w-full flex flex-col items-center justify-center text-white/30 bg-white/[0.02] backdrop-blur-md rounded-[2rem] border border-white/5">
+              <p className="mb-4 tracking-[0.2em] text-xs font-semibold">还没有任何情景</p>
               <Link to="/create" className="text-white hover:underline underline-offset-8 transition-all text-[10px] tracking-widest font-bold">
-                INITIATE CONSTRUCTION
+                从空白开始构建
               </Link>
             </div>
           ) : (
@@ -188,21 +246,26 @@ function Home() {
                 <div key={s.id} className="bg-white/[0.03] backdrop-blur-xl p-5 sm:p-8 rounded-[2rem] border border-white/5 transition-all hover:bg-white/[0.06] hover:border-white/20 group">
                   <div className="flex flex-col md:flex-row items-center gap-8">
                     <div className="flex-1 text-center md:text-left">
-                      <div className="text-[10px] text-white/20 tracking-widest uppercase mb-2 font-mono">NODE_HASH: {s.id.split('-')[0]}</div>
+                      <div className="flex items-center gap-3 justify-center md:justify-start mb-2">
+                        <span className="text-[10px] text-white/20 tracking-widest uppercase font-mono">ID: {s.id.split('-')[0]}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full border border-white/10 text-white/40">
+                          {WORLD_TYPE_LABELS[s.world_type] || '自定义世界'}
+                        </span>
+                      </div>
                       <h3 className="text-xl sm:text-3xl font-bold text-white mb-3 group-hover:text-white transition-colors">
                         {s.title}
                       </h3>
                       <p className="text-sm text-gray-500 line-clamp-2 leading-relaxed italic">
-                        {s.description || s.tone_instructions || 'Unit requires narrative seeding.'}
+                        {s.description || s.tone_instructions || '这个情景还没有填写简介。'}
                       </p>
                     </div>
 
                     <div className="flex flex-col gap-3 items-end">
-                      <div className="flex gap-3">
+                      <div className="flex gap-3 flex-wrap justify-end">
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDeleteScenario(s.id) }}
                           className="p-3 rounded-2xl border border-white/5 hover:border-rose-500/40 text-white/20 hover:text-rose-400 transition-all"
-                          title="Delete Scenario"
+                          title="删除情景"
                         >
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
@@ -211,16 +274,24 @@ function Home() {
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDeleteAdventures(s.id) }}
                             className="p-3 rounded-2xl border border-white/5 hover:border-rose-500/40 text-white/20 hover:text-rose-400 transition-all"
-                            title="Delete all adventures"
+                            title="删除全部冒险记录"
                           >
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M5 6l1 14h12l1-14"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                           </button>
                         )}
 
                         <button
-                          onClick={(e) => { e.stopPropagation(); exportScenario(s.id, s.title).catch(() => alert('Export failed.')) }}
+                          onClick={(e) => { e.stopPropagation(); setStudioScenario(s) }}
+                          className="px-4 py-3 rounded-2xl border border-white/10 hover:border-white/30 text-white/50 hover:text-white transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
+                          title="编辑知识库、运行模式与模型预设"
+                        >
+                          知识与模式
+                        </button>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); exportScenario(s.id, s.title).catch(() => alert('导出失败。')) }}
                           className="p-3 rounded-2xl border border-white/5 hover:border-white/20 text-white/20 hover:text-white transition-all"
-                          title="Export"
+                          title="导出"
                         >
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         </button>
@@ -229,9 +300,9 @@ function Home() {
                           <button
                             onClick={() => startNewCampaign(s)}
                             className="px-5 py-3 rounded-2xl border border-white/10 hover:border-white/30 text-white/40 hover:text-white transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
-                            title="Start a fresh adventure"
+                            title="开始一段全新的冒险"
                           >
-                            New
+                            新冒险
                           </button>
                         )}
 
@@ -239,7 +310,7 @@ function Home() {
                           onClick={() => playCampaign(s)}
                           className="px-8 py-3 rounded-2xl bg-white/5 hover:bg-white text-white/80 hover:text-black transition-all text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-3"
                         >
-                          Play
+                          继续冒险
                           <PowerIcon />
                         </button>
                       </div>
@@ -251,6 +322,14 @@ function Home() {
           )}
         </div>
       </div>
+
+      <KnowledgeStudio
+        open={Boolean(studioScenario)}
+        scenarioId={studioScenario?.id}
+        scenarioTitle={studioScenario?.title}
+        initialTab={studioTab}
+        onClose={() => setStudioScenario(null)}
+      />
     </div>
   )
 }
@@ -258,12 +337,11 @@ function Home() {
 function PlayGate() {
   const { activeScenario, activeCampaignId } = useGameStore()
   const [state, setState] = useState({ status: 'loading', questions: [] })
+  // 没有进行中的冒险时直接可用，避免在 effect 中同步 setState。
+  const effectiveState = activeCampaignId ? state : { status: 'ready', questions: [] }
 
   useEffect(() => {
-    if (!activeCampaignId) {
-      setState({ status: 'ready', questions: [] })
-      return
-    }
+    if (!activeCampaignId) return
     let cancelled = false
     fetchSetupState(activeCampaignId)
       .then((data) => {
@@ -275,25 +353,25 @@ function PlayGate() {
         }
       })
       .catch(() => {
-        // Backend down or campaign missing — let GameCanvas surface the error.
+        // 后端不可用或存档缺失时交给 GameCanvas 显示错误
         if (!cancelled) setState({ status: 'ready', questions: [] })
       })
     return () => { cancelled = true }
   }, [activeCampaignId])
 
-  if (state.status === 'loading') {
+  if (effectiveState.status === 'loading') {
     return (
       <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
-        Loading…
+        载入中…
       </div>
     )
   }
-  if (state.status === 'wizard') {
+  if (effectiveState.status === 'wizard') {
     return (
       <SetupWizard
         scenario={activeScenario}
         campaignId={activeCampaignId}
-        questions={state.questions}
+        questions={effectiveState.questions}
         onComplete={() => setState({ status: 'ready', questions: [] })}
       />
     )

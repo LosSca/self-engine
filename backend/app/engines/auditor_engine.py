@@ -47,6 +47,8 @@ def _item_fingerprint(text: str) -> list[tuple]:
 
 _LANGUAGE_NAMES = {
     "en": "English",
+    "zh": "Simplified Chinese",
+    "zh-cn": "Simplified Chinese",
     "pt-br": "Brazilian Portuguese (pt-br)",
 }
 

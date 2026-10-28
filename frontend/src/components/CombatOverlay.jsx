@@ -51,7 +51,7 @@ export default function CombatOverlay({ active }) {
       >
         <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-rose-950/80 backdrop-blur-xl border border-rose-500/40 shadow-[0_0_20px_rgba(244,63,94,0.3)]">
           <div className="w-2 h-2 bg-rose-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.8)]" />
-          <span className="text-rose-300 text-[10px] font-bold uppercase tracking-[0.2em]">Combat Active</span>
+          <span className="text-rose-300 text-[10px] font-bold uppercase tracking-[0.2em]">战斗中</span>
         </div>
       </div>
 

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.utils.language import language_name
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -42,7 +44,7 @@ class JournalEngine:
     ) -> JournalEntry | None:
         lang_hint = ""
         if language and language != "en":
-            lang_hint = f" Write the summary in {language}."
+            lang_hint = f" Write the summary in {language_name(language)}."
         messages = [
             {
                 "role": "system",

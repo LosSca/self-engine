@@ -14,7 +14,7 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
       const data = await generateContent(campaignId, type, language)
       setResult({ type, data })
     } catch {
-      setResult({ type, data: null, error: 'Generation failed. Is the backend running?' })
+      setResult({ type, data: null, error: '生成失败，请确认后端是否正在运行。' })
     } finally {
       setLoading(false)
     }
@@ -24,8 +24,8 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
 
   const tabs = [
     { id: 'npc', label: 'NPC', icon: User },
-    { id: 'event', label: 'Event', icon: Zap },
-    { id: 'plot', label: 'Plot Arc', icon: BookOpen },
+    { id: 'event', label: '事件', icon: Zap },
+    { id: 'plot', label: '剧情线', icon: BookOpen },
   ]
 
   return (
@@ -35,7 +35,7 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <div className="flex items-center gap-3">
             <Sparkles size={16} className="text-amber-400" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">Plot Generator</h2>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">剧情生成器</h2>
           </div>
           <button onClick={onClose} className="text-white/40 hover:text-white transition-colors">
             <X size={18} />
@@ -64,9 +64,9 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
         <div className="p-6">
           {/* Description */}
           <p className="text-white/40 text-sm font-light mb-4">
-            {tab === 'npc' && 'Generate a unique NPC with personality, goals, and secrets based on your world context.'}
-            {tab === 'event' && 'Create a random encounter or event with branching choices for your current scenario.'}
-            {tab === 'plot' && 'Generate a compelling plot hook for a new quest or story branch.'}
+            {tab === 'npc' && '根据你的世界背景，生成一个带有性格、目标与秘密的独一无二的 NPC。'}
+            {tab === 'event' && '为当前情景创建一个带分支选项的随机遭遇或事件。'}
+            {tab === 'plot' && '为一个新任务或故事支线生成引人入胜的剧情钩子。'}
           </p>
 
           {/* Generate button */}
@@ -78,7 +78,7 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
             {loading ? (
               <span className="flex items-center justify-center gap-2">
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Generating...
+                正在生成……
               </span>
             ) : (
               <span className="flex items-center justify-center gap-2">
@@ -100,21 +100,21 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
               <div className="flex items-center justify-between">
                 <h3 className="text-white font-bold text-lg">{result.data.name}</h3>
                 <span className="text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 px-2 py-0.5 rounded bg-amber-400/10 text-amber-400 border border-amber-400/30">
-                  Power {result.data.power_level}/10
+                  战力 {result.data.power_level}/10
                 </span>
               </div>
               <p className="text-white/60 text-sm font-light">{result.data.appearance}</p>
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">Personality</span>
+                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">性格</span>
                   <p className="text-[#d1d1d1] mt-1">{result.data.personality}</p>
                 </div>
                 <div>
-                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">Goal</span>
+                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">目标</span>
                   <p className="text-[#d1d1d1] mt-1">{result.data.goal}</p>
                 </div>
                 <div className="col-span-2">
-                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">Secret</span>
+                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">秘密</span>
                   <p className="text-[#d1d1d1] mt-1 italic">{result.data.secret}</p>
                 </div>
               </div>
@@ -127,7 +127,7 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
               <p className="text-white/60 text-sm font-light leading-relaxed">{result.data.description}</p>
               {result.data.choices?.length > 0 && (
                 <div className="space-y-2">
-                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">Choices</span>
+                  <span className="text-white/20 uppercase tracking-widest text-[10px] font-bold">选项</span>
                   {result.data.choices.map((c, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm text-[#d1d1d1]">
                       <span className="text-white font-mono text-xs">{i + 1}.</span>

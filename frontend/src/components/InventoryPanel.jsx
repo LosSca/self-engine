@@ -45,21 +45,21 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory, s
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
       <div className="bg-white/[0.03] border border-white/10 rounded-2xl shadow-[0_0_40px_rgba(255,255,255,0.15)] w-full max-w-lg mx-2 sm:mx-4 max-h-[85vh] sm:max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
-          <h2 className="text-white font-bold text-base tracking-wide">Inventory</h2>
-          <button onClick={onClose} aria-label="Close inventory" className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
+          <h2 className="text-white font-bold text-base tracking-wide">背包</h2>
+          <button onClick={onClose} aria-label="关闭背包" className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
             <X size={18} />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
-          {loading && <p className="text-white/40 text-sm text-center py-8">Loading...</p>}
+          {loading && <p className="text-white/40 text-sm text-center py-8">加载中……</p>}
           {!loading && inventory.length === 0 && (
-            <p className="text-white/20 text-sm text-center py-8">No items yet.</p>
+            <p className="text-white/20 text-sm text-center py-8">暂无物品。</p>
           )}
 
           {carriedItems.length > 0 && (
             <>
-              <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest font-mono px-2">Carried</p>
+              <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest font-mono px-2">携带中</p>
               {carriedItems.map((item) => {
                 const Icon = CATEGORY_ICONS[item.category] || Package
                 return (
@@ -74,13 +74,13 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory, s
                         onClick={() => handleAction(item.name, 'use')}
                         className="px-2 py-1 text-[10px] uppercase tracking-wider bg-amber-500/10 text-amber-400 rounded hover:bg-amber-500/20 transition-colors"
                       >
-                        Use
+                        使用
                       </button>
                       <button
                         onClick={() => handleAction(item.name, 'discard')}
                         className="px-2 py-1 text-[10px] uppercase tracking-wider bg-rose-500/10 text-rose-400 rounded hover:bg-rose-500/20 transition-colors"
                       >
-                        Drop
+                        丢弃
                       </button>
                     </div>
                   </div>
@@ -91,7 +91,7 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory, s
 
           {expiredItems.length > 0 && (
             <>
-              <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest font-mono px-2 mt-4">Used / Lost</p>
+              <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest font-mono px-2 mt-4">已使用 / 已丢失</p>
               {expiredItems.map((item) => {
                 const Icon = CATEGORY_ICONS[item.category] || Package
                 return (

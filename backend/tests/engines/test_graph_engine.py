@@ -1,6 +1,22 @@
 import pytest
 import asyncio
+import socket
 from app.engines.graph_engine import GraphEngine, WorldNode, WorldNodeType, Relationship
+
+
+def _neo4j_available() -> bool:
+    """Best-effort probe so the suite skips instead of erroring without Neo4j."""
+    try:
+        with socket.create_connection(("localhost", 7687), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _neo4j_available(),
+    reason="requires a Neo4j instance on bolt://localhost:7687 (docker compose up neo4j)",
+)
 
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.utils.language import language_name
+
 import logging
 from dataclasses import dataclass
 
@@ -134,7 +136,7 @@ class PlotGenerator:
         existing_npc_names: list[str] | None = None,
         tone_instructions: str = "",
     ) -> GeneratedNPC | None:
-        lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
+        lang_hint = f" Write all text values in {language_name(language)}." if language and language != "en" else ""
         recent_hint = f"\n\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\n\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         dedup_hint = ""
@@ -207,7 +209,7 @@ class PlotGenerator:
             if narrative_time >= 3600
             else f"{narrative_time // 60} minutes"
         )
-        lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
+        lang_hint = f" Write all text values in {language_name(language)}." if language and language != "en" else ""
         recent_hint = f"\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         messages = [
@@ -259,7 +261,7 @@ class PlotGenerator:
         recent_narrative: str = "",
         tone_instructions: str = "",
     ) -> str | None:
-        lang_hint = f" Write in {language}." if language and language != "en" else ""
+        lang_hint = f" Write in {language_name(language)}." if language and language != "en" else ""
         recent_hint = f"\n\nRecent story summary:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\n\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         messages = [
@@ -303,7 +305,7 @@ class PlotGenerator:
         Unlike plot arcs, micro-hooks are concrete scene-level details that add
         texture, opportunity, or a visible complication without opening another plot.
         """
-        lang_hint = f" Write in {language}." if language and language != "en" else ""
+        lang_hint = f" Write in {language_name(language)}." if language and language != "en" else ""
         tone_hint = f"\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         messages = [
             {

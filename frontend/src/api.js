@@ -49,7 +49,7 @@ export async function fetchCampaigns(scenarioId) {
   return r.json()
 }
 
-export async function createCampaign(scenarioId, playerName = 'Player') {
+export async function createCampaign(scenarioId, playerName = '旅人') {
   const r = await fetch(`${BASE}/scenarios/${scenarioId}/campaigns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -335,7 +335,23 @@ export async function importScenario(data) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-  if (!r.ok) throw new Error('Failed to import scenario')
+  if (!r.ok) {
+    const err = new Error('创建情景失败')
+    err.status = r.status
+    try {
+      const body = await r.json()
+      err.detail = body.detail
+      if (typeof body.detail === 'string') err.message = body.detail
+      else if (Array.isArray(body.detail)) {
+        err.message = body.detail
+          .map((item) => (item.loc ? item.loc.slice(1).join('.') + '：' + item.msg : item.msg))
+          .join('；')
+      }
+    } catch {
+      // 响应不是 JSON 时使用默认文案
+    }
+    throw err
+  }
   return r.json()
 }
 
@@ -375,7 +391,7 @@ export async function updateNpcMind(campaignId, npcName, thoughts) {
   return r.json()
 }
 
-export async function generateContent(campaignId, type, language = 'en') {
+export async function generateContent(campaignId, type, language = 'zh') {
   const r = await fetch(`${BASE}/game/${campaignId}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -439,7 +455,7 @@ export async function previewOpening({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      language: language || 'en',
+      language: language || 'zh',
       tone: tone || '',
       lore: lore || '',
       directive: directive || '',
@@ -464,4 +480,194 @@ export async function regenerateOpening(campaignId) {
     throw err
   }
   return r.json()
+}
+
+// ---------- 角色包 / 立绘差分 ----------
+
+async function jsonOrThrow(r, fallback) {
+  if (!r.ok) {
+    const err = new Error(fallback)
+    err.status = r.status
+    try {
+      const data = await r.json()
+      err.detail = data.detail
+      if (data.detail) err.message = typeof data.detail === 'string' ? data.detail : fallback
+    } catch {
+      // 响应不是 JSON 时保留 fallback 文案
+    }
+    throw err
+  }
+  return r.json()
+}
+
+export async function fetchCharactersByScenario(scenarioId) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/characters`)
+  return jsonOrThrow(r, '读取角色包失败')
+}
+
+export async function createCharacter(scenarioId, data) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/characters`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return jsonOrThrow(r, '创建角色失败')
+}
+
+export async function updateCharacter(characterId, patch) {
+  const r = await fetch(`${BASE}/characters/${characterId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return jsonOrThrow(r, '更新角色失败')
+}
+
+export async function deleteCharacter(characterId) {
+  const r = await fetch(`${BASE}/characters/${characterId}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error('删除角色失败')
+  return r.json()
+}
+
+export async function addCharacterLook(characterId, look) {
+  const r = await fetch(`${BASE}/characters/${characterId}/looks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(look),
+  })
+  return jsonOrThrow(r, '添加立绘差分失败')
+}
+
+export async function updateCharacterLook(lookId, patch) {
+  const r = await fetch(`${BASE}/characters/looks/${lookId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return jsonOrThrow(r, '更新立绘失败')
+}
+
+export async function deleteCharacterLook(lookId) {
+  const r = await fetch(`${BASE}/characters/looks/${lookId}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error('删除立绘失败')
+  return r.json()
+}
+
+export async function uploadCharacterImage(file) {
+  const form = new FormData()
+  form.append('file', file)
+  const r = await fetch(`${BASE}/characters/upload`, { method: 'POST', body: form })
+  return jsonOrThrow(r, '上传图片失败')
+}
+
+export async function fetchCampaignCharacter(campaignId) {
+  const r = await fetch(`${BASE}/campaigns/${campaignId}/character`)
+  return jsonOrThrow(r, '读取角色形象失败')
+}
+
+export async function setCampaignCharacter(campaignId, picks) {
+  const r = await fetch(`${BASE}/campaigns/${campaignId}/character`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(picks),
+  })
+  return jsonOrThrow(r, '保存角色形象失败')
+}
+
+// ---------------------------------------------------------------- knowledge / play mode
+const V1 = '/api/v1'
+
+export async function fetchKnowledgeLayers() {
+  const r = await fetch(`${V1}/knowledge/layers`)
+  return jsonOrThrow(r, '读取知识分层失败')
+}
+
+export async function fetchKnowledge(scenarioId, includeDisabled = true) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/knowledge?include_disabled=${includeDisabled}`)
+  return jsonOrThrow(r, '读取知识库失败')
+}
+
+export async function createKnowledge(scenarioId, data) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/knowledge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return jsonOrThrow(r, '创建知识条目失败')
+}
+
+export async function updateKnowledge(entryId, patch) {
+  const r = await fetch(`${V1}/knowledge/${entryId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return jsonOrThrow(r, '更新知识条目失败')
+}
+
+export async function deleteKnowledge(entryId) {
+  const r = await fetch(`${V1}/knowledge/${entryId}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除知识条目失败')
+}
+
+export async function fetchPlayConfig(scenarioId) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/play-config`)
+  return jsonOrThrow(r, '读取运行模式失败')
+}
+
+export async function savePlayConfig(scenarioId, data) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/play-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return jsonOrThrow(r, '保存运行模式失败')
+}
+
+export async function validateKnowledge(scenarioId) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/knowledge/validate`, { method: 'POST' })
+  return jsonOrThrow(r, '校验知识库失败')
+}
+
+export async function previewKnowledgeContext(scenarioId, { mode, maxDepth, storyNode } = {}) {
+  const params = new URLSearchParams()
+  if (mode) params.set('mode', mode)
+  if (maxDepth !== undefined && maxDepth !== null) params.set('max_depth', String(maxDepth))
+  if (storyNode) params.set('story_node', storyNode)
+  const query = params.toString()
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/context/preview${query ? `?${query}` : ''}`)
+  return jsonOrThrow(r, '预览知识上下文失败')
+}
+
+export async function fetchModelPresets() {
+  const r = await fetch(`${V1}/model-presets`)
+  return jsonOrThrow(r, '读取模型预设失败')
+}
+
+export async function createModelPreset(data) {
+  const r = await fetch(`${V1}/model-presets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return jsonOrThrow(r, '创建模型预设失败')
+}
+
+export async function updateModelPreset(presetId, patch) {
+  const r = await fetch(`${V1}/model-presets/${presetId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return jsonOrThrow(r, '更新模型预设失败')
+}
+
+export async function deleteModelPreset(presetId) {
+  const r = await fetch(`${V1}/model-presets/${presetId}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除模型预设失败')
+}
+
+export async function fetchCampaignStory(campaignId) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/story`)
+  return jsonOrThrow(r, '读取故事线进度失败')
 }

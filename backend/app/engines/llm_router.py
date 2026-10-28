@@ -322,6 +322,9 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     DEEPSEEK = "deepseek"
+    # Local OpenAI-compatible server (NInfer). Not a cloud provider: requests are
+    # posted verbatim to LOCAL_LLM_BASE_URL with the local bearer key.
+    LOCAL = "local"
 
 
 def _reasoning_kwargs(provider: LLMProvider, reasoning: bool) -> dict:
@@ -333,6 +336,10 @@ def _reasoning_kwargs(provider: LLMProvider, reasoning: bool) -> dict:
     adaptive thinking; earlier Claude models ignore the flag harmlessly.
     """
     if reasoning:
+        return {}
+    if provider == LLMProvider.LOCAL:
+        # NInfer is launched with --default-reasoning-effort none and rejects
+        # unknown OpenAI params; do not forward reasoning_effort.
         return {}
     if provider == LLMProvider.ANTHROPIC:
         return {"thinking": {"type": "disabled"}}
@@ -526,6 +533,10 @@ class LLMConfig:
 
     def get_context_window(self) -> int:
         """Return the context window size (tokens) for the orchestrator model."""
+        if self.primary_provider == LLMProvider.LOCAL:
+            # Local context is decided by the server launch flags, not a model
+            # catalogue: NInfer window 32768 + retrieval 16384 on this box.
+            return _LOCAL_CONTEXT_WINDOW or _DEFAULT_CONTEXT_WINDOW
         model = self.orchestrator_model or self.primary_model
         model_key = f"{self.primary_provider.value}/{model}"
         return _CONTEXT_WINDOWS.get(model_key, _DEFAULT_CONTEXT_WINDOW)
@@ -543,12 +554,25 @@ _ANTHROPIC_PROXY_KEY = _settings.anthropic_proxy_key or os.environ.get("ANTHROPI
 _OPENAI_PROXY_URL = _settings.openai_proxy_url or os.environ.get("OPENAI_PROXY_URL", "")
 _OPENAI_PROXY_KEY = _settings.openai_proxy_key or os.environ.get("OPENAI_PROXY_KEY", "proxy")
 
+# Local OpenAI-compatible inference server (NInfer). Pydantic settings win over
+# the shell environment, matching the proxy constants above so editing .env works.
+_LOCAL_LLM_URL = _settings.local_llm_base_url or os.environ.get("LOCAL_LLM_BASE_URL", "")
+_LOCAL_LLM_KEY = _settings.local_llm_api_key or os.environ.get("LOCAL_LLM_API_KEY", "")
+_LOCAL_LLM_MODEL = _settings.local_llm_model or os.environ.get("LOCAL_LLM_MODEL", "")
+_LOCAL_CONTEXT_WINDOW = int(
+    _settings.local_llm_context_window or os.environ.get("LOCAL_LLM_CONTEXT_WINDOW", 0)
+)
+
 
 class LLMRouter:
     def __init__(self, config: LLMConfig):
         self.config = config
 
     def _build_model_string(self, provider: LLMProvider, model: str) -> str:
+        if provider == LLMProvider.LOCAL:
+            # litellm's OpenAI transport strips the prefix and posts the bare model
+            # id to api_base, which is what NInfer's --model-id expects.
+            return f"openai/{model}"
         return f"{provider.value}/{model}"
 
     def _active_model(self, orchestrator: bool) -> str:
@@ -563,6 +587,8 @@ class LLMRouter:
             return _ANTHROPIC_PROXY_URL
         if provider == LLMProvider.OPENAI and _OPENAI_PROXY_URL:
             return _OPENAI_PROXY_URL
+        if provider == LLMProvider.LOCAL:
+            return _LOCAL_LLM_URL or None
         return None
 
     def _get_api_key(self, provider: LLMProvider) -> str | None:
@@ -570,6 +596,13 @@ class LLMRouter:
             return _ANTHROPIC_PROXY_KEY
         if provider == LLMProvider.OPENAI and _OPENAI_PROXY_URL:
             return _OPENAI_PROXY_KEY
+        if provider == LLMProvider.LOCAL:
+            if not _LOCAL_LLM_KEY:
+                raise RuntimeError(
+                    "LOCAL_LLM_API_KEY is not configured; copy the key from the "
+                    "NInfer api-key.txt into .env (see .env.example)."
+                )
+            return _LOCAL_LLM_KEY
         return None
 
     @staticmethod
@@ -596,9 +629,14 @@ class LLMRouter:
 
     def _sampling_kwargs(self, model: str) -> dict:
         """Sampling params for models that accept them; empty for the rest."""
+        params: dict = {}
         if _accepts_temperature(model):
-            return {"temperature": self.config.temperature}
-        return {}
+            params["temperature"] = self.config.temperature
+        if self.config.primary_provider == LLMProvider.LOCAL:
+            # NInfer validates OpenAI fields strictly; let litellm drop params the
+            # local server does not implement instead of failing the whole call.
+            params["drop_params"] = True
+        return params
 
     def _prepare_cached_messages(self, messages: list[dict], call_kwargs: dict) -> list[dict]:
         """Apply the FASE 2 provider transform to cached-form messages.
@@ -697,12 +735,14 @@ class LLMRouter:
             return resp.choices[0].message.content
         t0 = time.monotonic()
         try:
+            # Merge instead of splatting twice: an explicit temperature= from the
+            # caller must override the config default, and duplicate keywords
+            # would raise TypeError before the request is even sent.
             response = await litellm.acompletion(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
-                **self._sampling_kwargs(model),
-                **call_kwargs,
+                **{**self._sampling_kwargs(model), **call_kwargs},
             )
             _log_call(caller, messages, max_tokens, response, time.monotonic() - t0, model=model)
             return response.choices[0].message.content
@@ -721,8 +761,7 @@ class LLMRouter:
                     model=fallback_model,
                     messages=messages,
                     max_tokens=self.config.max_tokens,
-                    **self._sampling_kwargs(fallback_model),
-                    **fb_kwargs,
+                    **{**self._sampling_kwargs(fallback_model), **fb_kwargs},
                 )
                 _log_call(caller, messages, max_tokens, response, time.monotonic() - t0, model=fallback_model)
                 return response.choices[0].message.content
@@ -752,6 +791,10 @@ class LLMRouter:
         if api_base:
             call_kwargs["api_base"] = api_base
             call_kwargs["api_key"] = self._get_api_key(self.config.primary_provider)
+        # The block below is the CLIProxyAPI workaround (non-streaming). A local
+        # OpenAI-compatible server streams SSE natively, so it falls through to
+        # the normal streaming path at the end of this method.
+        if api_base and self.config.primary_provider != LLMProvider.LOCAL:
             # FASE 2: cached-form Anthropic requests go through the anthropic SDK
             # directly. litellm strips content-block cache_control, killing the cache.
             if (self.config.primary_provider == LLMProvider.ANTHROPIC
@@ -782,8 +825,7 @@ class LLMRouter:
                         messages=messages,
                         max_tokens=max_tokens,
                         stream=False,
-                        **self._sampling_kwargs(model),
-                        **call_kwargs,
+                        **{**self._sampling_kwargs(model), **call_kwargs},
                     )
                     last_exc = None
                     break
@@ -812,8 +854,7 @@ class LLMRouter:
             messages=messages,
             max_tokens=max_tokens,
             stream=True,
-            **self._sampling_kwargs(model),
-            **call_kwargs,
+            **{**self._sampling_kwargs(model), **call_kwargs},
         )
         output_chars = 0
         accumulated = ""

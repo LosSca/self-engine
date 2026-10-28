@@ -1,13 +1,21 @@
 import { useState, useEffect } from 'react'
 import { BookOpen, RefreshCw, X } from 'lucide-react'
 
+const CATEGORY_LABELS = {
+  DISCOVERY: '发现',
+  COMBAT: '战斗',
+  DECISION: '抉择',
+  RELATIONSHIP_CHANGE: '关系',
+  WORLD_EVENT: '世界',
+}
+
 const CATEGORIES = [
-  { id: null, label: 'All' },
-  { id: 'DISCOVERY', label: 'Discovery' },
-  { id: 'COMBAT', label: 'Combat' },
-  { id: 'DECISION', label: 'Decision' },
-  { id: 'RELATIONSHIP_CHANGE', label: 'Relationship' },
-  { id: 'WORLD_EVENT', label: 'World' },
+  { id: null, label: '全部' },
+  { id: 'DISCOVERY', label: '发现' },
+  { id: 'COMBAT', label: '战斗' },
+  { id: 'DECISION', label: '抉择' },
+  { id: 'RELATIONSHIP_CHANGE', label: '关系' },
+  { id: 'WORLD_EVENT', label: '世界' },
 ]
 
 const CATEGORY_COLORS = {
@@ -42,7 +50,7 @@ export default function JournalPanel({ open, onClose, entries, onRefresh }) {
           <div className="flex items-center gap-3">
             <BookOpen size={16} className="text-yellow-400" />
             <h2 className="text-white font-bold text-sm uppercase tracking-widest flex items-center gap-2">
-              Mission Log
+              任务日志
               {entries.length > 0 && (
                 <span className="text-white/40 font-normal text-xs">{entries.length}</span>
               )}
@@ -51,13 +59,13 @@ export default function JournalPanel({ open, onClose, entries, onRefresh }) {
           <div className="flex items-center gap-2">
             <button
               onClick={onRefresh}
-              title="Refresh"
-              aria-label="Refresh journal"
+              title="刷新"
+              aria-label="刷新日志"
               className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <RefreshCw size={14} />
             </button>
-            <button onClick={onClose} aria-label="Close journal" className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
+            <button onClick={onClose} aria-label="关闭日志" className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50">
               <X size={18} />
             </button>
           </div>
@@ -83,13 +91,13 @@ export default function JournalPanel({ open, onClose, entries, onRefresh }) {
         {/* Entries */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-2">
           {filtered.length === 0 ? (
-            <p className="text-white/40 text-sm font-light text-center py-8">No entries recorded.</p>
+            <p className="text-white/40 text-sm font-light text-center py-8">暂无记录。</p>
           ) : (
             [...filtered].reverse().map((entry, i) => (
               <div key={i} className="p-3.5 rounded-xl bg-white/[0.03] border border-white/5">
                 <div className="flex items-center gap-2 mb-2">
                   <span className={`text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 px-2 py-0.5 rounded border ${CATEGORY_COLORS[entry.category] || 'text-white/40 bg-white/[0.03] border-white/5'}`}>
-                    {entry.category?.replace('_', ' ') || 'LOG'}
+                    {CATEGORY_LABELS[entry.category] || '日志'}
                   </span>
                   <span className="text-[10px] text-white/20 font-mono">
                     {entry.created_at?.slice(11, 19) || ''}

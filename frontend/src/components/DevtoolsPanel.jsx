@@ -79,7 +79,7 @@ function CallCard({ entry }) {
           className="flex items-center gap-1 text-[10px] uppercase tracking-widest font-bold text-white/50 hover:text-white transition-colors"
         >
           <ChevronRight size={12} className={`transition-transform ${openOutput ? 'rotate-90' : ''}`} />
-          Output
+          输出
         </button>
         {openOutput && (
           <pre className="text-[11px] leading-relaxed text-[#d1d1d1] font-mono whitespace-pre-wrap break-words bg-black/40 rounded-lg p-3 max-h-64 overflow-auto custom-scrollbar">
@@ -92,14 +92,14 @@ function CallCard({ entry }) {
           className="flex items-center gap-1 text-[10px] uppercase tracking-widest font-bold text-white/50 hover:text-white transition-colors"
         >
           <ChevronRight size={12} className={`transition-transform ${openInput ? 'rotate-90' : ''}`} />
-          Input ({(entry.input || []).length} sections)
+          输入（{(entry.input || []).length} 段）
         </button>
         {openInput && (
           <div className="space-y-2">
             {(entry.input || []).map((s, i) => (
               <div key={i}>
                 <div className="text-[10px] uppercase tracking-widest font-bold text-white/40 mb-1">
-                  {s.title}{s.truncated ? ' · truncated' : ''}
+                  {s.title}{s.truncated ? ' · 已截断' : ''}
                 </div>
                 <pre className="text-[11px] leading-relaxed text-white/70 font-mono whitespace-pre-wrap break-words bg-black/40 rounded-lg p-3 max-h-72 overflow-auto custom-scrollbar">
                   {s.body}
@@ -133,15 +133,15 @@ export default function DevtoolsPanel({ open, onClose, traces, onClear }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-none">
           <div className="flex items-center gap-3">
             <Terminal size={16} className="text-white" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">LLM Devtools</h2>
-            <span className="text-white/30 text-xs font-mono">{traces.length} turns saved</span>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">LLM 调试台</h2>
+            <span className="text-white/30 text-xs font-mono">{traces.length} 个回合已保存</span>
           </div>
           <div className="flex items-center gap-2">
             {traces.length > 0 && (
               <button
                 onClick={onClear}
                 className="text-white/40 hover:text-rose-400 transition-colors p-1"
-                title="Clear captured traces"
+                title="清除已捕获的调用记录"
               >
                 <Trash2 size={14} />
               </button>
@@ -156,7 +156,7 @@ export default function DevtoolsPanel({ open, onClose, traces, onClear }) {
           <div className="flex-1 flex flex-col items-center justify-center py-16">
             <Terminal size={32} className="text-white/20 mb-3" />
             <p className="text-white/20 text-sm font-light">
-              No calls captured yet. Take an action to trace the turn's LLM calls.
+              尚未捕获调用。执行一个行动以追踪本回合的 LLM 调用。
             </p>
           </div>
         ) : (
@@ -182,7 +182,7 @@ export default function DevtoolsPanel({ open, onClose, traces, onClear }) {
                       {truncate(t.action, 40)}
                     </span>
                   )}
-                  <span className="block text-[10px] text-white/25">{(t.entries || []).length} calls</span>
+                  <span className="block text-[10px] text-white/25">{(t.entries || []).length} 次调用</span>
                 </button>
               ))}
             </div>
@@ -191,15 +191,15 @@ export default function DevtoolsPanel({ open, onClose, traces, onClear }) {
             <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-3">
               {current && (
                 <div className="flex items-center gap-3 flex-wrap text-[11px] font-mono text-white/40 pb-2">
-                  <span className="text-white/60 uppercase tracking-widest font-bold text-[10px]">Turn total</span>
+                  <span className="text-white/60 uppercase tracking-widest font-bold text-[10px]">本回合合计</span>
                   <span>in <span className="text-white/70">{fmtTok(tot.input)}</span></span>
                   <span>out <span className="text-white/70">{fmtTok(tot.output)}</span></span>
                   {tot.cacheRead > 0 ? (
                     <span className="text-emerald-400/70">cache_r {fmtTok(tot.cacheRead)} · cache_w {fmtTok(tot.cacheWrite)}</span>
                   ) : (
-                    <span className="text-amber-400/60">cache off</span>
+                    <span className="text-amber-400/60">缓存关闭</span>
                   )}
-                  <span className="text-white/25">{currentEntries.length} calls</span>
+                  <span className="text-white/25">{currentEntries.length} 次调用</span>
                 </div>
               )}
               {currentEntries.map((e) => (

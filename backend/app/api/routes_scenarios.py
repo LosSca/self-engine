@@ -8,6 +8,13 @@ from pydantic import BaseModel, Field
 
 from app.db.scenario_store import ScenarioStore, StoryCardType
 from app.db.event_store import EventStore
+from app.models.knowledge import (
+    KnowledgeEntry,
+    KnowledgeEntryCreate,
+    PlayConfig,
+    Storyline,
+)
+from app.services.knowledge_service import validate_play_config
 from app.engines.llm_router import LLMRouter, LLMConfig
 from app.engines.opening_generator import (
     format_setup_lines,
@@ -52,11 +59,12 @@ class CreateScenarioRequest(BaseModel):
     description: str = Field(default="", max_length=2000)
     tone_instructions: str = Field(default="", max_length=50000)
     opening_narrative: str = Field(default="", max_length=50000)
-    language: str = Field(default="en", max_length=10)
+    language: str = Field(default="zh", max_length=10)
     lore_text: str = Field(default="", max_length=50000)
     setup_questions: list[SetupQuestion] = []
     opening_mode: Literal["fixed", "ai"] = "fixed"
     ai_opening_directive: str = Field(default="", max_length=4000)
+    world_type: str = Field(default="", max_length=40)
 
 
 class PreviewOpeningRequest(BaseModel):
@@ -78,11 +86,44 @@ class CampaignData(BaseModel):
     player_name: str
 
 
+class CharacterLookData(BaseModel):
+    outfit: str = "默认"
+    expression: str = "平静"
+    image_url: str = ""
+
+
+class CharacterData(BaseModel):
+    name: str
+    role: str = ""
+    description: str = ""
+    portrait_url: str = ""
+    is_player: bool = False
+    looks: list[CharacterLookData] = []
+
+
+class KnowledgeData(KnowledgeEntryCreate):
+    """One authored knowledge entry, with its export-time id for remapping."""
+
+    id: str = ""
+
+
+class PlayConfigData(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
+    mode: Literal["storyline", "free"] = "free"
+    storyline: Storyline = Storyline()
+    max_depth: int = Field(9, ge=0, le=9)
+    model_preset_id: str = ""
+
+
 class ImportScenarioRequest(BaseModel):
     version: str
     scenario: CreateScenarioRequest
     story_cards: list[AddStoryCardRequest] = []
     campaigns: list[CampaignData] = []
+    characters: list[CharacterData] = []
+    knowledge: list[KnowledgeData] = []
+    play_config: PlayConfigData | None = None
 
 
 def _validate_unique_var_names(questions: list[SetupQuestion]) -> None:
@@ -107,6 +148,7 @@ def create_scenario(req: CreateScenarioRequest):
             setup_questions=[q.model_dump() for q in req.setup_questions],
             opening_mode=req.opening_mode,
             ai_opening_directive=req.ai_opening_directive,
+            world_type=req.world_type,
         )
     return scenario.__dict__
 
@@ -154,11 +196,60 @@ def import_scenario(req: ImportScenarioRequest):
             setup_questions=[q.model_dump() for q in req.scenario.setup_questions],
             opening_mode=req.scenario.opening_mode,
             ai_opening_directive=req.scenario.ai_opening_directive,
+            world_type=req.scenario.world_type,
         )
+        for data in req.characters:
+            character = store.add_character(
+                scenario.id, name=data.name, role=data.role,
+                description=data.description, portrait_url=data.portrait_url,
+                is_player=data.is_player,
+            )
+            for look in data.looks:
+                store.add_look(
+                    character.id, outfit=look.outfit,
+                    expression=look.expression, image_url=look.image_url,
+                )
         for card in req.story_cards:
             store.add_story_card(scenario.id, card.card_type, card.name, card.content)
         for campaign in req.campaigns:
             store.create_campaign(scenario.id, campaign.player_name)
+
+        # Authored knowledge first, so storyline nodes can be remapped onto the
+        # ids this install actually generated (export ids are per-install).
+        id_map: dict = {}
+        entries = []
+        for data in req.knowledge:
+            created = store.add_knowledge(
+                scenario.id,
+                KnowledgeEntryCreate(**data.model_dump(exclude={"id"})),
+            )
+            entries.append(created)
+            if data.id:
+                id_map[data.id] = created.id
+
+        if req.play_config is not None:
+            storyline = req.play_config.storyline.model_copy(deep=True)
+            for node in storyline.nodes:
+                node.knowledge_ids = [
+                    id_map[kid] for kid in node.knowledge_ids if kid in id_map
+                ]
+            config = PlayConfig(
+                scenario_id=scenario.id,
+                mode=req.play_config.mode,
+                storyline=storyline,
+                max_depth=req.play_config.max_depth,
+                model_preset_id=(
+                    req.play_config.model_preset_id
+                    if req.play_config.model_preset_id
+                    and store.get_model_preset(req.play_config.model_preset_id)
+                    else ""
+                ),
+            )
+            errors = validate_play_config(config, entries)
+            if errors:
+                store.delete_scenario(scenario.id)
+                raise HTTPException(status_code=400, detail=errors)
+            store.set_play_config(scenario.id, config)
     return scenario.__dict__
 
 
@@ -210,11 +301,23 @@ def export_scenario(scenario_id: str):
         scenario = store.get_scenario(scenario_id)
         story_cards = store.get_story_cards(scenario_id) if scenario else []
         campaigns = store.get_campaigns(scenario_id) if scenario else []
+        characters = store.list_characters(scenario_id) if scenario else []
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
 
+    knowledge: list[KnowledgeEntry] = []
+    play_config: PlayConfig | None = None
+    if scenario:
+        with _get_store() as store:
+            knowledge = store.list_knowledge(scenario_id)
+            play_config = store.get_play_config(scenario_id)
+            preset_exists = bool(
+                play_config.model_preset_id
+                and store.get_model_preset(play_config.model_preset_id)
+            )
+
     return {
-        "version": "1.0",
+        "version": "1.1",
         "exported_at": datetime.utcnow().isoformat(),
         "scenario": {
             "title": scenario.title,
@@ -226,7 +329,20 @@ def export_scenario(scenario_id: str):
             "setup_questions": scenario.setup_questions,
             "opening_mode": scenario.opening_mode,
             "ai_opening_directive": scenario.ai_opening_directive,
+            "world_type": scenario.world_type,
         },
+        "characters": [
+            {
+                "name": c.name, "role": c.role, "description": c.description,
+                "portrait_url": c.portrait_url, "is_player": c.is_player,
+                "looks": [
+                    {"outfit": l.outfit, "expression": l.expression,
+                     "image_url": l.image_url}
+                    for l in c.looks
+                ],
+            }
+            for c in characters
+        ],
         "story_cards": [
             {"card_type": c.card_type.value, "name": c.name, "content": c.content}
             for c in story_cards
@@ -235,6 +351,31 @@ def export_scenario(scenario_id: str):
             {"player_name": c.player_name, "setup_answers": c.setup_answers}
             for c in campaigns
         ],
+        "knowledge": [
+            {
+                "id": entry.id,
+                "layer": entry.layer,
+                "title": entry.title,
+                "content": entry.content,
+                "tags": entry.tags,
+                "depth": entry.depth,
+                "always_on": entry.always_on,
+                "mode_scope": entry.mode_scope,
+                "enabled": entry.enabled,
+                "sort_order": entry.sort_order,
+            }
+            for entry in knowledge
+        ],
+        "play_config": (
+            {
+                "mode": play_config.mode,
+                "storyline": play_config.storyline.model_dump(mode="json"),
+                "max_depth": play_config.max_depth,
+                "model_preset_id": play_config.model_preset_id if preset_exists else "",
+            }
+            if play_config is not None
+            else None
+        ),
     }
 
 

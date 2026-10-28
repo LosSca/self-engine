@@ -19,6 +19,9 @@ class EventType(str, Enum):
     MEMORY_CRYSTAL = "MEMORY_CRYSTAL"
     TIMESKIP = "TIMESKIP"
     INVENTORY = "INVENTORY"
+    #: A narrator item tag that was validated but NOT applied (prose is not
+    #: authority). See app/engines/item_proposals.py.
+    INVENTORY_PROPOSAL = "INVENTORY_PROPOSAL"
     POWER_LEVEL_UPDATE = "POWER_LEVEL_UPDATE"
     AI_OPENING_GENERATED = "AI_OPENING_GENERATED"
 

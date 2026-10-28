@@ -28,12 +28,25 @@ def mock_narrator():
     return m
 
 
+def _memory_mock(context: str = "Previous events...") -> MagicMock:
+    """MemoryEngine double that satisfies every synchronous context call the
+    session makes. Without the explicit string returns the audit context builder
+    receives MagicMock objects and raises TypeError."""
+    m = MagicMock()
+    m.build_context_window = MagicMock(return_value=context)
+    m.build_context_window_async = AsyncMock(return_value=context)
+    m.render_permanent_context = MagicMock(return_value="")
+    m.build_npc_knowledge_window = MagicMock(return_value="")
+    m.get_crystals = MagicMock(return_value=[])
+    m.auto_crystallize_if_needed = AsyncMock(return_value=None)
+    m._crystals = {}
+    m._last_crystal_cursor = {}
+    return m
+
+
 @pytest.fixture
 def mock_memory():
-    m = MagicMock()
-    m.build_context_window = MagicMock(return_value="Previous events...")
-    m.build_context_window_async = AsyncMock(return_value="Previous events...")
-    return m
+    return _memory_mock()
 
 
 @pytest.fixture
@@ -170,7 +183,7 @@ async def test_journal_entry_emitted_as_sse():
     journal = MagicMock()
     journal.evaluate_and_log = AsyncMock(return_value=journal_entry)
 
-    memory = MagicMock()
+    memory = _memory_mock()
     memory.build_context_window = MagicMock(return_value="Previous events...")
 
     world_reactor = MagicMock()
@@ -248,7 +261,7 @@ async def test_process_action_triggers_auto_plot_generation_npc():
     narrator.stream_narrative_cached = MagicMock(side_effect=lambda *a, **k: async_gen("A corridor opens."))
     narrator.build_zone0 = MagicMock(return_value="ZONE0")
 
-    memory = MagicMock()
+    memory = _memory_mock()
     memory.build_context_window = MagicMock(return_value="MEM_CTX")
 
     world_reactor = MagicMock()
@@ -324,7 +337,7 @@ async def test_auto_plot_respects_cooldown_between_actions():
     narrator.stream_narrative_cached = MagicMock(side_effect=lambda *a, **k: async_gen("Narrative chunk."))
     narrator.build_zone0 = MagicMock(return_value="ZONE0")
 
-    memory = MagicMock()
+    memory = _memory_mock()
     memory.build_context_window = MagicMock(return_value="MEM_CTX")
 
     world_reactor = MagicMock()
@@ -384,7 +397,7 @@ async def test_auto_plot_respects_cooldown_between_actions():
 @pytest.mark.asyncio
 async def test_plot_arc_expires_when_plot_lock_is_consumed():
     narrator = MagicMock()
-    memory = MagicMock()
+    memory = _memory_mock()
     world_reactor = MagicMock()
     journal = MagicMock()
     event_store = MagicMock()
@@ -454,26 +467,24 @@ def test_rebuild_only_restores_unconsumed_plot_arc(session):
     assert session._plot_pending is False
 
 
-@pytest.mark.asyncio
-async def test_inventory_tags_parsed_from_narrative():
-    """[ITEM_ADD] tags in narrative should create inventory events."""
+def _prose_item_session(narrative: str):
+    """Session wired to a capturing event store and a real InventoryEngine.
+
+    Used by the prose-item-tag migration tests: narration carries an
+    [ITEM_ADD:...] tag and we assert what reaches authority.
+    """
     narrator = MagicMock()
     narrator.detect_mode = AsyncMock(return_value=(
         "NARRATIVE",
         {"mode": "NARRATIVE", "ambush": False, "narrative_time_seconds": 60}
     ))
     narrator.build_system_prompt = MagicMock(return_value="You are a narrator.")
-    _sword_narr = "You find a gleaming sword. [ITEM_ADD:Gleaming Sword|weapon|Found on ground] It shines."
-    narrator.stream_narrative = MagicMock(return_value=async_gen(_sword_narr))
-    narrator.stream_narrative_cached = MagicMock(side_effect=lambda *a, **k: async_gen(_sword_narr))
+    narrator.stream_narrative = MagicMock(return_value=async_gen(narrative))
+    narrator.stream_narrative_cached = MagicMock(side_effect=lambda *a, **k: async_gen(narrative))
     narrator.build_zone0 = MagicMock(return_value="ZONE0")
 
     journal = MagicMock()
     journal.evaluate_and_log = AsyncMock(return_value=None)
-
-    memory = MagicMock()
-    memory.build_context_window = MagicMock(return_value="ctx")
-    memory.auto_crystallize_if_needed = AsyncMock(return_value=None)
 
     world_reactor = MagicMock()
     world_reactor.process_tick = AsyncMock(return_value="")
@@ -491,22 +502,74 @@ async def test_inventory_tags_parsed_from_narrative():
         scenario_tone="",
         language="en",
         narrator=narrator,
-        memory=memory,
+        memory=_memory_mock(context="ctx"),
         world_reactor=world_reactor,
         journal=journal,
         event_store=event_store,
         inventory_engine=inventory,
     )
+    return session, event_store, inventory
 
+
+async def _run_search(session):
     chunks = []
     async for chunk in session.process_action("I search the room"):
         chunks.append(chunk)
+    return chunks
+
+
+@pytest.mark.asyncio
+async def test_narrative_item_tags_are_recorded_as_rejected_proposals(monkeypatch):
+    """Default policy: prose cannot add items; the tag becomes an inspected proposal."""
+    monkeypatch.delenv("LEGACY_APPLY_ITEM_TAGS", raising=False)
+    narrative = "You find a gleaming sword. [ITEM_ADD:Gleaming Sword|weapon|Found on ground] It shines."
+    session, event_store, inventory = _prose_item_session(narrative)
+
+    chunks = await _run_search(session)
+
+    assert [c for c in chunks if c.startswith("[INVENTORY]")] == []
+    assert inventory.get_inventory("test-campaign") == []
+
+    proposals = [
+        call.kwargs
+        for call in event_store.append.call_args_list
+        if str(call.kwargs.get("event_type")) == "EventType.INVENTORY_PROPOSAL"
+        or call.kwargs.get("event_type") == "INVENTORY_PROPOSAL"
+    ]
+    assert proposals, "the rejected proposal must be recorded for debugging"
+    payload = proposals[0]["payload"]
+    assert payload["action"] == "add"
+    assert payload["name"] == "Gleaming Sword"
+    assert payload["status"] == "rejected"
+    assert "旁白文本不能直接修改物品状态" in payload["reason"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_item_tag_switch_still_applies_during_migration(monkeypatch):
+    """Migration window: LEGACY_APPLY_ITEM_TAGS=1 keeps old scenarios playable."""
+    monkeypatch.setenv("LEGACY_APPLY_ITEM_TAGS", "1")
+    narrative = "You find a gleaming sword. [ITEM_ADD:Gleaming Sword|weapon|Found on ground] It shines."
+    session, _event_store, _inventory = _prose_item_session(narrative)
+
+    chunks = await _run_search(session)
 
     inv_chunks = [c for c in chunks if c.startswith("[INVENTORY]")]
     assert len(inv_chunks) == 1
     payload = json.loads(inv_chunks[0][len("[INVENTORY]"):])
     assert payload["action"] == "add"
     assert payload["name"] == "Gleaming Sword"
+    inventory_writes = [
+        call.kwargs
+        for call in _event_store.append.call_args_list
+        if str(call.kwargs.get("event_type")) in ("EventType.INVENTORY", "INVENTORY")
+    ]
+    assert inventory_writes, "the legacy switch must write a real inventory event"
+    assert inventory_writes[0]["payload"] == {
+        "action": "add",
+        "name": "Gleaming Sword",
+        "category": "weapon",
+        "source": "Found on ground",
+    }
 
 
 @pytest.mark.asyncio
@@ -527,7 +590,7 @@ async def test_meta_mode_uses_meta_prompt():
     journal.evaluate_and_log = AsyncMock(return_value=None)
     journal.get_journal = MagicMock(return_value=[])
 
-    memory = MagicMock()
+    memory = _memory_mock()
     memory.build_context_window = MagicMock(return_value="ctx")
     memory.auto_crystallize_if_needed = AsyncMock(return_value=None)
 

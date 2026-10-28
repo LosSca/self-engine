@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, RefreshCw, Terminal } from 'lucide-react'
+import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, RefreshCw, Terminal, UserRound } from 'lucide-react'
 import { useGameStore } from '../store'
 import {
   streamAction,
@@ -12,6 +12,7 @@ import {
   regenerateOpening,
   fetchTraces,
   deleteTraces,
+  fetchCampaignCharacter,
 } from '../api'
 import ActionInput from './ActionInput'
 import SuggestionList from './SuggestionList'
@@ -25,6 +26,7 @@ import MemoryInspector from './MemoryInspector'
 import WorldMapModal from './WorldMapModal'
 import InventoryPanel from './InventoryPanel'
 import DevtoolsPanel from './DevtoolsPanel'
+import CharacterProfilePanel from './CharacterProfilePanel'
 
 /** Render text with @mentions highlighted in indigo */
 function MentionText({ children }) {
@@ -131,9 +133,9 @@ function usageTitle(u) {
       ` (${c.elapsed_s}s)`
   )
   return [
-    `${u.call_count} synchronous calls, ${u.total_time_s}s`,
-    `input ${u.total_input_tokens} · output ${u.total_output_tokens}`,
-    `cache read ${u.total_cache_read_tokens} · cache write ${u.total_cache_creation_tokens}`,
+    `${u.call_count} 次同步调用，共 ${u.total_time_s}s`,
+    `输入 ${u.total_input_tokens} · 输出 ${u.total_output_tokens}`,
+    `缓存读取 ${u.total_cache_read_tokens} · 缓存写入 ${u.total_cache_creation_tokens}`,
     '',
     ...lines,
   ].join('\n')
@@ -185,6 +187,8 @@ export default function GameCanvas() {
   const [mapOpen, setMapOpen] = useState(false)
   const [inventoryOpen, setInventoryOpen] = useState(false)
   const [devtoolsOpen, setDevtoolsOpen] = useState(false)
+  const [characterOpen, setCharacterOpen] = useState(false)
+  const [playerCharacter, setPlayerCharacter] = useState(null)
   const [rewinding, setRewinding] = useState(false)
   const [scenarioView, setScenarioView] = useState(null)
   const [regenerating, setRegenerating] = useState(false)
@@ -237,6 +241,28 @@ export default function GameCanvas() {
       .catch(() => {})
   }, [activeCampaignId])
 
+  const loadPlayerCharacter = async () => {
+    if (!activeCampaignId) {
+      setPlayerCharacter(null)
+      return
+    }
+    try {
+      const data = await fetchCampaignCharacter(activeCampaignId)
+      const look = data?.look || null
+      setPlayerCharacter(
+        data?.character
+          ? { ...data.character, currentLook: look }
+          : null
+      )
+    } catch {
+      setPlayerCharacter(null)
+    }
+  }
+
+  useEffect(() => {
+    loadPlayerCharacter()
+  }, [activeCampaignId])
+
   const loadTraces = async () => {
     if (!activeCampaignId) return
     const list = await fetchTraces(activeCampaignId)
@@ -268,7 +294,7 @@ export default function GameCanvas() {
         opening_mode: prev?.opening_mode ?? 'ai',
       }))
     } catch (err) {
-      const detail = err?.detail || 'Could not regenerate the opening.'
+      const detail = err?.detail || '无法重新生成开场。'
       window.alert(detail)
     } finally {
       setRegenerating(false)
@@ -281,11 +307,11 @@ export default function GameCanvas() {
 
     if (kind === 'npc') {
       return [
-        '### Auto Plot: New NPC Seed',
-        `**${data.name || 'Unknown'}** (Power ${data.power_level || 5}/10)`,
+        '### 自动剧情：新 NPC 登场',
+        `**${data.name || '未知'}** (战力 ${data.power_level || 5}/10)`,
         data.appearance || '',
-        data.goal ? `Goal: ${data.goal}` : '',
-        data.secret ? `Secret: ${data.secret}` : '',
+        data.goal ? `目标：${data.goal}` : '',
+        data.secret ? `秘密：${data.secret}` : '',
       ].filter(Boolean).join('\n\n')
     }
 
@@ -295,16 +321,16 @@ export default function GameCanvas() {
         : ''
 
       return [
-        '### Auto Plot: Random Event',
-        `**${data.title || 'Unexpected Event'}**`,
+        '### 自动剧情：随机事件',
+        `**${data.title || '意外事件'}**`,
         data.description || '',
-        choices ? `Choices:\n${choices}` : '',
+        choices ? `选项：\n${choices}` : '',
       ].filter(Boolean).join('\n\n')
     }
 
     return [
-      '### Auto Plot: Plot Arc',
-      typeof data === 'string' ? data : (data.text || 'A new plot branch emerges.'),
+      '### 自动剧情：剧情线',
+      typeof data === 'string' ? data : (data.text || '一条新的剧情支线浮现。'),
     ].join('\n\n')
   }
 
@@ -354,7 +380,7 @@ export default function GameCanvas() {
     streamAction({
       campaignId: activeCampaignId,
       scenarioTone: resolvedTone,
-      language: scenarioView?.language ?? activeScenario?.language ?? 'en',
+      language: scenarioView?.language ?? activeScenario?.language ?? 'zh',
       action,
       openingNarrative: resolvedOpening,
       maxTokens: maxTokens || 2000,
@@ -395,7 +421,7 @@ export default function GameCanvas() {
 
   const handleRewind = async () => {
     if (!activeCampaignId || isStreaming || rewinding || messages.length === 0) return
-    if (!window.confirm('Undo the last action? This cannot be reversed.')) return
+    if (!window.confirm('撤销上一步行动？此操作不可恢复。')) return
     setRewinding(true)
     try {
       await rewindLastAction(activeCampaignId)
@@ -411,7 +437,7 @@ export default function GameCanvas() {
 
   const handleTimeskip = (data) => {
     if (data.summary) {
-      appendMessage({ role: 'assistant', content: `*Time passes...*\n\n${data.summary}` })
+      appendMessage({ role: 'assistant', content: `*时间流逝……*\n\n${data.summary}` })
     }
   }
 
@@ -425,13 +451,29 @@ export default function GameCanvas() {
         {/* Header */}
         <header className="flex-none flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-black/80 backdrop-blur-xl border-b border-white/5 z-10 shadow-lg gap-2">
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setCharacterOpen(true)}
+              title="角色档案"
+              aria-label="打开角色档案"
+              className="w-9 h-9 rounded-full overflow-hidden border border-white/15 bg-white/5 hover:border-white/40 transition-all shrink-0"
+            >
+              {playerCharacter?.currentLook?.image_url ? (
+                <img
+                  src={playerCharacter.currentLook.image_url}
+                  alt={playerCharacter?.name || '角色'}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <UserRound size={16} className="text-white/50 m-auto" />
+              )}
+            </button>
             <div className={`w-2 h-2 rounded-full animate-pulse ${combatMode ? 'bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.8)]' : 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'}`} />
             <div>
               <h1 className="text-white font-bold text-base tracking-wide drop-shadow-[0_0_15px_rgba(255,255,255,0.4)]">
-                {activeScenario?.title ?? 'Unknown Coordinates'}
+                {activeScenario?.title ?? '未知坐标'}
               </h1>
               <div className="flex items-center gap-2 text-white/40 text-xs font-mono uppercase">
-                <span>Link ID: {activeCampaignId?.slice(0, 8) || 'OFFLINE'}</span>
+                <span>存档 ID: {activeCampaignId?.slice(0, 8) || '离线'}</span>
                 {lastUsage && (
                   <span
                     className="text-white/30 normal-case cursor-help border-l border-white/10 pl-2"
@@ -441,7 +483,7 @@ export default function GameCanvas() {
                     {lastUsage.total_cache_read_tokens > 0 && (
                       <span className="text-emerald-400/50"> {fmtTok(lastUsage.total_cache_read_tokens)}⚡</span>
                     )}
-                    <span className="text-white/20"> · {lastUsage.call_count} calls</span>
+                    <span className="text-white/20"> · {lastUsage.call_count} 次调用</span>
                   </span>
                 )}
               </div>
@@ -451,56 +493,56 @@ export default function GameCanvas() {
             {/* Tool buttons */}
             <button
               onClick={() => setInventoryOpen(true)}
-              title="Inventory"
-              aria-label="Open inventory"
+              title="背包"
+              aria-label="打开背包"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-orange-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Backpack size={14} />
             </button>
             <button
               onClick={() => setMapOpen(true)}
-              title="World Map"
-              aria-label="Open world map"
+              title="世界地图"
+              aria-label="打开世界地图"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-emerald-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Map size={14} />
             </button>
             <button
               onClick={() => setPlotGenOpen(true)}
-              title="Plot Generator"
-              aria-label="Open plot generator"
+              title="剧情生成器"
+              aria-label="打开剧情生成器"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-amber-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Sparkles size={14} />
             </button>
             <button
               onClick={() => setTimeskipOpen(true)}
-              title="Time Skip"
-              aria-label="Open time skip"
+              title="时间流逝"
+              aria-label="打开时间流逝"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Clock size={14} />
             </button>
             <button
               onClick={() => setNpcOpen(true)}
-              title="NPC Minds"
-              aria-label="Open NPC minds"
+              title="NPC 心智"
+              aria-label="打开 NPC 心智"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Brain size={14} />
             </button>
             <button
               onClick={() => setMemoryOpen(true)}
-              title="Memory Crystals"
-              aria-label="Open memory crystals"
+              title="记忆结晶"
+              aria-label="打开记忆结晶"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Gem size={14} />
             </button>
             <button
               onClick={openJournal}
-              title="Mission Log"
-              aria-label="Open mission log"
+              title="任务日志"
+              aria-label="打开任务日志"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-yellow-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <BookOpen size={14} />
@@ -510,8 +552,8 @@ export default function GameCanvas() {
                 setDevtoolsOpen(true)
                 loadTraces()
               }}
-              title="LLM Devtools — inspect what each call sends"
-              aria-label="Open LLM devtools"
+              title="LLM 调试台 — 查看每次调用的输入与输出"
+              aria-label="打开 LLM 调试台"
               className="relative p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-cyan-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Terminal size={14} />
@@ -523,8 +565,8 @@ export default function GameCanvas() {
             </button>
             <button
               onClick={() => setSettingsOpen(true)}
-              title="Settings"
-              aria-label="Open settings"
+              title="设置"
+              aria-label="打开设置"
               className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
             >
               <Settings size={14} />
@@ -536,7 +578,7 @@ export default function GameCanvas() {
               onClick={() => { clearSession(); window.location.href = '/' }}
               className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 text-xs font-semibold uppercase tracking-wider transition-colors"
             >
-              Disconnect
+              断开连接
             </button>
           </div>
         </header>
@@ -554,8 +596,8 @@ export default function GameCanvas() {
                   {canRerollOpening && (
                     <button
                       onClick={handleRerollOpening}
-                      title="Re-roll AI-generated opening"
-                      aria-label="Re-roll opening"
+                      title="重新生成 AI 开场"
+                      aria-label="重新生成开场"
                       className="absolute top-4 right-4 p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 hover:text-white transition-colors disabled:opacity-30"
                     >
                       <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
@@ -581,7 +623,11 @@ export default function GameCanvas() {
                             const body = typeMatch ? msg.content.slice(typeMatch[0].length) : msg.content;
                             return (
                               <>
-                                {actionType && <span className="text-xs font-bold text-white uppercase mr-2 tracking-widest opacity-80">{actionType}</span>}
+                                {actionType && (
+                                  <span className="text-xs font-bold text-white uppercase mr-2 tracking-widest opacity-80">
+                                    {{ DO: '行动', SAY: '对话', CONTINUE: '继续', META: '旁白' }[actionType] || actionType}
+                                  </span>
+                                )}
                                 <MentionText>{body}</MentionText>
                               </>
                             );
@@ -594,7 +640,7 @@ export default function GameCanvas() {
                         <div className="flex items-center gap-2 mb-2 ml-1 opacity-60">
                            <div className={`w-1.5 h-1.5 rounded-full ${combatMode ? 'bg-rose-400' : 'bg-white/[0.03]'}`} />
                            <span className={`text-[10px] font-bold uppercase tracking-widest font-mono ${combatMode ? 'text-rose-300' : 'text-white/60'}`}>
-                             {combatMode ? 'Combat Narrator' : 'Narrator Core'}
+                             {combatMode ? '战斗叙事' : '叙事核心'}
                            </span>
                         </div>
                         <div className="prose prose-invert max-w-none prose-p:leading-relaxed prose-p:font-light prose-p:text-white prose-headings:text-white prose-a:text-white font-serif">
@@ -648,8 +694,8 @@ export default function GameCanvas() {
               <button
                 onClick={handleRewind}
                 disabled={isStreaming || rewinding || messages.length === 0}
-                title="Undo last action"
-                aria-label="Undo last action"
+                title="撤销上一步"
+                aria-label="撤销上一步"
                 className="p-3 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-rose-400 hover:border-rose-400/30 hover:bg-rose-400/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed disabled:hover:text-white/40 disabled:hover:border-white/10 disabled:hover:bg-white/5"
               >
                 <Undo2 size={18} />
@@ -661,7 +707,12 @@ export default function GameCanvas() {
 
       {/* Modals */}
       {settingsOpen && <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
-      <PlotGeneratorPanel open={plotGenOpen} onClose={() => setPlotGenOpen(false)} campaignId={activeCampaignId} language={activeScenario?.language ?? 'en'} />
+      <CharacterProfilePanel
+        open={characterOpen}
+        onClose={() => { setCharacterOpen(false); loadPlayerCharacter() }}
+        campaignId={activeCampaignId}
+      />
+      <PlotGeneratorPanel open={plotGenOpen} onClose={() => setPlotGenOpen(false)} campaignId={activeCampaignId} language={activeScenario?.language ?? 'zh'} />
       <TimeskipModal open={timeskipOpen} onClose={() => setTimeskipOpen(false)} campaignId={activeCampaignId} onTimeskip={handleTimeskip} />
       <NpcInspector open={npcOpen} onClose={() => setNpcOpen(false)} campaignId={activeCampaignId} />
       <MemoryInspector open={memoryOpen} onClose={() => setMemoryOpen(false)} campaignId={activeCampaignId} />

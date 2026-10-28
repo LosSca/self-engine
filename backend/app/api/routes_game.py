@@ -23,8 +23,12 @@ from app.engines.opening_generator import (
     generate_opening,
 )
 from app.db.event_store import EventStore, EventType
+from app.db.game_state_store import GameStateStore
 from app.db.scenario_store import ScenarioStore
 from app.db.trace_store import TraceStore
+from app.services.action_service import ActionService
+from app.services.narrative_service import LLMNarrator, TemplateNarrator
+from app.services.text_action_service import TextActionService
 from app.services.scenario_interpolation import interpolate
 
 logger = logging.getLogger(__name__)
@@ -51,6 +55,8 @@ _AUXILIARY_MODELS = {
     LLMProvider.ANTHROPIC: "claude-sonnet-5",
     LLMProvider.DEEPSEEK: "deepseek-v4-flash",
     LLMProvider.OPENAI: _OPENAI_MODEL,
+    # The local NInfer server exposes a single model; auxiliary calls reuse it.
+    LLMProvider.LOCAL: settings.local_llm_model,
 }
 
 
@@ -74,15 +80,15 @@ _inventory = InventoryEngine(event_store=_event_store)
 _sessions: dict[str, GameSession] = {}
 _graph_engines: dict = {}
 
-_SCENARIO_DB_PATH = os.environ.get(
-    "SCENARIO_DB_PATH", os.path.join(_BACKEND_DIR, "scenarios.db")
-)
+def _scenario_db_path() -> str:
+    """Resolve the scenario database per request so tests and env changes apply."""
+    return os.environ.get("SCENARIO_DB_PATH", os.path.join(_BACKEND_DIR, "scenarios.db"))
 
 
 def _load_story_cards_for_campaign(campaign_id: str):
     """Look up the scenario_id from the campaign and load its story cards."""
     try:
-        store = ScenarioStore(_SCENARIO_DB_PATH)
+        store = ScenarioStore(_scenario_db_path())
         # Find the campaign's scenario_id
         conn = store._conn
         row = conn.execute(
@@ -97,10 +103,49 @@ def _load_story_cards_for_campaign(campaign_id: str):
         return []
 
 
+def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
+    """Assemble authored world knowledge for the narrator prompt (best effort).
+
+    Knowledge is configuration, not game state: the live narration loop may
+    read it but never let it decide facts. A failure here must never block
+    play, so every error degrades to "no knowledge".
+    """
+    try:
+        with ScenarioStore(_scenario_db_path()) as store:
+            campaign = store.get_campaign(campaign_id)
+            if not campaign:
+                return ""
+            scenario_id = campaign.scenario_id
+            entries = store.list_knowledge(scenario_id)
+            config = store.get_play_config(scenario_id)
+        if not entries:
+            return ""
+        from app.models.knowledge import LAYER_LABELS
+        from app.services.knowledge_service import build_context
+
+        context = build_context(
+            entries,
+            mode=config.mode,
+            max_depth=config.max_depth,
+            scenario_id=scenario_id,
+        )
+        blocks = context.prompt_blocks()
+        if not blocks:
+            return ""
+        lines = []
+        for block in blocks:
+            label = LAYER_LABELS.get(block["layer"], block["layer"])
+            lines.append(f"[{label}] {block['title']}\n{block['content']}")
+        return "\n\n".join(lines)
+    except Exception:
+        logger.debug("Could not load world knowledge for campaign %s", campaign_id)
+        return ""
+
+
 def _load_scenario_for_campaign(campaign_id: str):
     """Load scenario tone, language, and opening narrative for a campaign."""
     try:
-        store = ScenarioStore(_SCENARIO_DB_PATH)
+        store = ScenarioStore(_scenario_db_path())
         conn = store._conn
         row = conn.execute(
             "SELECT s.tone_instructions, s.language, s.opening_narrative "
@@ -119,7 +164,7 @@ def _load_scenario_for_campaign(campaign_id: str):
 def _load_setup_answers_for_campaign(campaign_id: str) -> dict:
     """Load setup wizard answers persisted for the campaign (empty if none)."""
     try:
-        with ScenarioStore(_SCENARIO_DB_PATH) as store:
+        with ScenarioStore(_scenario_db_path()) as store:
             campaign = store.get_campaign(campaign_id)
         return campaign.setup_answers if campaign else {}
     except Exception:
@@ -139,11 +184,12 @@ def _ensure_session(campaign_id: str) -> GameSession:
     tone, language, opening = _load_scenario_for_campaign(campaign_id)
     story_cards = _load_story_cards_for_campaign(campaign_id)
     setup_answers = _load_setup_answers_for_campaign(campaign_id)
+    knowledge_context = _load_knowledge_context_for_campaign(campaign_id)
     combat_enabled = True
     # If the campaign has an AI-generated opening, prefer it over the
     # scenario template — that's the text the player saw in the UI.
     try:
-        with ScenarioStore(_SCENARIO_DB_PATH) as _store:
+        with ScenarioStore(_scenario_db_path()) as _store:
             _campaign = _store.get_campaign(campaign_id)
         if _campaign:
             if _campaign.generated_opening:
@@ -175,6 +221,8 @@ def _ensure_session(campaign_id: str) -> GameSession:
         story_cards=story_cards,
         setup_answers=setup_answers,
         combat_enabled=combat_enabled,
+        knowledge_context=knowledge_context,
+        knowledge_provider=lambda: _load_knowledge_context_for_campaign(campaign_id),
     )
     return _sessions[campaign_id]
 
@@ -273,6 +321,246 @@ class PlayerActionRequest(BaseModel):
     combat_enabled: bool | None = None
 
 
+# ---------------------------------------------------------------- unified lane
+# The chat surface (/api/game/action) and the structured surface
+# (/api/v1/campaigns/{id}/actions) share ONE authority: ActionService. When a
+# campaign has a rules world, a typed utterance is parsed into the same
+# ActionRequest, decided by the same rule engine, committed in the same
+# transaction and only then narrated. Campaigns without a world keep the legacy
+# LLM-driven session, where prose can no longer mutate items (see
+# app/engines/item_proposals.py).
+
+
+def _game_state_db_path() -> str:
+    return os.environ.get(
+        "GAME_STATE_DB_PATH", os.path.join(_BACKEND_DIR, "game_state.db")
+    )
+
+
+def _api_key_configured(provider: LLMProvider) -> bool:
+    if provider == LLMProvider.LOCAL:
+        return bool(settings.local_llm_api_key or os.environ.get("LOCAL_LLM_API_KEY"))
+    if provider == LLMProvider.DEEPSEEK:
+        return bool(settings.deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY"))
+    if provider == LLMProvider.OPENAI:
+        return bool(settings.openai_api_key or os.environ.get("OPENAI_API_KEY"))
+    return bool(settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def _unified_narrator(language: str, max_tokens: int):
+    """Narrator for the rules lane: the model when configured, else template."""
+    choice = os.environ.get("ENGINE_UNIFIED_NARRATOR", "auto").strip().lower()
+    if choice in ("template", "off", "0"):
+        return TemplateNarrator()
+    if choice == "auto" and not _api_key_configured(_llm.config.primary_provider):
+        return TemplateNarrator()
+    try:
+        return LLMNarrator(
+            _llm,
+            max_tokens=max(256, min(int(max_tokens or 600), 900)),
+            temperature=0.9,
+            timeout=60.0,
+            language=language or "zh",
+        )
+    except Exception:  # noqa: BLE001 - narrator setup must never block play
+        logger.warning("Unified narrator setup failed; using template", exc_info=True)
+        return TemplateNarrator()
+
+
+def _knowledge_provider_for(scenario_store: ScenarioStore, campaign_id: str):
+    """Authored context for the rules lane, including tone and the opening.
+
+    The opening and the tone are configuration the player already saw; they are
+    injected as background knowledge so the narrator stays in the same voice.
+    They can never become game facts.
+    """
+    from app.models.knowledge import KnowledgeEntry, ScenarioPlayContext
+
+    def provider(scenario_id: str):
+        scenario = scenario_store.get_scenario(scenario_id)
+        if scenario is None:
+            return None
+        campaign = scenario_store.get_campaign(campaign_id)
+        answers = campaign.setup_answers if campaign else {}
+        config = scenario_store.get_play_config(scenario_id)
+        entries = list(scenario_store.list_knowledge(scenario_id))
+        opening = ""
+        if campaign is not None and campaign.generated_opening:
+            opening = campaign.generated_opening
+        elif scenario.opening_narrative:
+            opening = scenario.opening_narrative
+        if opening:
+            opening = interpolate(opening, answers, context=f"campaign:{campaign_id}:opening")
+            entries.insert(0, KnowledgeEntry(
+                id="__opening__", scenario_id=scenario_id, layer="scene",
+                title="开场（已经发生）", content=opening, tags=["opening"],
+                depth=0, always_on=True, mode_scope="both", enabled=True,
+                sort_order=-100,
+            ))
+        tone = interpolate(
+            scenario.tone_instructions or "", answers,
+            context=f"campaign:{campaign_id}:tone",
+        )
+        if tone.strip():
+            entries.insert(0, KnowledgeEntry(
+                id="__tone__", scenario_id=scenario_id, layer="global",
+                title="叙事基调", content=tone, tags=["tone"],
+                depth=0, always_on=True, mode_scope="both", enabled=True,
+                sort_order=-200,
+            ))
+        preset = (
+            scenario_store.get_model_preset(config.model_preset_id)
+            if config.model_preset_id
+            else None
+        )
+        return ScenarioPlayContext(
+            scenario_id=scenario_id,
+            config=config,
+            entries=entries,
+            preset=preset,
+        )
+
+    return provider
+
+
+def _unified_service(req: PlayerActionRequest):
+    """Build the rules-lane service, or None when the campaign has no world."""
+    game_store = GameStateStore(_game_state_db_path())
+    scenario_store = ScenarioStore(_scenario_db_path())
+    try:
+        service = TextActionService(game_store, scenario_store=scenario_store)
+        state = game_store.get_state(req.campaign_id)
+        if state is not None:
+            world = game_store.get_world(state.world_id)
+        else:
+            world = service.bindable_world(req.campaign_id)
+        if world is None:
+            game_store.close()
+            scenario_store.close()
+            return None
+        service.action_service = ActionService(
+            game_store,
+            narrator=_unified_narrator(req.language or "zh", req.max_tokens),
+            context_provider=_knowledge_provider_for(scenario_store, req.campaign_id),
+        )
+        return service, scenario_store
+    except Exception:
+        game_store.close()
+        scenario_store.close()
+        logger.warning(
+            "Unified action lane unavailable for campaign %s", req.campaign_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _mirror_unified_turn(req, before, result: dict) -> None:
+    """Project one committed rules turn into the legacy readable timeline.
+
+    These events are a *view* of the authoritative state, written after the
+    transaction committed. They let the existing UI, journal and context
+    rebuild keep working without giving them any authority.
+    """
+    try:
+        state = result.get("state") or {}
+        narrative = result.get("narrative") or {}
+        text = narrative.get("text") or ""
+        _event_store.append(
+            campaign_id=req.campaign_id,
+            event_type=EventType.PLAYER_ACTION,
+            payload={"text": req.action},
+            narrative_time_delta=0,
+            location=state.get("location_id") or "current",
+            entities=[],
+        )
+        if text:
+            _event_store.append(
+                campaign_id=req.campaign_id,
+                event_type=EventType.NARRATOR_RESPONSE,
+                payload={"text": text},
+                narrative_time_delta=0,
+                location=state.get("location_id") or "current",
+                entities=[],
+            )
+        world_id = state.get("world_id")
+        world = _get_state_world(world_id) if world_id else None
+        if world is None:
+            return
+        names = {item.id: item.name for item in world.items}
+        before_inv = dict(before.inventory) if before is not None else {}
+        after_inv = dict(state.get("inventory") or {})
+        for item_id, count in after_inv.items():
+            delta = int(count) - int(before_inv.get(item_id, 0))
+            name = names.get(item_id, item_id)
+            if delta > 0:
+                _inventory.add_item(req.campaign_id, name, "rules", "确定性规则")
+            elif delta < 0:
+                _inventory.lose_item(req.campaign_id, name)
+        for item_id, count in before_inv.items():
+            if item_id not in after_inv and int(count) > 0:
+                _inventory.lose_item(req.campaign_id, names.get(item_id, item_id))
+    except Exception:  # noqa: BLE001 - the turn is already committed
+        logger.warning("Could not mirror unified turn events", exc_info=True)
+
+
+def _get_state_world(world_id: str):
+    try:
+        store = GameStateStore(_game_state_db_path())
+        try:
+            return store.get_world(world_id)
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - projection only
+        return None
+
+
+async def _unified_event_stream(req: PlayerActionRequest, service, scenario_store):
+    """SSE adapter: commit first, then describe, then stream one narrative."""
+    reset_call_log()
+    game_store = service.game_store
+    try:
+        before = game_store.get_state(req.campaign_id)
+        try:
+            payload = await service.execute(req.campaign_id, req.action)
+        except LookupError as exc:
+            yield f"data: 无法继续：{exc}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        result = payload.get("result") or {}
+        narrative = result.get("narrative") or {}
+        text = (narrative.get("text") or "").strip()
+        if not text:
+            if narrative.get("status") == "failed":
+                detail = narrative.get("error") or "未知错误"
+                text = (
+                    f"（本回合叙事生成失败：{detail}。行动结果与状态已经提交，"
+                    f"当前状态版本 {result.get('state_version')}。）"
+                )
+            elif result.get("status") == "rejected":
+                text = result.get("message") or "这件事没有发生。"
+            elif result.get("status") == "duplicate":
+                text = "这条行动之前已经处理过，本次没有产生新的变化。"
+        if text:
+            for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+                yield f"data: {line}\n"
+            yield "\n"
+        _mirror_unified_turn(req, before, result)
+        summary = get_call_summary()
+        yield f"data: [USAGE]{json.dumps(summary)}\n\n"
+        trace = get_call_trace()
+        if trace:
+            try:
+                _trace_store.append(req.campaign_id, action=req.action, entries=trace, summary=summary)
+            except Exception:
+                logger.exception("Failed to persist LLM trace for campaign %s", req.campaign_id)
+        yield "data: [DONE]\n\n"
+    finally:
+        try:
+            game_store.close()
+        finally:
+            scenario_store.close()
+
+
 class SettingsRequest(BaseModel):
     provider: str = "deepseek"
     model: str = "deepseek-v4-flash"
@@ -330,6 +618,29 @@ def _get_graph_engine(campaign_id: str):
 
 @router.post("/action")
 async def player_action(req: PlayerActionRequest):
+    # Apply the user's LLM settings per-request first: both lanes narrate with
+    # the same router, and the unified lane has no legacy session to configure.
+    try:
+        provider = LLMProvider(req.provider)
+    except ValueError:
+        provider = _llm.config.primary_provider
+    apply_model_policy(provider, req.model)
+    _llm.config.temperature = req.temperature
+    _llm.config.max_tokens = req.max_tokens
+
+    # A campaign that has a rules world plays through the unified lane: the
+    # utterance is parsed, decided and committed by the rule engine, and only
+    # then narrated. Campaigns without a world keep the legacy LLM session.
+    unified = _unified_service(req)
+    if unified is not None:
+        service, scenario_store = unified
+        # Drop the cached legacy session so returning to it rebuilds from events.
+        _sessions.pop(req.campaign_id, None)
+        return StreamingResponse(
+            _unified_event_stream(req, service, scenario_store),
+            media_type="text/event-stream",
+        )
+
     session = _ensure_session(req.campaign_id)
     # Update session with request-specific values that may differ per action.
     # The frontend may send the raw tone template — re-interpolate against the
@@ -340,14 +651,6 @@ async def player_action(req: PlayerActionRequest):
             context=f"campaign:{req.campaign_id}:tone",
         )
     session.language = req.language or session.language
-    # Apply user's LLM settings per-request
-    try:
-        provider = LLMProvider(req.provider)
-    except ValueError:
-        provider = _llm.config.primary_provider
-    apply_model_policy(provider, req.model)
-    _llm.config.temperature = req.temperature
-    _llm.config.max_tokens = req.max_tokens
     if req.combat_enabled is not None:
         session.set_combat_enabled(req.combat_enabled)
 
@@ -396,7 +699,7 @@ async def get_scenario_view(campaign_id: str):
       1. ``campaign.generated_opening`` if non-empty (AI-generated path).
       2. ``scenario.opening_narrative`` interpolated against setup_answers.
     """
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         campaign = store.get_campaign(campaign_id)
         if not campaign:
             raise HTTPException(status_code=404, detail="Campaign not found")
@@ -409,9 +712,16 @@ async def get_scenario_view(campaign_id: str):
     opening = campaign.generated_opening or interpolate(
         scenario.opening_narrative, answers, context=f"{ctx_root}:opening",
     )
+    from app.api.routes_characters import _character_dict
+
+    with ScenarioStore(_scenario_db_path()) as store:
+        characters = [_character_dict(c) for c in store.list_characters(scenario.id)]
+
     return {
         "title": scenario.title,
         "language": scenario.language,
+        "world_type": scenario.world_type,
+        "characters": characters,
         "opening_narrative": opening,
         "tone_instructions": interpolate(
             scenario.tone_instructions, answers, context=f"{ctx_root}:tone",
@@ -429,7 +739,7 @@ async def get_scenario_view(campaign_id: str):
 async def get_setup_state(campaign_id: str):
     """Return the wizard state for a campaign: questions defined by the scenario,
     answers already saved, and whether the wizard still needs to run."""
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         campaign = store.get_campaign(campaign_id)
         if not campaign:
             raise HTTPException(status_code=404, detail="Campaign not found")
@@ -460,7 +770,7 @@ async def _maybe_generate_opening(
     """
     import time
 
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         campaign = store.get_campaign(campaign_id)
         if not campaign:
             return None
@@ -491,7 +801,7 @@ async def _maybe_generate_opening(
     if not text:
         return None
 
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         store.update_generated_opening(campaign_id, text)
 
     try:
@@ -515,7 +825,7 @@ async def _maybe_generate_opening(
 @router.patch("/{campaign_id}/settings")
 async def update_campaign_settings(campaign_id: str, req: CampaignSettingsRequest):
     """Persist campaign-level toggles (e.g. combat mode on/off)."""
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         ok = store.update_combat_enabled(campaign_id, req.combat_enabled)
     if not ok:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -530,7 +840,7 @@ async def save_setup_answers(campaign_id: str, req: SetupAnswersRequest):
     """Persist the wizard answers and refresh the active session so the
     CHARACTER SETUP block is injected on the next action."""
     payload = {k: v.model_dump() for k, v in req.answers.items()}
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         ok = store.update_setup_answers(campaign_id, payload)
     if not ok:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -553,7 +863,7 @@ async def regenerate_opening(campaign_id: str):
     Locked once any narrator turn exists for the campaign — re-rolling the
     opening mid-story would break the AI's history continuity.
     """
-    with ScenarioStore(_SCENARIO_DB_PATH) as store:
+    with ScenarioStore(_scenario_db_path()) as store:
         campaign = store.get_campaign(campaign_id)
         if not campaign:
             raise HTTPException(status_code=404, detail="Campaign not found")
@@ -710,6 +1020,22 @@ async def get_characters(campaign_id: str, q: str = ""):
             "name": mind.name,
             "aliases": mind.aliases,
             "type": "NPC",
+        })
+
+    # Scenario character pack (authored portraits and roles)
+    with ScenarioStore(_scenario_db_path()) as store:
+        campaign = store.get_campaign(campaign_id)
+        pack = store.list_characters(campaign.scenario_id) if campaign else []
+    for character in pack:
+        if character.name.lower() in seen_names:
+            continue
+        seen_names.add(character.name.lower())
+        characters.append({
+            "name": character.name,
+            "aliases": [],
+            "type": "PLAYER" if character.is_player else "NPC",
+            "description": character.description,
+            "portrait_url": character.portrait_url,
         })
 
     # Entities from graph engine (if available)

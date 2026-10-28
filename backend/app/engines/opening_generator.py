@@ -11,6 +11,8 @@ from the model.
 """
 from __future__ import annotations
 
+from app.utils.language import language_name
+
 import logging
 from typing import Iterable
 
@@ -155,7 +157,7 @@ async def generate_opening(
     """
     setup_block = "\n".join(character_setup_lines) if character_setup_lines else "(none provided)"
     parts = [
-        f"LANGUAGE: write the entire opening in {language}.",
+        f"LANGUAGE: write the entire opening in {language_name(language)}.",
         f"\nSCENARIO TONE:\n{tone or '(unspecified)'}",
         f"\nWORLD LORE:\n{lore or '(unspecified)'}",
         f"\nCHARACTER SETUP:\n{setup_block}",

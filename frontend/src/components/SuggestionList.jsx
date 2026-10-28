@@ -17,7 +17,7 @@ export default function SuggestionList({ suggestions, disabled, onSend, onEdit }
             type="button"
             disabled={disabled}
             onClick={() => onEdit?.(toInput(s))}
-            title="Edit before sending"
+            title="发送前编辑"
             className="p-2.5 text-white/25 hover:text-white/70 disabled:opacity-30 transition-colors"
           >
             <Pencil size={14} />
@@ -35,7 +35,7 @@ export default function SuggestionList({ suggestions, disabled, onSend, onEdit }
             type="button"
             disabled={disabled}
             onClick={() => onSend?.(toInput(s))}
-            title="Send"
+            title="发送"
             className="p-2.5 text-white/25 group-hover:text-white/70 disabled:opacity-30 transition-colors"
           >
             <ArrowUp size={14} />

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.utils.language import language_name
 from enum import Enum
 
 
@@ -76,7 +78,7 @@ class WorldReactor:
 
         lang_hint = ""
         if language and language != "en":
-            lang_hint = f" Write your response in {language}."
+            lang_hint = f" Write your response in {language_name(language)}."
 
         messages = [
             {

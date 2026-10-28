@@ -80,7 +80,7 @@ def test_export_scenario(client):
     r = client.get(f"/api/scenarios/{scenario['id']}/export")
     assert r.status_code == 200
     data = r.json()
-    assert data["version"] == "1.0"
+    assert data["version"] == "1.1"
     assert data["scenario"]["title"] == "Export World"
     assert "id" not in data["scenario"]
     assert "created_at" not in data["scenario"]
@@ -89,6 +89,9 @@ def test_export_scenario(client):
     assert data["story_cards"][0]["card_type"] == "NPC"
     assert isinstance(data["campaigns"], list)
     assert "exported_at" in data
+    # Newer exports carry authored knowledge and the play mode, even when empty.
+    assert data["knowledge"] == []
+    assert data["play_config"]["mode"] == "free"
 
 
 def test_export_scenario_not_found(client):
@@ -139,3 +142,77 @@ def test_import_scenario(client):
 def test_import_scenario_missing_scenario_key(client):
     r = client.post("/api/scenarios/import", json={"version": "1.0"})
     assert r.status_code == 422
+
+def test_export_import_roundtrip_carries_knowledge_and_storyline(client):
+    scenario = client.post("/api/scenarios/", json={"title": "Lore World"}).json()
+    first = client.post(f"/api/v1/scenarios/{scenario['id']}/knowledge", json={
+        "layer": "global",
+        "title": "世界总览",
+        "content": "海那边有一座塔。",
+        "tags": ["world"],
+        "depth": 1,
+        "always_on": True,
+    }).json()
+    second = client.post(f"/api/v1/scenarios/{scenario['id']}/knowledge", json={
+        "layer": "story",
+        "title": "仓库线",
+        "content": "仓库门后藏着账本。",
+        "depth": 4,
+        "mode_scope": "storyline",
+    }).json()
+    storyline = {
+        "name": "仓库线",
+        "description": "",
+        "nodes": [{
+            "id": "arrive",
+            "title": "抵达村庄",
+            "kind": "main",
+            "summary": "",
+            "knowledge_ids": [second["id"]],
+        }],
+    }
+    r = client.put(f"/api/v1/scenarios/{scenario['id']}/play-config", json={
+        "mode": "storyline", "storyline": storyline, "max_depth": 6,
+    })
+    assert r.status_code == 200, r.text
+
+    exported = client.get(f"/api/scenarios/{scenario['id']}/export").json()
+    assert [e["title"] for e in exported["knowledge"]] == ["世界总览", "仓库线"]
+    assert exported["play_config"]["mode"] == "storyline"
+    assert exported["play_config"]["max_depth"] == 6
+
+    r = client.post("/api/scenarios/import", json=exported)
+    assert r.status_code == 201, r.text
+    imported_id = r.json()["id"]
+    entries = client.get(
+        f"/api/v1/scenarios/{imported_id}/knowledge?include_disabled=true"
+    ).json()
+    assert [e["title"] for e in entries] == ["世界总览", "仓库线"]
+    # Export ids are per-install; the import must remap storyline references.
+    assert entries[0]["id"] != first["id"]
+    config = client.get(f"/api/v1/scenarios/{imported_id}/play-config").json()
+    assert config["mode"] == "storyline"
+    node = config["storyline"]["nodes"][0]
+    assert node["knowledge_ids"] == [entries[1]["id"]]
+
+
+def test_import_rejects_bad_storyline_and_rolls_back(client):
+    payload = {
+        "version": "1.1",
+        "scenario": {"title": "Broken World"},
+        "knowledge": [
+            {"id": "k1", "layer": "story", "title": "片段", "content": "x"},
+        ],
+        "play_config": {
+            "mode": "storyline",
+            "storyline": {
+                "name": "破损线",
+                "nodes": [{"id": "b", "title": "孤儿", "kind": "main", "prereq": ["ghost"]}],
+            },
+        },
+    }
+    r = client.post("/api/scenarios/import", json=payload)
+    assert r.status_code == 400
+    assert any("ghost" in e for e in r.json()["detail"])
+    titles = [s["title"] for s in client.get("/api/scenarios/").json()]
+    assert "Broken World" not in titles

@@ -1,50 +1,63 @@
 @echo off
-echo === Project Lunar - Starting Services (DEBUG MODE: LLM dump enabled) ===
+chcp 65001 >nul
+setlocal enabledelayedexpansion
+title 自指引擎 - 调试启动器
+cd /d "%~dp0"
+
+echo ========================================
+echo  自指引擎 Self-Reference Engine
+echo ========================================
 echo.
 
-REM Start Neo4j if not already running
-docker inspect lunar-neo4j >/dev/null 2>&1
-IF %ERRORLEVEL% NEQ 0 (
-    echo [1/4] Starting Neo4j...
-    docker-compose up -d neo4j
-) ELSE (
-    echo [1/4] Neo4j already running.
+REM ---- 1. Python 解释器：优先 backend\.venv，其次 backend\venv ----
+set "VENV_PY="
+if exist "%~dp0backend\.venv\Scripts\python.exe" set "VENV_PY=%~dp0backend\.venv\Scripts\python.exe"
+if not defined VENV_PY if exist "%~dp0backend\venv\Scripts\python.exe" set "VENV_PY=%~dp0backend\venv\Scripts\python.exe"
+if not defined VENV_PY (
+    where python >nul 2>&1
+    if %ERRORLEVEL% EQU 0 set "VENV_PY=python"
+)
+if not defined VENV_PY (
+    echo [错误] 找不到 Python，也找不到 backend\.venv。
+    echo        请先运行 install.bat，或手动创建虚拟环境：
+    echo        cd backend ^&^& python -m venv .venv ^&^& .venv\Scripts\pip install -r requirements.txt
+    pause
+    exit /b 1
+)
+echo [1/4] 使用解释器: !VENV_PY!
+
+REM ---- 2. Neo4j（可选，失败不影响启动） ----
+where docker >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    docker inspect lunar-neo4j >nul 2>&1
+    if %ERRORLEVEL% NEQ 0 (
+        echo [2/4] 正在启动 Neo4j 容器...
+        docker-compose up -d neo4j >nul 2>&1
+        if %ERRORLEVEL% NEQ 0 docker compose up -d neo4j >nul 2>&1
+    ) else (
+        echo [2/4] Neo4j 已在运行。
+    )
+) else (
+    echo [2/4] 未检测到 Docker，跳过 Neo4j（知识图谱功能不可用，其余功能正常）。
 )
 
-REM Start CLIProxyAPI if binary exists
-set "PROXY_DIR=%~dp0proxy\cliproxyapi"
-IF EXIST "%PROXY_DIR%\cli-proxy-api.exe" (
-    echo [2/4] Starting CLIProxyAPI on http://localhost:8318 ...
-    start "Project Lunar - CLIProxyAPI" /D "%PROXY_DIR%" cmd /c "cd /d ""%PROXY_DIR%"" && cli-proxy-api.exe -config config.yaml && pause"
-    timeout /t 3 /nobreak >/dev/null
-) ELSE (
-    echo [2/4] CLIProxyAPI not found, skipping proxy. Using API keys directly.
-)
+REM ---- 3. 后端 ----
+echo [3/4] 启动后端（LLM 调用转储开启）
+start "自指引擎 - 后端" cmd /k "chcp 65001 >nul && cd /d "%~dp0backend" && set LUNAR_DUMP_LLM_CALLS=1 && "!VENV_PY!" -m uvicorn app.main:app --port 8000 --log-level debug"
 
-REM Open backend in new terminal with LLM call dumping turned on.
-REM LUNAR_DUMP_LLM_CALLS=1 makes llm_router.py write each LLM request/response
-REM to backend\logs\llm_calls\<ts>_<id>_<caller>.json so we can inspect what
-REM is actually being sent to DeepSeek/Anthropic per action.
-echo [3/4] Starting backend on http://localhost:8000 (LLM dump ON) ...
-start "Project Lunar - Backend (DEBUG)" cmd /k "cd /d "%~dp0backend" && set LUNAR_DUMP_LLM_CALLS=1 && venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000 --log-level debug"
+REM ---- 4. 前端 ----
+echo [4/4] 启动前端: http://localhost:5173
+start "自指引擎 - 前端" cmd /k "chcp 65001 >nul && cd /d "%~dp0frontend" && npm run dev"
 
-timeout /t 3 /nobreak >/dev/null
-
-echo [4/4] Starting frontend on http://localhost:5173 ...
-start "Project Lunar - Frontend" cmd /k "cd /d "%~dp0frontend" && npm run dev"
-
-timeout /t 5 /nobreak >/dev/null
+timeout /t 6 /nobreak >nul
 start http://localhost:5173
 
 echo.
 echo ========================================
-echo  Project Lunar is starting (DEBUG MODE)
-echo  App:    http://localhost:5173
-echo  API:    http://localhost:8000
-echo  Proxy:  http://localhost:8318
-echo  Neo4j:  http://localhost:7474
-echo.
-echo  LLM call dumps -^> backend\logs\llm_calls\
+echo  已启动：
+echo  前端   http://localhost:5173
+echo  后端   http://localhost:8000/docs
 echo ========================================
+echo 关闭对应终端窗口即可停止服务。
 echo.
-echo Close the terminal windows to stop.
+endlocal

@@ -34,10 +34,10 @@ export default function NpcInspector({ open, onClose, campaignId }) {
   if (!open) return null
 
   const thoughtLabels = {
-    feeling: { label: 'Feeling', color: 'text-amber-400' },
-    goal: { label: 'Current Goal', color: 'text-emerald-400' },
-    opinion_of_player: { label: 'Opinion of Player', color: 'text-white' },
-    secret_plan: { label: 'Secret Plan', color: 'text-rose-400' },
+    feeling: { label: '情绪', color: 'text-amber-400' },
+    goal: { label: '当前目标', color: 'text-emerald-400' },
+    opinion_of_player: { label: '对玩家的看法', color: 'text-white' },
+    secret_plan: { label: '秘密计划', color: 'text-rose-400' },
   }
 
   const handleDelete = async (npc, index) => {
@@ -85,14 +85,14 @@ export default function NpcInspector({ open, onClose, campaignId }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-none">
           <div className="flex items-center gap-3">
             <Brain size={16} className="text-white" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">NPC Minds</h2>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">NPC 心智</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={fetchNpcs}
               disabled={loading}
               className="text-white/40 hover:text-white transition-colors p-1"
-              title="Refresh"
+              title="刷新"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -108,7 +108,7 @@ export default function NpcInspector({ open, onClose, campaignId }) {
             <div className="text-center py-8">
               <Brain size={32} className="text-white/20 mx-auto mb-3" />
               <p className="text-white/20 text-sm font-light">
-                {loading ? 'Scanning neural patterns...' : 'No NPC minds detected yet. Play more to populate NPC thoughts.'}
+                {loading ? '正在扫描意识模式……' : '尚未探测到 NPC 心智。继续游玩以填充 NPC 的念头。'}
               </p>
             </div>
           ) : (
@@ -131,7 +131,7 @@ export default function NpcInspector({ open, onClose, campaignId }) {
                     </div>
                     <span className="text-white font-semibold text-sm">{npc.name}</span>
                     <span className="text-white/20 text-xs">
-                      {Object.keys(npc.thoughts || {}).length} thoughts
+                      {Object.keys(npc.thoughts || {}).length} 条念头
                     </span>
                   </button>
 
@@ -141,14 +141,14 @@ export default function NpcInspector({ open, onClose, campaignId }) {
                         <button
                           onClick={() => saveEdit(npc, i)}
                           className="text-emerald-400/60 hover:text-emerald-400 transition-colors p-1.5 rounded-lg hover:bg-white/5"
-                          title="Save"
+                          title="保存"
                         >
                           <Check size={14} />
                         </button>
                         <button
                           onClick={cancelEdit}
                           className="text-white/30 hover:text-white/60 transition-colors p-1.5 rounded-lg hover:bg-white/5"
-                          title="Cancel"
+                          title="取消"
                         >
                           <XCircle size={14} />
                         </button>
@@ -158,7 +158,7 @@ export default function NpcInspector({ open, onClose, campaignId }) {
                         <button
                           onClick={() => startEdit(npc, i)}
                           className="text-white/20 hover:text-white/60 transition-colors p-1.5 rounded-lg hover:bg-white/5"
-                          title="Edit thoughts"
+                          title="编辑念头"
                         >
                           <Pencil size={13} />
                         </button>
@@ -168,20 +168,20 @@ export default function NpcInspector({ open, onClose, campaignId }) {
                               onClick={() => handleDelete(npc, i)}
                               className="text-rose-400 hover:text-rose-300 transition-colors p-1.5 rounded-lg hover:bg-rose-400/10 text-[10px] font-bold uppercase tracking-wider"
                             >
-                              Yes
+                              是
                             </button>
                             <button
                               onClick={() => setConfirmDelete(null)}
                               className="text-white/30 hover:text-white/60 transition-colors p-1.5 rounded-lg hover:bg-white/5 text-[10px] font-bold uppercase tracking-wider"
                             >
-                              No
+                              否
                             </button>
                           </div>
                         ) : (
                           <button
                             onClick={() => setConfirmDelete(i)}
                             className="text-white/20 hover:text-rose-400/60 transition-colors p-1.5 rounded-lg hover:bg-white/5"
-                            title="Delete NPC"
+                            title="删除 NPC"
                           >
                             <Trash2 size={13} />
                           </button>

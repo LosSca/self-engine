@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.utils.language import language_name
 import random
 from dataclasses import dataclass
 from enum import Enum
@@ -44,7 +46,7 @@ class CombatEngine:
                     "legitimate in-character action — these are valid combat choices. "
                     "is_physically_impossible=true if the action completely defies physics "
                     "(teleportation, omnidirectional attacks, infinite force, etc.). "
-                    f"Write the reason in the same language as the player's action ({language})."
+                    f"Write the reason in the same language as the player's action ({language_name(language)})."
                 ),
             },
             {"role": "user", "content": action},

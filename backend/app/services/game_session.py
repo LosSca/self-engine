@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.utils.language import language_name
 import asyncio
 import json
 import logging
@@ -59,6 +61,19 @@ def _narrator_audit_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _legacy_item_tags_enabled() -> bool:
+    """Temporary migration switch for prose-authored item changes.
+
+    Default OFF: [ITEM_ADD]/[ITEM_USE]/[ITEM_LOSE] tags are recorded as
+    *proposals* and never touch the authoritative inventory. Set
+    LEGACY_APPLY_ITEM_TAGS=1 only to run old scenarios during the migration
+    window; the rule engine's give_item/remove_item effects are the supported
+    path and work regardless of this flag.
+    """
+    raw = os.environ.get("LEGACY_APPLY_ITEM_TAGS", "0").strip().lower()
+    return raw not in ("", "0", "false", "no", "off")
+
+
 def _audit_timeout_s() -> float:
     """Post-hoc auditor timeout (best-effort). A bad/empty value degrades to the
     default instead of crashing import; must be positive and finite."""
@@ -98,6 +113,8 @@ class GameSession:
         story_cards: list | None = None,
         setup_answers: dict | None = None,
         combat_enabled: bool = True,
+        knowledge_context: str = "",
+        knowledge_provider=None,
     ):
         self.campaign_id = campaign_id
         self.language = language
@@ -115,6 +132,14 @@ class GameSession:
         self._auditor = AuditorEngine(llm=narrator._llm)
         self._memory = memory
         self._story_cards = story_cards or []
+        # Authored world knowledge (global / storyline / scene / character /
+        # event layers) assembled by the knowledge service. Background only:
+        # the narrator may colour its prose with it but never derive game
+        # facts from it.
+        self._knowledge_context = (knowledge_context or "").strip()
+        # Optional callable re-read each turn so knowledge edits apply to the
+        # very next action instead of forcing a session rebuild.
+        self._knowledge_provider = knowledge_provider
         self._card_image_last_shown: dict[str, int] = {}
         self._world_reactor = world_reactor
         self._journal = journal
@@ -125,6 +150,8 @@ class GameSession:
         self._graphiti = graphiti_engine
         self._plot_generator = plot_generator
         self._inventory = inventory_engine
+        # Dedupe key set for narrator item proposals within one session.
+        self._proposal_keys: set[str] = set()
         self._history: list[dict] = []
         self._turn_count = 0
         self._auto_plot_rules = auto_plot_rules or AUTO_PLOT_RULES
@@ -892,7 +919,7 @@ class GameSession:
         where the narrator call returns prose only."""
         if not narrative_text.strip():
             return []
-        lang = "Brazilian Portuguese" if self.language == "pt-br" else "English"
+        lang = language_name(self.language)
         setup = (self._character_setup_block or "").strip()
         who = f"{setup}\n\n" if setup else ""
         prompt = (
@@ -953,6 +980,29 @@ class GameSession:
     def _card_type_value(card) -> str:
         card_type = getattr(card, "card_type", "UNKNOWN")
         return getattr(card_type, "value", str(card_type)).upper()
+
+    def _with_knowledge(self, context: str) -> str:
+        """Append authored world knowledge to the volatile narrator context.
+
+        The block is explicitly background material: knowledge entries are
+        configuration, never settled game facts, so the narrator must not use
+        them to overrule what the rules already decided.
+        """
+        knowledge = self._knowledge_context
+        if self._knowledge_provider is not None:
+            try:
+                knowledge = (self._knowledge_provider() or "").strip()
+            except Exception:
+                knowledge = self._knowledge_context
+        if not knowledge:
+            return context
+        header = (
+            "AUTHORED WORLD KNOWLEDGE (background only - it informs tone, "
+            "names, places and detail, but never overrides settled events, "
+            "inventory, or the verdict already reached):"
+        )
+        block = f"{header}\n{knowledge}"
+        return f"{context}\n\n{block}" if context else block
 
     def _format_story_cards_context(
         self,
@@ -1421,10 +1471,12 @@ class GameSession:
             except Exception:
                 pass
 
-        story_cards_ctx = self._format_story_cards_context(
-            player_input=player_input,
-            recent_narrative=self._history[-1]["content"] if self._history else "",
-            exclude_lore=cache_on,
+        story_cards_ctx = self._with_knowledge(
+            self._format_story_cards_context(
+                player_input=player_input,
+                recent_narrative=self._history[-1]["content"] if self._history else "",
+                exclude_lore=cache_on,
+            )
         )
 
         system_prompt = ""
@@ -1583,13 +1635,15 @@ class GameSession:
         # Send the clean narrative to frontend (all at once)
         yield full_response
 
-        # Process inventory tags from response
+        # Process inventory tags from response. Tags are proposals: the
+        # inventory only changes when the rule engine authorized the effect.
         clean_response = full_response
         if self._inventory:
             clean_response, inv_events = self._extract_inventory_tags(full_response)
             for inv_event in inv_events:
-                self._apply_inventory_event(inv_event)
-                yield f"[INVENTORY]{json.dumps(inv_event)}"
+                applied = self._apply_inventory_event(inv_event)
+                if applied:
+                    yield f"[INVENTORY]{json.dumps(applied)}"
 
         card_image = self._card_image_event(clean_response)
         if card_image:
@@ -1818,9 +1872,11 @@ class GameSession:
             graph_context=graph_ctx,
             npc_context=npc_ctx,
             journal_context=journal_ctx,
-            story_cards_context=self._format_story_cards_context(
-                player_input=player_input,
-                recent_narrative=self._history[-1]["content"] if self._history else "",
+            story_cards_context=self._with_knowledge(
+                self._format_story_cards_context(
+                    player_input=player_input,
+                    recent_narrative=self._history[-1]["content"] if self._history else "",
+                )
             ),
             character_setup=self._character_setup_block,
             opening_narrative=self._opening_narrative,
@@ -1896,13 +1952,14 @@ class GameSession:
         if already_emitted and cleaned != full_response:
             yield f"[TRUNCATE_CLEAN]{cleaned}"
 
-        # Process inventory tags
+        # Process inventory tags (proposals only unless the legacy switch is on)
         clean_response = cleaned
         if self._inventory:
             clean_response, inv_events = self._extract_inventory_tags(cleaned)
             for inv_event in inv_events:
-                self._apply_inventory_event(inv_event)
-                yield f"[INVENTORY]{json.dumps(inv_event)}"
+                applied = self._apply_inventory_event(inv_event)
+                if applied:
+                    yield f"[INVENTORY]{json.dumps(applied)}"
 
         # Emit full narrative (skip if already streamed via auto-continuation)
         if not already_emitted:
@@ -2080,18 +2137,69 @@ class GameSession:
             except Exception:
                 logger.warning("Auto plot generation failed", exc_info=True)
 
-    def _apply_inventory_event(self, inv_event: dict) -> None:
-        """Apply a single inventory event (add/use/lose)."""
-        action = inv_event["action"]
-        if action == "add":
-            self._inventory.add_item(
-                self.campaign_id, inv_event["name"],
-                inv_event.get("category", "misc"), inv_event.get("source", "unknown"),
+    def _apply_inventory_event(self, inv_event: dict) -> dict | None:
+        """Validate one narrator item tag; return it only when it was applied.
+
+        Prose is not authority: a tag is validated, deduplicated and recorded
+        as an INVENTORY_PROPOSAL event. It mutates the inventory only when the
+        operator explicitly enabled the legacy migration switch.
+        """
+        from app.engines.item_proposals import make_proposal, validate_proposal
+
+        proposal = make_proposal(
+            inv_event.get("action"), inv_event.get("name"),
+            inv_event.get("category", "misc"), inv_event.get("source", "narrator"),
+            turn=getattr(self, "_turn_count", 0),
+        )
+        reason = validate_proposal(proposal)
+        if not reason and proposal.key in self._proposal_keys:
+            reason = "同一回合内重复的物品提案已忽略"
+        if not reason and not _legacy_item_tags_enabled():
+            reason = (
+                "旁白文本不能直接修改物品状态；需要规则引擎的 give_item/"
+                "remove_item 效果（迁移期可用 LEGACY_APPLY_ITEM_TAGS=1）"
             )
-        elif action == "use":
-            self._inventory.use_item(self.campaign_id, inv_event["name"])
-        elif action == "lose":
-            self._inventory.lose_item(self.campaign_id, inv_event["name"])
+        if reason:
+            proposal.status = "rejected"
+            proposal.reason = reason
+            self._record_item_proposal(proposal)
+            logger.info(
+                "Rejected narrator item proposal %s:%s for campaign %s (%s)",
+                proposal.action, proposal.name, self.campaign_id, reason,
+            )
+            return None
+        self._proposal_keys.add(proposal.key)
+        if proposal.action == "add":
+            self._inventory.add_item(
+                self.campaign_id, proposal.name, proposal.category, proposal.source,
+            )
+        elif proposal.action == "use":
+            self._inventory.use_item(self.campaign_id, proposal.name)
+        else:
+            self._inventory.lose_item(self.campaign_id, proposal.name)
+        proposal.status = "applied"
+        proposal.reason = "legacy item tag application enabled"
+        self._record_item_proposal(proposal)
+        return {
+            "action": inv_event.get("action"),
+            "name": proposal.name,
+            "category": proposal.category,
+            "source": proposal.source,
+        }
+
+    def _record_item_proposal(self, proposal) -> None:
+        """Persist the proposal so debugging can see what prose asked for."""
+        try:
+            self._event_store.append(
+                campaign_id=self.campaign_id,
+                event_type=EventType.INVENTORY_PROPOSAL,
+                payload=proposal.as_event_payload(),
+                narrative_time_delta=0,
+                location="current",
+                entities=["player"],
+            )
+        except Exception:  # noqa: BLE001 - auditing must never break narration
+            logger.warning("Could not persist item proposal", exc_info=True)
 
     # ── Camada 3 — witness extraction (perspective filter) ─────────
 

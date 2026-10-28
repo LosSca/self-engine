@@ -2,14 +2,18 @@ import { useState } from 'react'
 import { useGameStore } from '../store'
 import { updateCampaignSettings } from '../api'
 import { Settings, X } from 'lucide-react'
+import { THEME_LABELS, applyTheme, currentTheme } from '../lib/theme'
 
 const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', models: ['deepseek-v4-flash'] },
   { id: 'anthropic', label: 'Anthropic', models: ['claude-opus-5', 'claude-sonnet-5'] },
   { id: 'openai', label: 'OpenAI', models: ['gpt-5.6-sol'] },
+  // Local OpenAI-compatible server (NInfer). The alias must match the server's
+  // --model-id and .env LOCAL_LLM_MODEL; start it with E:\ninfer\start-local.ps1.
+  { id: 'local', label: '本地 NInfer', models: ['qwen3.8-27b'] },
 ]
 
-export default function SettingsPanel({ open, onClose }) {
+export default function SettingsPanel({ onClose }) {
   const {
     llmProvider, llmModel, temperature, maxTokens, combatEnabled,
     activeCampaignId, updateSettings,
@@ -20,6 +24,7 @@ export default function SettingsPanel({ open, onClose }) {
   const [tokens, setTokens] = useState(maxTokens)
   const [combat, setCombat] = useState(combatEnabled)
   const [saved, setSaved] = useState(false)
+  const [theme, setTheme] = useState(currentTheme())
 
   const currentProviderModels = PROVIDERS.find((p) => p.id === provider)?.models || []
 
@@ -56,7 +61,7 @@ export default function SettingsPanel({ open, onClose }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <div className="flex items-center gap-3">
             <Settings size={16} className="text-white" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">Settings</h2>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">设置</h2>
           </div>
           <button onClick={onClose} className="text-white/40 hover:text-white transition-colors">
             <X size={18} />
@@ -64,10 +69,36 @@ export default function SettingsPanel({ open, onClose }) {
         </div>
 
         <div className="p-6 space-y-6">
+          {/* 界面主题：立即生效并写入 localStorage */}
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
+              界面主题
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {['light', 'dark'].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTheme(applyTheme(t))}
+                  className={`px-3 py-2.5 rounded-lg border text-xs font-semibold tracking-wide transition-all ${
+                    theme === t
+                      ? 'bg-white text-black border-white'
+                      : 'bg-white/[0.03] text-white/60 border-white/10 hover:border-white/30'
+                  }`}
+                >
+                  {THEME_LABELS[t]}（{t === 'light' ? '默认' : '夜间'}）
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-white/40 leading-relaxed mt-2">
+              纸白主题为默认配色；切换会立刻生效，并在下次打开时记住。
+            </p>
+          </div>
+
           {/* Provider */}
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
-              LLM Provider
+              模型服务商
             </label>
             <select
               value={provider}
@@ -83,7 +114,7 @@ export default function SettingsPanel({ open, onClose }) {
           {/* Model */}
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
-              Model
+              模型
             </label>
             <select
               value={model}
@@ -94,13 +125,19 @@ export default function SettingsPanel({ open, onClose }) {
                 <option key={m} value={m} className="bg-[#1a1a1a] text-white">{m}</option>
               ))}
             </select>
+            {provider === 'local' && (
+              <p className="text-[10px] text-white/40 leading-relaxed mt-2">
+                需要本地 NInfer 服务：127.0.0.1:8094（运行 start-local.ps1）。
+                地址与密钥来自 .env：LOCAL_LLM_BASE_URL / LOCAL_LLM_API_KEY。
+              </p>
+            )}
           </div>
 
           {/* Temperature */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold uppercase tracking-widest font-mono text-white/40">
-                Temperature
+                创造性（温度）
               </label>
               <span className="text-xs text-white font-mono">{temp.toFixed(2)}</span>
             </div>
@@ -114,17 +151,17 @@ export default function SettingsPanel({ open, onClose }) {
               className="w-full accent-white h-1.5 bg-white/[0.03] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/10 [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(99,102,241,0.6)]"
             />
             <div className="flex justify-between text-[9px] text-white/20 mt-1">
-              <span>Precise</span>
-              <span>Balanced</span>
-              <span>Creative</span>
+              <span>精准</span>
+              <span>均衡</span>
+              <span>天马行空</span>
             </div>
           </div>
 
-          {/* Max Tokens */}
+          {/* 最大 Token 数 */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold uppercase tracking-widest font-mono text-white/40">
-                Max Tokens
+                最大 Token 数
               </label>
               <span className="text-xs text-white font-mono">{tokens}</span>
             </div>
@@ -138,21 +175,21 @@ export default function SettingsPanel({ open, onClose }) {
               className="w-full accent-white h-1.5 bg-white/[0.03] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/10 [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(99,102,241,0.6)]"
             />
             <div className="flex justify-between text-[9px] text-white/20 mt-1">
-              <span>Short</span>
-              <span>Standard</span>
-              <span>Extended</span>
+              <span>简短</span>
+              <span>标准</span>
+              <span>扩展</span>
             </div>
           </div>
 
-          {/* Combat Mode */}
+          {/* 战斗模式 */}
           <div>
             <div className="flex items-center justify-between gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-1">
-                  Combat Mode
+                  战斗模式
                 </label>
                 <p className="text-[10px] text-white/40 leading-relaxed">
-                  Disable for scenarios without confrontation. Skips combat LLM calls.
+                  无对抗场景可关闭，将跳过战斗相关的模型调用。
                 </p>
               </div>
               <button
@@ -180,7 +217,7 @@ export default function SettingsPanel({ open, onClose }) {
             onClick={handleSave}
             className="w-full bg-white text-black hover:bg-gray-200 uppercase text-sm tracking-[0.2em] font-bold rounded-full px-6 py-3 rounded-lg font-semibold tracking-wide border border-white/20"
           >
-            {saved ? 'Saved!' : 'Apply Settings'}
+            {saved ? '已保存！' : '应用设置'}
           </button>
         </div>
       </div>

@@ -15,6 +15,9 @@ else:
     logging.basicConfig(level=logging.INFO)
 from app.api.routes_scenarios import router as scenarios_router
 from app.api.routes_game import router as game_router, _llm, apply_model_policy
+from app.api.routes_engine import router as engine_router
+from app.api.routes_characters import router as characters_router
+from app.api.routes_knowledge import router as knowledge_router
 from app.engines.llm_router import LLMProvider
 
 app = FastAPI(title="Project Lunar", version="0.1.0")
@@ -32,16 +35,17 @@ app.add_middleware(
 
 app.include_router(scenarios_router, prefix="/api/scenarios", tags=["scenarios"])
 app.include_router(game_router, prefix="/api/game", tags=["game"])
+app.include_router(engine_router, prefix="/api/v1", tags=["engine"])
+app.include_router(characters_router, prefix="/api", tags=["characters"])
+app.include_router(knowledge_router, prefix="/api/v1", tags=["knowledge"])
 
 # Windows registry often lacks these; StaticFiles would fall back to text/plain.
 mimetypes.add_type("image/webp", ".webp")
 mimetypes.add_type("image/avif", ".avif")
 
-_media_root = Path(settings.media_dir).expanduser()
-if _media_root.is_dir():
-    app.mount("/media", StaticFiles(directory=str(_media_root)), name="media")
-else:
-    logging.getLogger(__name__).info("Media dir %s not found; /media disabled", _media_root)
+_media_root = Path(settings.media_dir).expanduser().resolve()
+_media_root.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(_media_root)), name="media")
 
 
 @app.get("/api/health")
@@ -93,4 +97,6 @@ def get_settings():
         "auxiliary_model": _llm.config.primary_model,
         "temperature": _llm.config.temperature,
         "max_tokens": _llm.config.max_tokens,
+        "local_model": settings.local_llm_model,
+        "local_base_url": settings.local_llm_base_url,
     }

@@ -3,12 +3,12 @@ import { Clock, X } from 'lucide-react'
 import { timeskip } from '../api'
 
 const PRESETS = [
-  { label: '1 Hour', seconds: 3600 },
-  { label: '8 Hours', seconds: 28800 },
-  { label: '1 Day', seconds: 86400 },
-  { label: '3 Days', seconds: 259200 },
-  { label: '1 Week', seconds: 604800 },
-  { label: '1 Month', seconds: 2592000 },
+  { label: '1 小时', seconds: 3600 },
+  { label: '8 小时', seconds: 28800 },
+  { label: '1 天', seconds: 86400 },
+  { label: '3 天', seconds: 259200 },
+  { label: '1 周', seconds: 604800 },
+  { label: '1 个月', seconds: 2592000 },
 ]
 
 export default function TimeskipModal({ open, onClose, campaignId, onTimeskip }) {
@@ -25,7 +25,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
       setSummary(data.summary)
       onTimeskip?.(data)
     } catch {
-      setSummary('Time passes, but the world remains still...')
+      setSummary('时间悄然流逝，但世界依旧静止……')
     } finally {
       setLoading(false)
     }
@@ -40,7 +40,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <div className="flex items-center gap-3">
             <Clock size={16} className="text-white" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">Time Skip</h2>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">时间流逝</h2>
           </div>
           <button onClick={() => { onClose(); setSummary(null); setSelected(null) }} className="text-white/40 hover:text-white transition-colors">
             <X size={18} />
@@ -51,7 +51,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
           {!summary ? (
             <>
               <p className="text-white/40 text-sm font-light">
-                Advance narrative time. The world will react to the passage of time — NPCs move, factions shift, rumors spread.
+                推进叙事时间。世界会随时间变化——NPC 会移动，阵营会变动，传闻会传播。
               </p>
 
               {/* Preset grid */}
@@ -80,10 +80,10 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
                 {loading ? (
                   <span className="flex items-center justify-center gap-2">
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    World is evolving...
+                    世界正在演化……
                   </span>
                 ) : (
-                  `Skip ${selected?.label || '...'}`
+                  `跳过 ${selected?.label || '...'}`
                 )}
               </button>
             </>
@@ -92,7 +92,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
               {/* Summary */}
               <div className="text-center mb-2">
                 <span className="text-[10px] uppercase tracking-widest text-white font-bold">
-                  {selected?.label} has passed
+                  {selected?.label} 已经过去
                 </span>
               </div>
               <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
@@ -104,7 +104,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
                 onClick={() => { onClose(); setSummary(null); setSelected(null) }}
                 className="w-full px-6 py-3 rounded-lg font-semibold text-sm tracking-wide bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 transition-all"
               >
-                Continue
+                继续
               </button>
             </>
           )}

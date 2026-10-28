@@ -4,10 +4,10 @@ import { fetchCharacters } from '../api'
 import { useGameStore } from '../store'
 
 const ACTION_TYPES = [
-  { id: 'DO', label: 'Do', description: 'Perform an action' },
-  { id: 'SAY', label: 'Say', description: 'Speak or communicate' },
-  { id: 'CONTINUE', label: 'Continue', description: 'Let the story flow' },
-  { id: 'META', label: 'Meta', description: 'Talk to the AI narrator' },
+  { id: 'DO', label: '行动', description: '执行一个动作' },
+  { id: 'SAY', label: '对话', description: '说话或交流' },
+  { id: 'CONTINUE', label: '继续', description: '让故事自然推进' },
+  { id: 'META', label: '旁白', description: '与 AI 叙事者对话' },
 ]
 
 export default function ActionInput({ onSubmit, disabled, draft }) {
@@ -170,7 +170,7 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
             disabled={disabled}
             className="flex-1 text-left bg-white/[0.03] border border-white/20 rounded-xl px-5 py-3.5 text-white hover:bg-white/[0.03] hover:border-white/20 transition-all font-light text-sm group disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            <span className="opacity-70 group-hover:opacity-100 transition-opacity">Press Enter to proceed with the simulation...</span>
+            <span className="opacity-70 group-hover:opacity-100 transition-opacity">按 Enter 继续推进故事……</span>
           </button>
         ) : (
           <div className="flex-1 relative">
@@ -182,12 +182,12 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
               disabled={disabled}
               placeholder={
                 disabled
-                  ? 'Receiving transmission...'
+                  ? '正在接收回应……'
                   : type === 'DO'
-                  ? 'Input action directive... (use @ to mention characters)'
+                  ? '输入你的行动……（用 @ 提及角色）'
                   : type === 'SAY'
-                  ? 'Input verbal communication... (use @ to mention characters)'
-                  : 'Input system command...'
+                  ? '输入你想说的话……（用 @ 提及角色）'
+                  : '输入系统或旁白指令……'
               }
               rows={2}
               className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-5 py-3.5 text-white placeholder-white/20 focus:outline-none focus:border-white/40 focus:bg-white/[0.05] resize-none text-sm font-light transition-all custom-scrollbar leading-relaxed"
@@ -214,7 +214,7 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
                       <div className="font-medium truncate">{char.name}</div>
                       {char.aliases?.length > 0 && (
                         <div className="text-xs text-white/30 truncate">
-                          aka {char.aliases.join(', ')}
+                          别名 {char.aliases.join(', ')}
                         </div>
                       )}
                     </div>
@@ -229,7 +229,7 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
           type="submit"
           disabled={disabled || (type !== 'CONTINUE' && !text.trim())}
           className="bg-white text-black hover:bg-gray-200 uppercase text-sm tracking-[0.2em] font-bold rounded-full px-5 py-3.5 h-[52px] flex items-center justify-center shrink-0 border border-white/20"
-          title="Send command (Enter)"
+          title="发送（Enter）"
         >
           <Send size={18} className="transform translate-x-[-1px] translate-y-[1px]" />
         </button>

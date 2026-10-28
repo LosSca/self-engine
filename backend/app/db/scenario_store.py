@@ -6,6 +6,17 @@ from datetime import datetime
 from enum import Enum
 from threading import Lock
 
+from app.models.knowledge import (
+    KnowledgeEntry,
+    KnowledgeEntryCreate,
+    KnowledgeEntryPatch,
+    ModelPreset,
+    ModelPresetCreate,
+    ModelPresetPatch,
+    PlayConfig,
+    Storyline,
+)
+
 
 class StoryCardType(str, Enum):
     NPC = "NPC"
@@ -28,6 +39,7 @@ class Scenario:
     setup_questions: list = field(default_factory=list)
     opening_mode: str = "fixed"  # "fixed" | "ai"
     ai_opening_directive: str = ""
+    world_type: str = ""  # preset key chosen on the home screen ("fantasy", ...)
 
 
 @dataclass
@@ -49,10 +61,44 @@ class Campaign:
     setup_answers: dict = field(default_factory=dict)
     generated_opening: str = ""
     combat_enabled: bool = True
+    character_picks: dict = field(default_factory=dict)
+
+
+@dataclass
+class CharacterLook:
+    id: str
+    character_id: str
+    outfit: str
+    expression: str
+    image_url: str = ""
+    sort_order: int = 0
+
+
+@dataclass
+class ScenarioCharacter:
+    id: str
+    scenario_id: str
+    name: str
+    role: str = ""
+    description: str = ""
+    portrait_url: str = ""
+    is_player: bool = False
+    created_at: str = ""
+    looks: list = field(default_factory=list)
+
+    def look_for(self, outfit: str, expression: str) -> "CharacterLook | None":
+        """Exact outfit+expression match, then outfit-only fallback."""
+        for look in self.looks:
+            if look.outfit == outfit and look.expression == expression:
+                return look
+        for look in self.looks:
+            if look.outfit == outfit and look.image_url:
+                return look
+        return None
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 7
 
     _MIGRATIONS = {
         1: [
@@ -93,12 +139,79 @@ class ScenarioStore:
         4: [
             "ALTER TABLE campaigns ADD COLUMN combat_enabled INTEGER NOT NULL DEFAULT 1",
         ],
+        5: [
+            """CREATE TABLE IF NOT EXISTS scenario_characters (
+                id TEXT PRIMARY KEY,
+                scenario_id TEXT NOT NULL REFERENCES scenarios(id),
+                name TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                portrait_url TEXT NOT NULL DEFAULT '',
+                is_player INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS character_looks (
+                id TEXT PRIMARY KEY,
+                character_id TEXT NOT NULL REFERENCES scenario_characters(id),
+                outfit TEXT NOT NULL DEFAULT '默认',
+                expression TEXT NOT NULL DEFAULT '平静',
+                image_url TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0
+            )""",
+            "ALTER TABLE campaigns ADD COLUMN character_json TEXT NOT NULL DEFAULT '{}'",
+            "CREATE INDEX IF NOT EXISTS idx_scenario_characters_scenario "
+            "ON scenario_characters(scenario_id)",
+            "CREATE INDEX IF NOT EXISTS idx_character_looks_character "
+            "ON character_looks(character_id)",
+        ],
+        6: [
+            "ALTER TABLE scenarios ADD COLUMN world_type TEXT NOT NULL DEFAULT ''",
+        ],
+        7: [
+            """CREATE TABLE IF NOT EXISTS scenario_knowledge (
+                id TEXT PRIMARY KEY,
+                scenario_id TEXT NOT NULL REFERENCES scenarios(id),
+                layer TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]',
+                depth INTEGER NOT NULL DEFAULT 5,
+                always_on INTEGER NOT NULL DEFAULT 0,
+                mode_scope TEXT NOT NULL DEFAULT 'both',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS scenario_play_config (
+                scenario_id TEXT PRIMARY KEY REFERENCES scenarios(id),
+                mode TEXT NOT NULL DEFAULT 'free',
+                storyline_json TEXT NOT NULL DEFAULT '{}',
+                max_depth INTEGER NOT NULL DEFAULT 9,
+                model_preset_id TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS model_presets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'narrator',
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                temperature REAL NOT NULL DEFAULT 0.8,
+                max_tokens INTEGER NOT NULL DEFAULT 800,
+                notes TEXT NOT NULL DEFAULT '',
+                is_builtin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_scenario_knowledge_scenario "
+            "ON scenario_knowledge(scenario_id)",
+        ],
     }
 
     def __init__(self, db_path: str = "scenarios.db"):
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._lock = Lock()
         self._migrate()
+        self._seed_builtin_presets()
 
     def _get_schema_version(self) -> int:
         try:
@@ -129,7 +242,7 @@ class ScenarioStore:
     _SCENARIO_COLS = (
         "id, title, description, tone_instructions, opening_narrative, "
         "language, lore_text, created_at, setup_questions, "
-        "opening_mode, ai_opening_directive"
+        "opening_mode, ai_opening_directive, world_type"
     )
 
     def create_scenario(
@@ -143,6 +256,7 @@ class ScenarioStore:
         setup_questions: list | None = None,
         opening_mode: str = "fixed",
         ai_opening_directive: str = "",
+        world_type: str = "",
     ) -> Scenario:
         scenario = Scenario(
             id=str(uuid.uuid4()),
@@ -156,16 +270,18 @@ class ScenarioStore:
             setup_questions=setup_questions or [],
             opening_mode=opening_mode if opening_mode in ("fixed", "ai") else "fixed",
             ai_opening_directive=ai_opening_directive,
+            world_type=world_type or "",
         )
         with self._lock:
             self._conn.execute(
                 f"INSERT INTO scenarios ({self._SCENARIO_COLS}) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (scenario.id, scenario.title, scenario.description,
                  scenario.tone_instructions, scenario.opening_narrative,
                  scenario.language, scenario.lore_text, scenario.created_at,
                  json.dumps(scenario.setup_questions),
-                 scenario.opening_mode, scenario.ai_opening_directive),
+                 scenario.opening_mode, scenario.ai_opening_directive,
+                 scenario.world_type),
             )
             self._conn.commit()
         return scenario
@@ -182,6 +298,7 @@ class ScenarioStore:
             setup_questions = []
         opening_mode = row[9] if len(row) > 9 and row[9] else "fixed"
         ai_directive = row[10] if len(row) > 10 and row[10] is not None else ""
+        world_type = row[11] if len(row) > 11 and row[11] is not None else ""
         return Scenario(
             id=row[0], title=row[1], description=row[2],
             tone_instructions=row[3], opening_narrative=row[4],
@@ -189,6 +306,7 @@ class ScenarioStore:
             setup_questions=setup_questions,
             opening_mode=opening_mode,
             ai_opening_directive=ai_directive,
+            world_type=world_type,
         )
 
     def get_scenario(self, scenario_id: str) -> "Scenario | None":
@@ -241,7 +359,7 @@ class ScenarioStore:
 
     _CAMPAIGN_COLS = (
         "id, scenario_id, player_name, created_at, setup_answers, "
-        "generated_opening, combat_enabled"
+        "generated_opening, combat_enabled, character_json"
     )
 
     def create_campaign(self, scenario_id: str, player_name: str) -> Campaign:
@@ -257,10 +375,11 @@ class ScenarioStore:
         with self._lock:
             self._conn.execute(
                 f"INSERT INTO campaigns ({self._CAMPAIGN_COLS}) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (campaign.id, campaign.scenario_id, campaign.player_name,
                  campaign.created_at, json.dumps(campaign.setup_answers),
-                 campaign.generated_opening, 1 if campaign.combat_enabled else 0),
+                 campaign.generated_opening, 1 if campaign.combat_enabled else 0,
+                 json.dumps(campaign.character_picks)),
             )
             self._conn.commit()
         return campaign
@@ -273,11 +392,16 @@ class ScenarioStore:
             setup_answers = {}
         generated_opening = row[5] if len(row) > 5 and row[5] is not None else ""
         combat_enabled = bool(row[6]) if len(row) > 6 and row[6] is not None else True
+        try:
+            character_picks = json.loads(row[7]) if len(row) > 7 and row[7] else {}
+        except (json.JSONDecodeError, TypeError):
+            character_picks = {}
         return Campaign(
             id=row[0], scenario_id=row[1], player_name=row[2],
             created_at=row[3], setup_answers=setup_answers,
             generated_opening=generated_opening,
             combat_enabled=combat_enabled,
+            character_picks=character_picks,
         )
 
     def get_campaign(self, campaign_id: str) -> "Campaign | None":
@@ -335,6 +459,190 @@ class ScenarioStore:
             self._conn.commit()
             return cursor.rowcount > 0
 
+    # ── character pack ──────────────────────────────────────────────
+    _CHARACTER_COLS = (
+        "id, scenario_id, name, role, description, portrait_url, is_player, created_at"
+    )
+
+    def add_character(
+        self,
+        scenario_id: str,
+        name: str,
+        role: str = "",
+        description: str = "",
+        portrait_url: str = "",
+        is_player: bool = False,
+    ) -> ScenarioCharacter:
+        character = ScenarioCharacter(
+            id=str(uuid.uuid4()),
+            scenario_id=scenario_id,
+            name=name,
+            role=role,
+            description=description,
+            portrait_url=portrait_url,
+            is_player=is_player,
+            created_at=datetime.utcnow().isoformat(),
+        )
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO scenario_characters "
+                "(id, scenario_id, name, role, description, portrait_url, is_player, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (character.id, character.scenario_id, character.name, character.role,
+                 character.description, character.portrait_url,
+                 1 if character.is_player else 0, character.created_at),
+            )
+            self._conn.commit()
+        return character
+
+    @staticmethod
+    def _row_to_look(row) -> CharacterLook:
+        return CharacterLook(
+            id=row[0], character_id=row[1], outfit=row[2], expression=row[3],
+            image_url=row[4] or "", sort_order=row[5] or 0,
+        )
+
+    def list_looks(self, character_id: str) -> "list[CharacterLook]":
+        rows = self._conn.execute(
+            "SELECT id, character_id, outfit, expression, image_url, sort_order "
+            "FROM character_looks WHERE character_id=? "
+            "ORDER BY sort_order ASC, outfit ASC, expression ASC",
+            (character_id,),
+        ).fetchall()
+        return [self._row_to_look(r) for r in rows]
+
+    @staticmethod
+    def _row_to_character(row, looks: "list[CharacterLook] | None" = None) -> ScenarioCharacter:
+        return ScenarioCharacter(
+            id=row[0], scenario_id=row[1], name=row[2], role=row[3] or "",
+            description=row[4] or "", portrait_url=row[5] or "",
+            is_player=bool(row[6]), created_at=row[7],
+            looks=list(looks or []),
+        )
+
+    def get_character(self, character_id: str) -> "ScenarioCharacter | None":
+        row = self._conn.execute(
+            f"SELECT {self._CHARACTER_COLS} FROM scenario_characters WHERE id=?",
+            (character_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return self._row_to_character(row, self.list_looks(character_id))
+
+    def list_characters(self, scenario_id: str) -> "list[ScenarioCharacter]":
+        rows = self._conn.execute(
+            f"SELECT {self._CHARACTER_COLS} FROM scenario_characters "
+            "WHERE scenario_id=? ORDER BY is_player DESC, created_at ASC",
+            (scenario_id,),
+        ).fetchall()
+        return [self._row_to_character(r, self.list_looks(r[0])) for r in rows]
+
+    def update_character(self, character_id: str, **fields) -> bool:
+        allowed = ("name", "role", "description", "portrait_url", "is_player")
+        sets, values = [], []
+        for key in allowed:
+            if key not in fields or fields[key] is None:
+                continue
+            value = fields[key]
+            if key == "is_player":
+                value = 1 if value else 0
+            sets.append(f"{key}=?")
+            values.append(value)
+        if not sets:
+            return False
+        values.append(character_id)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE scenario_characters SET {', '.join(sets)} WHERE id=?", values
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_character(self, character_id: str) -> bool:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM character_looks WHERE character_id=?", (character_id,)
+            )
+            cursor = self._conn.execute(
+                "DELETE FROM scenario_characters WHERE id=?", (character_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def add_look(
+        self,
+        character_id: str,
+        outfit: str,
+        expression: str,
+        image_url: str = "",
+        sort_order: int | None = None,
+    ) -> CharacterLook:
+        if sort_order is None:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM character_looks "
+                "WHERE character_id=?",
+                (character_id,),
+            ).fetchone()
+            sort_order = int(row[0] or 0)
+        look = CharacterLook(
+            id=str(uuid.uuid4()), character_id=character_id,
+            outfit=outfit or "默认", expression=expression or "平静",
+            image_url=image_url, sort_order=sort_order,
+        )
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO character_looks "
+                "(id, character_id, outfit, expression, image_url, sort_order) "
+                "VALUES (?,?,?,?,?,?)",
+                (look.id, look.character_id, look.outfit, look.expression,
+                 look.image_url, look.sort_order),
+            )
+            self._conn.commit()
+        return look
+
+    def get_look(self, look_id: str) -> "CharacterLook | None":
+        row = self._conn.execute(
+            "SELECT id, character_id, outfit, expression, image_url, sort_order "
+            "FROM character_looks WHERE id=?",
+            (look_id,),
+        ).fetchone()
+        return self._row_to_look(row) if row else None
+
+    def update_look(self, look_id: str, **fields) -> bool:
+        allowed = ("outfit", "expression", "image_url", "sort_order")
+        sets, values = [], []
+        for key in allowed:
+            if key in fields and fields[key] is not None:
+                sets.append(f"{key}=?")
+                values.append(fields[key])
+        if not sets:
+            return False
+        values.append(look_id)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE character_looks SET {', '.join(sets)} WHERE id=?", values
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_look(self, look_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM character_looks WHERE id=?", (look_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def update_campaign_character(self, campaign_id: str, picks: dict) -> bool:
+        """Persist the player's chosen character look for a campaign."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE campaigns SET character_json=? WHERE id=?",
+                (json.dumps(picks or {}), campaign_id),
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
     def delete_scenario(self, scenario_id: str) -> bool:
         """Delete a scenario and all its story cards and campaigns."""
         with self._lock:
@@ -342,10 +650,292 @@ class ScenarioStore:
                 "DELETE FROM story_cards WHERE scenario_id=?", (scenario_id,)
             )
             self._conn.execute(
+                "DELETE FROM character_looks WHERE character_id IN "
+                "(SELECT id FROM scenario_characters WHERE scenario_id=?)",
+                (scenario_id,),
+            )
+            self._conn.execute(
+                "DELETE FROM scenario_characters WHERE scenario_id=?", (scenario_id,)
+            )
+            self._conn.execute(
+                "DELETE FROM scenario_knowledge WHERE scenario_id=?", (scenario_id,)
+            )
+            self._conn.execute(
+                "DELETE FROM scenario_play_config WHERE scenario_id=?", (scenario_id,)
+            )
+            self._conn.execute(
                 "DELETE FROM campaigns WHERE scenario_id=?", (scenario_id,)
             )
             cursor = self._conn.execute(
                 "DELETE FROM scenarios WHERE id=?", (scenario_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    # ------------------------------------------------------- knowledge entries
+    _KNOWLEDGE_COLS = (
+        "id, scenario_id, layer, title, content, tags, depth, always_on, "
+        "mode_scope, enabled, sort_order, created_at"
+    )
+
+    @staticmethod
+    def _row_to_knowledge(row) -> KnowledgeEntry:
+        try:
+            tags = json.loads(row[5]) if row[5] else []
+        except (json.JSONDecodeError, TypeError):
+            tags = []
+        return KnowledgeEntry(
+            id=row[0],
+            scenario_id=row[1],
+            layer=row[2],
+            title=row[3],
+            content=row[4] or "",
+            tags=tags,
+            depth=row[6],
+            always_on=bool(row[7]),
+            mode_scope=row[8],
+            enabled=bool(row[9]),
+            sort_order=row[10],
+            created_at=row[11],
+        )
+
+    def list_knowledge(
+        self, scenario_id: str, include_disabled: bool = True
+    ) -> "list[KnowledgeEntry]":
+        sql = f"SELECT {self._KNOWLEDGE_COLS} FROM scenario_knowledge WHERE scenario_id=?"
+        if not include_disabled:
+            sql += " AND enabled=1"
+        sql += " ORDER BY depth ASC, sort_order ASC, created_at ASC"
+        rows = self._conn.execute(sql, (scenario_id,)).fetchall()
+        return [self._row_to_knowledge(row) for row in rows]
+
+    def get_knowledge(self, entry_id: str) -> "KnowledgeEntry | None":
+        row = self._conn.execute(
+            f"SELECT {self._KNOWLEDGE_COLS} FROM scenario_knowledge WHERE id=?",
+            (entry_id,),
+        ).fetchone()
+        return self._row_to_knowledge(row) if row else None
+
+    def add_knowledge(
+        self, scenario_id: str, entry: KnowledgeEntryCreate
+    ) -> KnowledgeEntry:
+        record = KnowledgeEntry(
+            **entry.model_dump(),
+            id=str(uuid.uuid4()),
+            scenario_id=scenario_id,
+            created_at=datetime.utcnow().isoformat(),
+        )
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO scenario_knowledge ({self._KNOWLEDGE_COLS}) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    record.id,
+                    record.scenario_id,
+                    record.layer,
+                    record.title,
+                    record.content,
+                    json.dumps(record.tags),
+                    record.depth,
+                    1 if record.always_on else 0,
+                    record.mode_scope,
+                    1 if record.enabled else 0,
+                    record.sort_order,
+                    record.created_at,
+                ),
+            )
+            self._conn.commit()
+        return record
+
+    def update_knowledge(
+        self, entry_id: str, patch: KnowledgeEntryPatch
+    ) -> "KnowledgeEntry | None":
+        fields = patch.model_dump(exclude_none=True)
+        if fields:
+            sets: list = []
+            values: list = []
+            for key, value in fields.items():
+                if key in ("tags",):
+                    value = json.dumps(value)
+                elif key in ("always_on", "enabled"):
+                    value = 1 if value else 0
+                sets.append(f"{key}=?")
+                values.append(value)
+            values.append(entry_id)
+            with self._lock:
+                self._conn.execute(
+                    f"UPDATE scenario_knowledge SET {', '.join(sets)} WHERE id=?",
+                    values,
+                )
+                self._conn.commit()
+        return self.get_knowledge(entry_id)
+
+    def delete_knowledge(self, entry_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM scenario_knowledge WHERE id=?", (entry_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    # ----------------------------------------------------------- play config
+    def get_play_config(self, scenario_id: str) -> PlayConfig:
+        row = self._conn.execute(
+            "SELECT scenario_id, mode, storyline_json, max_depth, "
+            "model_preset_id, updated_at FROM scenario_play_config WHERE scenario_id=?",
+            (scenario_id,),
+        ).fetchone()
+        if not row:
+            return PlayConfig(scenario_id=scenario_id)
+        try:
+            storyline = Storyline.model_validate_json(row[2] or "{}")
+        except Exception:  # noqa: BLE001 - stored data predates validation
+            storyline = Storyline()
+        return PlayConfig(
+            scenario_id=row[0],
+            mode=row[1],
+            storyline=storyline,
+            max_depth=row[3] if row[3] is not None else 9,
+            model_preset_id=row[4] or "",
+            updated_at=row[5] or "",
+        )
+
+    def set_play_config(self, scenario_id: str, config: PlayConfig) -> PlayConfig:
+        now = datetime.utcnow().isoformat()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO scenario_play_config "
+                "(scenario_id, mode, storyline_json, max_depth, "
+                "model_preset_id, updated_at) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(scenario_id) DO UPDATE SET mode=excluded.mode, "
+                "storyline_json=excluded.storyline_json, "
+                "max_depth=excluded.max_depth, "
+                "model_preset_id=excluded.model_preset_id, "
+                "updated_at=excluded.updated_at",
+                (
+                    scenario_id,
+                    config.mode,
+                    config.storyline.model_dump_json(),
+                    config.max_depth,
+                    config.model_preset_id,
+                    now,
+                ),
+            )
+            self._conn.commit()
+        return self.get_play_config(scenario_id)
+
+    # --------------------------------------------------------- model presets
+    _PRESET_COLS = (
+        "id, name, role, provider, model, temperature, max_tokens, notes, "
+        "is_builtin, created_at"
+    )
+
+    @staticmethod
+    def _row_to_preset(row) -> ModelPreset:
+        return ModelPreset(
+            id=row[0],
+            name=row[1],
+            role=row[2],
+            provider=row[3] or "",
+            model=row[4] or "",
+            temperature=row[5],
+            max_tokens=row[6],
+            notes=row[7] or "",
+            is_builtin=bool(row[8]),
+            created_at=row[9],
+        )
+
+    def _seed_builtin_presets(self) -> None:
+        builtins = [
+            ("builtin-balanced", "温和叙事", "narrator", 0.9, 500,
+             "默认叙事预设：温度略高，篇幅短，跟随全局模型路由。"),
+            ("builtin-grim", "冷峻叙事", "narrator", 0.6, 420,
+             "适合末世/悬疑：低温、克制、少形容词。"),
+            ("builtin-fast", "极简叙事", "narrator", 0.4, 260,
+             "低延迟：只写一到两句，适合连续探索。"),
+            ("builtin-intent", "意图解析", "intent", 0.1, 300,
+             "只用于把自然语言翻译成结构化行动，不产生叙事。"),
+        ]
+        with self._lock:
+            for preset_id, name, role, temperature, max_tokens, notes in builtins:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO model_presets "
+                    "(id, name, role, provider, model, temperature, max_tokens, "
+                    "notes, is_builtin, created_at) VALUES (?,?,?,?,?,?,?,?,1,?)",
+                    (
+                        preset_id,
+                        name,
+                        role,
+                        "",
+                        "",
+                        temperature,
+                        max_tokens,
+                        notes,
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
+            self._conn.commit()
+
+    def list_model_presets(self) -> "list[ModelPreset]":
+        rows = self._conn.execute(
+            f"SELECT {self._PRESET_COLS} FROM model_presets "
+            "ORDER BY is_builtin DESC, created_at ASC"
+        ).fetchall()
+        return [self._row_to_preset(row) for row in rows]
+
+    def get_model_preset(self, preset_id: str) -> "ModelPreset | None":
+        row = self._conn.execute(
+            f"SELECT {self._PRESET_COLS} FROM model_presets WHERE id=?",
+            (preset_id,),
+        ).fetchone()
+        return self._row_to_preset(row) if row else None
+
+    def add_model_preset(self, preset: ModelPresetCreate) -> ModelPreset:
+        record = ModelPreset(
+            **preset.model_dump(),
+            id=str(uuid.uuid4()),
+            is_builtin=False,
+            created_at=datetime.utcnow().isoformat(),
+        )
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO model_presets ({self._PRESET_COLS}) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    record.id,
+                    record.name,
+                    record.role,
+                    record.provider,
+                    record.model,
+                    record.temperature,
+                    record.max_tokens,
+                    record.notes,
+                    0,
+                    record.created_at,
+                ),
+            )
+            self._conn.commit()
+        return record
+
+    def update_model_preset(
+        self, preset_id: str, patch: ModelPresetPatch
+    ) -> "ModelPreset | None":
+        fields = patch.model_dump(exclude_none=True)
+        if fields:
+            sets = ", ".join(f"{key}=?" for key in fields)
+            values = list(fields.values()) + [preset_id]
+            with self._lock:
+                self._conn.execute(
+                    f"UPDATE model_presets SET {sets} WHERE id=?", values
+                )
+                self._conn.commit()
+        return self.get_model_preset(preset_id)
+
+    def delete_model_preset(self, preset_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM model_presets WHERE id=? AND is_builtin=0",
+                (preset_id,),
             )
             self._conn.commit()
             return cursor.rowcount > 0

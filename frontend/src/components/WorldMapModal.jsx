@@ -11,6 +11,14 @@ const NODE_COLORS = {
   EVENT: '#fb7185',
 }
 
+const NODE_TYPE_LABELS = {
+  NPC: 'NPC',
+  LOCATION: '地点',
+  FACTION: '阵营',
+  ITEM: '物品',
+  EVENT: '事件',
+}
+
 const NODE_RADIUS = {
   NPC: 6,
   LOCATION: 8,
@@ -278,10 +286,10 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-none">
           <div className="flex items-center gap-3">
             <Map size={16} className="text-emerald-400" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">World Map</h2>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">世界地图</h2>
             {graphData.nodes.length > 0 && (
               <span className="text-white/20 text-xs ml-2">
-                {graphData.nodes.length} nodes &middot; {graphData.links.length} links
+                {graphData.nodes.length} 个节点 &middot; {graphData.links.length} 条连线
               </span>
             )}
           </div>
@@ -290,12 +298,12 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
               onClick={loadGraph}
               disabled={loading}
               className="text-white/40 hover:text-white transition-colors p-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-              title="Refresh"
-              aria-label="Refresh world map"
+              title="刷新"
+              aria-label="刷新世界地图"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </button>
-            <button onClick={onClose} className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50" aria-label="Close world map">
+            <button onClick={onClose} className="text-white/40 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50" aria-label="关闭世界地图">
               <X size={18} />
             </button>
           </div>
@@ -306,7 +314,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
           {Object.entries(NODE_COLORS).map(([type, color]) => (
             <div key={type} className="flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
-              <span className="text-[10px] text-white/40 uppercase tracking-wider">{type}</span>
+              <span className="text-[10px] text-white/40 uppercase tracking-wider">{NODE_TYPE_LABELS[type] || type}</span>
             </div>
           ))}
         </div>
@@ -319,13 +327,13 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
               value={searchQuery}
               onChange={handleSearchInputChange}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              placeholder="Search world facts..."
+              placeholder="搜索世界事实……"
               className="flex-1 bg-white/[0.03] text-gray-200 text-sm rounded-lg px-3 py-1.5 border border-white/10 focus:outline-none focus:border-white/40 focus:bg-white/[0.05] placeholder-white/20"
             />
             <button
               onClick={handleSearch}
               className="text-white/40 hover:text-white transition-colors p-1.5"
-              title="Search"
+              title="搜索"
             >
               <Search size={14} />
             </button>
@@ -335,14 +343,14 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
               <button
                 onClick={() => setSearchResults([])}
                 className="absolute top-1 right-1 text-white/20 hover:text-white transition-colors"
-                title="Clear results"
+                title="清除结果"
               >
                 <X size={12} />
               </button>
               {searchResults.map((r, i) => (
                 <div key={i} className="text-gray-300 py-1 border-b border-gray-700/50 last:border-0">
                   {r.fact}
-                  {r.valid_at && <span className="text-gray-500 text-xs ml-2">from {r.valid_at}</span>}
+                  {r.valid_at && <span className="text-gray-500 text-xs ml-2">起始 {r.valid_at}</span>}
                 </div>
               ))}
             </div>
@@ -357,8 +365,8 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
                 <Map size={32} className="text-white/20 mx-auto mb-3" />
                 <p className="text-white/20 text-sm font-light">
                   {loading
-                    ? 'Mapping world topology...'
-                    : 'No world data yet. Play to populate the graph.'}
+                    ? '正在绘制世界拓扑……'
+                    : '暂无世界数据。开始游玩以填充图谱。'}
                 </p>
               </div>
             </div>
@@ -409,7 +417,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
                   color: NODE_COLORS[selectedNode.node_type] || '#94a3b8',
                 }}
               >
-                {selectedNode.node_type}
+                {NODE_TYPE_LABELS[selectedNode.node_type] || selectedNode.node_type}
               </span>
               {selectedNode.attributes && Object.keys(selectedNode.attributes).length > 0 && (
                 <div className="space-y-1 mt-2 border-t border-white/5 pt-2">
@@ -428,7 +436,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
               {selectedNode.node_type === 'NPC' && selectedNode.attributes?.power_level != null && (
                 <div className="mt-2 border-t border-white/5 pt-2">
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-white/40">Power Level</span>
+                    <span className="text-white/40">战力等级</span>
                     <span className="text-white font-bold">{selectedNode.attributes.power_level}/10</span>
                   </div>
                   <div className="w-full h-1.5 bg-white/[0.03] rounded-full overflow-hidden">

@@ -3,8 +3,8 @@ import { Gem, X, RefreshCw } from 'lucide-react'
 import { fetchMemoryCrystals, crystallizeMemory } from '../api'
 
 const TIER_STYLES = {
-  SHORT: { label: 'Short Crystal', color: 'text-white', bg: 'bg-white/10 border-white/20' },
-  LONG: { label: 'Permanent Crystal', color: 'text-amber-400', bg: 'bg-amber-600/10 border-amber-500/20' },
+  SHORT: { label: '短期结晶', color: 'text-white', bg: 'bg-white/10 border-white/20' },
+  LONG: { label: '永久结晶', color: 'text-amber-400', bg: 'bg-amber-600/10 border-amber-500/20' },
 }
 
 export default function MemoryInspector({ open, onClose, campaignId }) {
@@ -29,7 +29,9 @@ export default function MemoryInspector({ open, onClose, campaignId }) {
     try {
       await crystallizeMemory(campaignId)
       await fetchCrystals()
-    } catch {} finally {
+    } catch {
+      // 提炼失败时保留原列表
+    } finally {
       setLoading(false)
     }
   }
@@ -47,14 +49,14 @@ export default function MemoryInspector({ open, onClose, campaignId }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-none">
           <div className="flex items-center gap-3">
             <Gem size={16} className="text-white" />
-            <h2 className="text-white font-bold text-sm uppercase tracking-widest">Memory Crystals</h2>
+            <h2 className="text-white font-bold text-sm uppercase tracking-widest">记忆结晶</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={fetchCrystals}
               disabled={loading}
               className="text-white/40 hover:text-white transition-colors p-1"
-              title="Refresh"
+              title="刷新"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -70,7 +72,7 @@ export default function MemoryInspector({ open, onClose, campaignId }) {
             <div className="text-center py-8">
               <Gem size={32} className="text-white/20 mx-auto mb-3" />
               <p className="text-white/20 text-sm font-light">
-                {loading ? 'Scanning crystal lattice...' : 'No memory crystals formed yet. Crystallize to compress your adventure history.'}
+                {loading ? '正在扫描结晶结构……' : '尚未形成记忆结晶。进行结晶以压缩你的冒险历史。'}
               </p>
             </div>
           ) : (
@@ -83,7 +85,7 @@ export default function MemoryInspector({ open, onClose, campaignId }) {
                       {style.label}
                     </span>
                     <span className="text-[10px] text-white/20 font-mono">
-                      {crystal.event_count} events compressed
+                      {crystal.event_count} 个事件已压缩
                     </span>
                   </div>
                   <p className="text-[#d1d1d1] text-sm font-light leading-relaxed">
@@ -105,12 +107,12 @@ export default function MemoryInspector({ open, onClose, campaignId }) {
             {loading ? (
               <span className="flex items-center justify-center gap-2">
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Crystallizing...
+                正在结晶……
               </span>
             ) : (
               <span className="flex items-center justify-center gap-2">
                 <Gem size={14} />
-                Crystallize Recent Events
+                结晶近期事件
               </span>
             )}
           </button>

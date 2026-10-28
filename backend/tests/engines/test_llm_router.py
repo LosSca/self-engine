@@ -399,3 +399,50 @@ async def test_openai_cached_system_is_flattened_for_proxy():
         "role": "system",
         "content": "part one\npart two",
     }
+
+@pytest.mark.asyncio
+async def test_explicit_temperature_overrides_config_without_duplicate(router):
+    """Regression: callers (e.g. LLMNarrator) pass temperature= explicitly.
+
+    Splatting it twice into litellm.acompletion raised
+    "got multiple values for keyword argument 'temperature'". The caller's value
+    must win and reach the provider exactly once.
+    """
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=MagicMock(content="ok"))]
+    mock_acompletion = AsyncMock(return_value=mock_response)
+    with patch("app.engines.llm_router.litellm.acompletion", new=mock_acompletion):
+        await router.complete(
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=128,
+            temperature=0.3,
+        )
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["temperature"] == 0.3
+    assert call_kwargs["max_tokens"] == 128
+
+
+class _DeltaOnlyStream:
+    def __init__(self, parts):
+        self._parts = parts
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for part in self._parts:
+            chunk = MagicMock()
+            chunk.choices = [MagicMock(delta=MagicMock(content=part))]
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_stream_accepts_explicit_temperature(router):
+    mock_acompletion = AsyncMock(return_value=_DeltaOnlyStream(["a", "b"]))
+    with patch("app.engines.llm_router.litellm.acompletion", new=mock_acompletion):
+        parts = [p async for p in router.stream(
+            [{"role": "user", "content": "test"}], temperature=0.2,
+        )]
+    assert "".join(parts) == "ab"
+    assert mock_acompletion.call_args.kwargs["temperature"] == 0.2
+
