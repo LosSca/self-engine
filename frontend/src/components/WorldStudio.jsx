@@ -40,6 +40,9 @@ const CONDITION_KINDS = [
   ['door_open', '门已开启'],
   ['at_location', '位于地点'],
   ['quest_status', '任务状态'],
+  ['entity_at', '实体位于地点'],
+  ['entity_alive', '实体存活'],
+  ['combatant_hp', '实体生命值'],
 ]
 
 const OPS = [
@@ -56,10 +59,13 @@ const EFFECT_KINDS = [
   ['give_item', '给予物品'],
   ['remove_item', '移除物品'],
   ['move_player', '移动玩家'],
+  ['move_entity', '移动实体'],
   ['open_door', '开门'],
   ['close_door', '关门'],
   ['quest_progress', '推进任务'],
   ['quest_complete', '完成任务'],
+  ['combat_hp', '设置实体生命值'],
+  ['player_damage', '玩家受伤'],
   ['emit', '发出信号'],
 ]
 
@@ -356,12 +362,38 @@ function ExitRows({ world, value, onChange }) {
   )
 }
 
-function ConditionRows({ value, onChange }) {
+// Which catalogue a condition's target picks from, and whether it also needs a value.
+const CONDITION_TARGETS = {
+  flag: { source: 'flags', placeholder: '标记名，如 door_seen' },
+  has_item: { source: 'items', placeholder: '物品 ID' },
+  item_count: { source: 'items', placeholder: '物品 ID' },
+  door_open: { source: 'doors', placeholder: '门 ID' },
+  at_location: { source: 'locations', placeholder: '地点 ID' },
+  quest_status: { source: 'quests', placeholder: '任务 ID', value: '任务状态 inactive/active/completed/failed' },
+  entity_at: { source: 'entities', placeholder: '实体 ID', value: '地点 ID' },
+  entity_alive: { source: 'entities', placeholder: '实体 ID' },
+  combatant_hp: { source: 'entities', placeholder: '实体 ID', value: '生命值下限' },
+}
+
+function ConditionRows({ value, onChange, world }) {
   const update = (index, patch) =>
     onChange(value.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  const options = (source) => {
+    if (!world) return []
+    if (source === 'items') return world.items.map((entry) => [entry.id, entry.name])
+    if (source === 'doors') return world.doors.map((entry) => [entry.id, entry.name])
+    if (source === 'locations') return world.locations.map((entry) => [entry.id, entry.name])
+    if (source === 'quests') return world.quests.map((entry) => [entry.id, entry.title])
+    if (source === 'entities') return world.entities.map((entry) => [entry.id, entry.name])
+    return []
+  }
   return (
     <div className="flex flex-col gap-2">
-      {value.map((row, index) => (
+      {value.map((row, index) => {
+        const meta = CONDITION_TARGETS[row.kind] || {}
+        const choices = options(meta.source)
+        const needsValue = Boolean(meta.value) || row.kind === 'flag'
+        return (
         <RowShell key={index} onRemove={() => onChange(value.filter((_, i) => i !== index))}>
           <select className={tinyInput} value={row.kind} onChange={(e) => update(index, { kind: e.target.value })}>
             {CONDITION_KINDS.map(([id, label]) => (
@@ -370,12 +402,27 @@ function ConditionRows({ value, onChange }) {
               </option>
             ))}
           </select>
-          <input
-            className={tinyInput + ' w-40'}
-            value={row.target || ''}
-            onChange={(e) => update(index, { target: e.target.value })}
-            placeholder="目标 ID（物品/门/地点/任务/标记）"
-          />
+          {choices.length > 0 ? (
+            <select
+              className={tinyInput + ' w-40'}
+              value={row.target || ''}
+              onChange={(e) => update(index, { target: e.target.value })}
+            >
+              <option value="">{meta.placeholder || '选择目标'}</option>
+              {choices.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label} ({id})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className={tinyInput + ' w-40'}
+              value={row.target || ''}
+              onChange={(e) => update(index, { target: e.target.value })}
+              placeholder={meta.placeholder || '目标 ID（物品/门/地点/任务/标记）'}
+            />
+          )}
           <select className={tinyInput} value={row.op || 'eq'} onChange={(e) => update(index, { op: e.target.value })}>
             {OPS.map(([id, label]) => (
               <option key={id} value={id}>
@@ -387,10 +434,11 @@ function ConditionRows({ value, onChange }) {
             className={tinyInput + ' w-28'}
             value={showValue(row.value)}
             onChange={(e) => update(index, { value: parseValue(e.target.value) })}
-            placeholder="true / 1 / active"
+            placeholder={needsValue ? meta.value || '值' : 'true / 1 / active'}
           />
         </RowShell>
-      ))}
+        )
+      })}
       <button
         onClick={() => onChange([...value, { kind: 'flag', target: '', op: 'eq', value: true }])}
         className="self-start text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
@@ -401,12 +449,42 @@ function ConditionRows({ value, onChange }) {
   )
 }
 
-function EffectRows({ value, onChange }) {
+// What an effect points at, and whether its value is an id, a number or free text.
+const EFFECT_TARGETS = {
+  set_flag: { source: 'flags', placeholder: '标记名' },
+  give_item: { source: 'items', placeholder: '物品 ID' },
+  remove_item: { source: 'items', placeholder: '物品 ID' },
+  move_player: { source: 'locations', placeholder: '地点 ID' },
+  move_entity: { source: 'entities', placeholder: '实体 ID', value: { source: 'locations', hint: '目标地点 ID' } },
+  open_door: { source: 'doors', placeholder: '门 ID' },
+  close_door: { source: 'doors', placeholder: '门 ID' },
+  quest_progress: { source: 'quests', placeholder: '任务 ID', value: { hint: '目标阶段 ID' } },
+  quest_complete: { source: 'quests', placeholder: '任务 ID' },
+  combat_hp: { source: 'entities', placeholder: '实体 ID', value: { hint: '剩余生命值' } },
+  player_damage: { source: 'player', placeholder: 'player' },
+  emit: { source: 'none', placeholder: '信号名' },
+}
+
+function EffectRows({ value, onChange, world }) {
   const update = (index, patch) =>
     onChange(value.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  const options = (source) => {
+    if (!world) return []
+    if (source === 'items') return world.items.map((entry) => [entry.id, entry.name])
+    if (source === 'doors') return world.doors.map((entry) => [entry.id, entry.name])
+    if (source === 'locations') return world.locations.map((entry) => [entry.id, entry.name])
+    if (source === 'quests') return world.quests.map((entry) => [entry.id, entry.title])
+    if (source === 'entities') return world.entities.map((entry) => [entry.id, entry.name])
+    return []
+  }
   return (
     <div className="flex flex-col gap-2">
-      {value.map((row, index) => (
+      {value.map((row, index) => {
+        const meta = EFFECT_TARGETS[row.kind] || {}
+        const choices = options(meta.source)
+        const valueOptions = options(meta.value && meta.value.source)
+        const valueHint = (meta.value && (meta.value.hint || '值')) || '值（可空）'
+        return (
         <RowShell key={index} onRemove={() => onChange(value.filter((_, i) => i !== index))}>
           <select className={tinyInput} value={row.kind} onChange={(e) => update(index, { kind: e.target.value })}>
             {EFFECT_KINDS.map(([id, label]) => (
@@ -415,18 +493,48 @@ function EffectRows({ value, onChange }) {
               </option>
             ))}
           </select>
-          <input
-            className={tinyInput + ' w-44'}
-            value={row.target || ''}
-            onChange={(e) => update(index, { target: e.target.value })}
-            placeholder="目标 ID"
-          />
-          <input
-            className={tinyInput + ' w-24'}
-            value={showValue(row.value)}
-            onChange={(e) => update(index, { value: parseValue(e.target.value) })}
-            placeholder="值（可空）"
-          />
+          {choices.length > 0 ? (
+            <select
+              className={tinyInput + ' w-44'}
+              value={row.target || ''}
+              onChange={(e) => update(index, { target: e.target.value })}
+            >
+              <option value="">{meta.placeholder || '选择目标'}</option>
+              {choices.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label} ({id})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className={tinyInput + ' w-44'}
+              value={row.target || ''}
+              onChange={(e) => update(index, { target: e.target.value })}
+              placeholder={meta.placeholder || '目标 ID'}
+            />
+          )}
+          {valueOptions.length > 0 ? (
+            <select
+              className={tinyInput + ' w-28'}
+              value={row.value === undefined || row.value === null ? '' : String(row.value)}
+              onChange={(e) => update(index, { value: e.target.value || null })}
+            >
+              <option value="">{valueHint}</option>
+              {valueOptions.map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label} ({id})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className={tinyInput + ' w-24'}
+              value={showValue(row.value)}
+              onChange={(e) => update(index, { value: parseValue(e.target.value) })}
+              placeholder={valueHint}
+            />
+          )}
           <input
             className={tinyInput + ' w-20'}
             type="number"
@@ -435,7 +543,8 @@ function EffectRows({ value, onChange }) {
             placeholder="数量"
           />
         </RowShell>
-      ))}
+        )
+      })}
       <button
         onClick={() => onChange([...value, { kind: 'set_flag', target: '', value: true, amount: 1 }])}
         className="self-start text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
@@ -755,11 +864,11 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
           </div>
           <div>
             <FieldLabel>触发条件（全部满足）</FieldLabel>
-            <ConditionRows value={value.conditions || []} onChange={(conditions) => update({ conditions })} />
+            <ConditionRows value={value.conditions || []} onChange={(conditions) => update({ conditions })} world={world} />
           </div>
           <div>
             <FieldLabel>状态效果（由规则引擎校验后执行）</FieldLabel>
-            <EffectRows value={value.effects || []} onChange={(effects) => update({ effects })} />
+            <EffectRows value={value.effects || []} onChange={(effects) => update({ effects })} world={world} />
           </div>
         </>
       )}
@@ -790,7 +899,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
           </div>
           <div>
             <FieldLabel>完成奖励</FieldLabel>
-            <EffectRows value={value.rewards || []} onChange={(rewards) => update({ rewards })} />
+            <EffectRows value={value.rewards || []} onChange={(rewards) => update({ rewards })} world={world} />
           </div>
         </>
       )}
@@ -830,7 +939,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
           </label>
           <div>
             <FieldLabel>前置条件（全部满足才允许执行）</FieldLabel>
-            <ConditionRows value={value.requires || []} onChange={(requires) => update({ requires })} />
+            <ConditionRows value={value.requires || []} onChange={(requires) => update({ requires })} world={world} />
           </div>
           <div>
             <FieldLabel>行动效果（通过校验后由规则引擎执行）</FieldLabel>

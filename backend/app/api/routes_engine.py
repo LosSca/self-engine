@@ -199,6 +199,20 @@ def get_world(world_id: str):
         store.close()
 
 
+def _campaign_entities(world_id: str, campaign_id: Optional[str]):
+    """Run-time entity records for one campaign, or {} when unavailable."""
+    if not campaign_id:
+        return {}
+    store = _get_store()
+    try:
+        state = store.get_state(campaign_id)
+    finally:
+        store.close()
+    if state is None or state.world_id != world_id:
+        return {}
+    return dict(state.entities)
+
+
 def _world_or_404_detail(world_id: str):
     """Load a world for read-only projection, mapping LookupError to 404."""
     store = _get_store()
@@ -211,18 +225,39 @@ def _world_or_404_detail(world_id: str):
 
 
 @router.get("/worlds/{world_id}/map", response_model=Dict[str, Any])
-def get_world_map(world_id: str):
+def get_world_map(world_id: str, campaign_id: Optional[str] = None):
     """Navigation graph for one world (locations, exits, doors, occupants).
 
     This is a *projection* of the authoritative world document plus the
     static catalogues (items/entities/doors) resolved into names, so a client
     can draw a map without re-implementing reference resolution. Nothing here
     is authoritative run-time state: campaign state lives under /campaigns.
+
+    Pass `campaign_id` to project *live* entity positions and health for that
+    campaign instead of the authored starting layout; without it the map shows
+    the world document exactly as authored.
     """
     world = _world_or_404_detail(world_id)
     items = {item.id: item for item in world.items}
     doors = {door.id: door for door in world.doors}
     entities = {entity.id: entity for entity in world.entities}
+    live = _campaign_entities(world_id, campaign_id)
+
+    def _present_at(location_id: str) -> List[str]:
+        out: List[str] = []
+        for entity in world.entities:
+            if entity.kind == "object":
+                continue
+            record = live.get(entity.id)
+            if record is not None:
+                # Live position only draws once the campaign moved the entity;
+                # otherwise the authored layout below stays authoritative.
+                if record.location_id != location_id:
+                    continue
+                out.append(entity.id)
+            elif entity.location_id == location_id:
+                out.append(entity.id)
+        return out
 
     def _item_ref(item_id: str) -> Dict[str, Any]:
         item = items.get(item_id)
@@ -263,7 +298,15 @@ def get_world_map(world_id: str):
                 }
             )
         npcs = []
-        for entity_id in location.npc_ids:
+        present = _present_at(location.id)
+        # Legacy location.npc_ids entries are display-only: keep them, unless the
+        # entity is a live record that has since walked elsewhere.
+        for entity_id in list(present) + [
+            npc for npc in location.npc_ids if npc not in present
+        ]:
+            departed = live.get(entity_id)
+            if departed is not None and departed.location_id != location.id:
+                continue
             entity = entities.get(entity_id)
             npcs.append(
                 {
@@ -298,7 +341,22 @@ def get_world_map(world_id: str):
         "locations": locations,
         "items": [item.model_dump(mode="json") for item in world.items],
         "doors": [door.model_dump(mode="json") for door in world.doors],
-        "entities": [entity.model_dump(mode="json") for entity in world.entities],
+        "entities": [
+            {
+                **entity.model_dump(mode="json"),
+                **(
+                    {
+                        "location_id": live[entity.id].location_id,
+                        "hp": live[entity.id].hp,
+                        "max_hp": live[entity.id].max_hp,
+                        "alive": live[entity.id].alive,
+                    }
+                    if entity.id in live
+                    else {}
+                ),
+            }
+            for entity in world.entities
+        ],
         "counts": {
             "locations": len(world.locations),
             "items": len(world.items),

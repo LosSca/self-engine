@@ -14,6 +14,8 @@ from app.models.game import (
     CombatantState,
     Condition,
     Effect,
+    EntityDef,
+    EntityState,
     EventExecution,
     GameEventDef,
     GameState,
@@ -66,6 +68,60 @@ def _door_is_open(state: GameState, world: WorldDefinition, door_id: str) -> boo
     return state.doors.get(door_id, door.opened)
 
 
+def entity_location(
+    state: GameState, world: WorldDefinition, entity_id: str
+) -> Optional[str]:
+    """Where an entity is right now, or None when the world has no such entity.
+
+    The authored EntityDef.location_id is the starting position; once anything
+    moves the entity its EntityState record wins.
+    """
+    entity = next((e for e in world.entities if e.id == entity_id), None)
+    if entity is None:
+        return None
+    record = state.entities.get(entity_id)
+    if record is not None and record.location_id:
+        return record.location_id
+    return entity.location_id
+
+
+def entity_state_for(
+    state: GameState, world: WorldDefinition, entity: EntityDef
+) -> EntityState:
+    """The run-time record for an entity, seeded from its authored attributes."""
+    existing = state.entities.get(entity.id)
+    if existing is not None:
+        return existing
+    seed = entity.attributes if isinstance(entity.attributes, dict) else {}
+
+    def _number(key: str, default: float) -> float:
+        value = seed.get(key, default)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return default
+
+    max_hp = max(1, int(_number("max_hp", _number("hp", 10))))
+    record = EntityState(
+        entity_id=entity.id,
+        location_id=entity.location_id,
+        hp=max_hp,
+        max_hp=max_hp,
+        alive=True,
+    )
+    state.entities[entity.id] = record
+    return record
+
+
+def _entity_alive(state: GameState, world: WorldDefinition, entity_id: str) -> bool:
+    combatant = state.combatants.get(entity_id)
+    if combatant is not None and not combatant.alive:
+        return False
+    record = state.entities.get(entity_id)
+    if record is not None:
+        return record.alive
+    return True
+
+
 def condition_holds(
     state: GameState, world: WorldDefinition, condition: Condition
 ) -> bool:
@@ -100,6 +156,14 @@ def condition_holds(
         alive = bool(combatant and combatant.alive)
         expected = True if condition.value is None else bool(condition.value)
         return _compare(alive, expected, condition.op)
+    if kind == "entity_at":
+        here = entity_location(state, world, condition.target)
+        return here is not None and here == str(condition.value)
+    if kind == "entity_alive":
+        expected = True if condition.value is None else bool(condition.value)
+        return _compare(
+            _entity_alive(state, world, condition.target), expected, condition.op
+        )
     return False
 
 
@@ -228,6 +292,10 @@ def apply_effect(
         was_alive = combatant.alive
         combatant.alive = combatant.hp > 0
         state.combatants[entity.id] = combatant
+        record = entity_state_for(state, world, entity)
+        record.hp = combatant.hp
+        record.max_hp = combatant.max_hp
+        record.alive = combatant.alive
         facts = [Fact("combat_hp", entity.id, combatant.hp)]
         if was_alive and not combatant.alive:
             facts.append(Fact("combatant_defeated", entity.id))
@@ -247,6 +315,35 @@ def apply_effect(
             state.flags["player_defeated"] = True
             facts.append(Fact("player_defeated", "player", 0))
         return AppliedEffect(effect, True, facts=facts)
+
+    if kind == "move_entity":
+        entity = next((e for e in world.entities if e.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        destination = str(effect.value or "")
+        location = next((l for l in world.locations if l.id == destination), None)
+        if location is None:
+            return AppliedEffect(effect, False, f"unknown location '{destination}'")
+        record = entity_state_for(state, world, entity)
+        origin = record.location_id or entity.location_id
+        record.location_id = location.id
+        return AppliedEffect(
+            effect,
+            True,
+            facts=[Fact("entity_moved", entity.id, location.id)],
+        )
+
+    if kind == "seed_entity":
+        entity = next((e for e in world.entities if e.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        if entity.id in state.entities:
+            # Already materialised: seeding is idempotent by construction.
+            return AppliedEffect(effect, True)
+        entity_state_for(state, world, entity)
+        return AppliedEffect(
+            effect, True, facts=[Fact("entity_seeded", entity.id, entity.location_id)]
+        )
 
     if kind == "emit":
         return AppliedEffect(
@@ -356,7 +453,7 @@ def validate_event(world: WorldDefinition, event: GameEventDef) -> List[str]:
     for effect in event.effects:
         errors.extend(
             WorldDefinition._validate_effect(
-                effect, item_ids, door_ids, quest_ids, entity_ids
+                effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
             )
         )
     if event.trigger == "action" and not event.trigger_action:

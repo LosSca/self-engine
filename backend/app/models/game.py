@@ -130,6 +130,8 @@ class Condition(_ConfigModel):
         "quest_status",
         "combatant_hp",
         "combatant_alive",
+        "entity_at",
+        "entity_alive",
     ]
     target: str = ""
     op: Literal["eq", "ne", "gte", "lte", "gt", "lt"] = "eq"
@@ -150,6 +152,8 @@ class Effect(_ConfigModel):
         "quest_complete",
         "combat_hp",
         "player_damage",
+        "move_entity",
+        "seed_entity",
         "emit",
     ]
     target: str = ""
@@ -342,7 +346,9 @@ class WorldDefinition(BaseModel):
             for reward in quest.rewards:
                 errors.extend(
                     f"quest '{quest.id}' reward: {msg}"
-                    for msg in self._validate_effect(reward, item_ids, door_ids, quest_ids)
+                    for msg in self._validate_effect(
+                        reward, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
                 )
 
         for event in self.events:
@@ -350,13 +356,20 @@ class WorldDefinition(BaseModel):
                 errors.extend(
                     f"event '{event.id}' condition: {msg}"
                     for msg in self._validate_condition(
-                        condition, item_ids, door_ids, location_ids, quest_ids
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
                     )
                 )
             for effect in event.effects:
                 errors.extend(
                     f"event '{event.id}' effect: {msg}"
-                    for msg in self._validate_effect(effect, item_ids, door_ids, quest_ids)
+                    for msg in self._validate_effect(
+                        effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
                 )
             if event.trigger == "action" and event.trigger_action is None:
                 errors.append(
@@ -446,7 +459,7 @@ class WorldDefinition(BaseModel):
                 errors.extend(
                     f"custom action '{custom.id}' effect: {msg}"
                     for msg in self._validate_effect(
-                        effect, item_ids, door_ids, quest_ids, entity_ids
+                        effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
                     )
                 )
         return errors
@@ -474,10 +487,16 @@ class WorldDefinition(BaseModel):
                 errors.append(f"unknown quest status '{condition.value}'")
         if condition.kind in ("has_item", "item_count") and condition.op not in ("eq", "gte"):
             errors.append("item conditions only support op 'eq' or 'gte'")
-        if condition.kind in ("combatant_hp", "combatant_alive"):
+        if condition.kind in ("combatant_hp", "combatant_alive", "entity_alive"):
             known_entities = entity_ids if entity_ids is not None else set()
             if condition.target not in known_entities:
                 errors.append(f"unknown entity '{condition.target}'")
+        if condition.kind == "entity_at":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+            if condition.value not in location_ids:
+                errors.append(f"unknown location '{condition.value}'")
         return errors
 
     @staticmethod
@@ -487,6 +506,7 @@ class WorldDefinition(BaseModel):
         door_ids: set,
         quest_ids: set,
         entity_ids: Optional[set] = None,
+        location_ids: Optional[set] = None,
     ) -> List[str]:
         errors: List[str] = []
         if effect.kind in ("give_item", "remove_item") and effect.target not in item_ids:
@@ -508,6 +528,16 @@ class WorldDefinition(BaseModel):
         if effect.kind == "player_damage":
             if int(effect.amount or 0) <= 0:
                 errors.append("player_damage requires a positive amount")
+        if effect.kind == "seed_entity":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+        if effect.kind == "move_entity":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            if effect.value not in (location_ids or set()):
+                errors.append(f"unknown location '{effect.value}'")
         return errors
 
 
@@ -540,6 +570,24 @@ class CombatantState(BaseModel):
     flee_chance: float = 0.5
 
 
+class EntityState(BaseModel):
+    """Run-time state for one world entity inside one campaign.
+
+    Authored EntityDef rows describe where an NPC *starts* and what it is;
+    this record is what is true *now*: where it is, whether it is alive and any
+    flags events hung on it. It only materialises once something changes the
+    entity, so an untouched campaign projects straight from the world document
+    and older saves (which have no `entities` key) stay valid.
+    """
+
+    entity_id: str
+    location_id: str = ""
+    hp: int = 1
+    max_hp: int = 1
+    alive: bool = True
+    flags: Dict[str, Any] = Field(default_factory=dict)
+
+
 class GameState(BaseModel):
     """The single authoritative snapshot for one campaign."""
 
@@ -558,6 +606,7 @@ class GameState(BaseModel):
     #: campaigns created before storyline support).
     story_nodes: List[str] = Field(default_factory=list)
     #: Enemy vitals and the current combat encounter, if any.
+    entities: Dict[str, EntityState] = Field(default_factory=dict)
     combatants: Dict[str, CombatantState] = Field(default_factory=dict)
     combat: Dict[str, Any] = Field(default_factory=dict)
     updated_at: str = ""

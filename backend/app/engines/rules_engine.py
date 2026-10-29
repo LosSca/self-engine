@@ -49,7 +49,25 @@ class RulesEngine:
                 code="action_not_supported",
                 message=f"The action '{kind}' is not supported by the rules engine.",
             )
-        return handler(world, state, target_id, params)
+        outcome = handler(world, state, target_id, params)
+        if outcome.ok:
+            changed = [
+                entity
+                for entity in self._entities_present(world, state.location_id)
+                if entity.id not in state.entities and entity.kind != "object"
+            ]
+            if changed:
+                # The world says where entities *start*; the campaign state says
+                # where they are now. Materialise who is here first, so their
+                # position and health become authoritative (and survive reload)
+                # from the first turn of the campaign onwards.
+                seeding = [
+                    Effect(kind="seed_entity", target=entity.id) for entity in changed
+                ]
+                outcome = outcome.model_copy(
+                    update={"effects": seeding + list(outcome.effects)}
+                )
+        return outcome
 
     # -- world-authored actions -------------------------------------------
 
@@ -167,6 +185,29 @@ class RulesEngine:
         return {loc.id: loc for loc in world.locations}
 
     @staticmethod
+    def _entities_present(world: WorldDefinition, location_id: str) -> List[EntityDef]:
+        """People and creatures at a location; scenery objects have no record."""
+        return [
+            entity
+            for entity in world.entities
+            if entity.location_id == location_id and entity.kind != "object"
+        ]
+
+    @staticmethod
+    def _entity_here(state: GameState, world: WorldDefinition, entity: EntityDef) -> bool:
+        from app.engines.event_engine import entity_location
+
+        return entity_location(state, world, entity.id) == state.location_id
+
+    @staticmethod
+    def _entity_alive(state: GameState, world: WorldDefinition, entity_id: str) -> bool:
+        combatant = state.combatants.get(entity_id)
+        if combatant is not None and not combatant.alive:
+            return False
+        record = state.entities.get(entity_id)
+        return record.alive if record is not None else True
+
+    @staticmethod
     def _door_is_open(state: GameState, door: DoorDef) -> bool:
         return state.doors.get(door.id, door.opened)
 
@@ -207,7 +248,7 @@ class RulesEngine:
         people = [
             entity.name
             for entity in world.entities
-            if entity.location_id == loc.id and entity.kind != "object"
+            if self._entity_here(state, world, entity) and entity.kind != "object"
         ]
         parts = [loc.description or loc.name]
         if here:
@@ -557,6 +598,12 @@ class RulesEngine:
         if error is not None:
             return error
         assert entity is not None and combatant is not None
+        if not self._entity_here(state, world, entity):
+            return RuleOutcome(
+                ok=False,
+                code="entity_not_here",
+                message=f"{entity.name} is not here.",
+            )
         rng = random.Random(self._seed(state, "attack", entity.id))
         player_attack, _player_defense = self._player_stats(state)
         # A hit needs more than a lucky swing: compare the attacker's power to
@@ -717,7 +764,7 @@ class RulesEngine:
                 message=f"The current location '{state.location_id}' is not defined.",
             )
         entities = {entity.id: entity for entity in world.entities}
-        present = [e for e in world.entities if e.location_id == loc.id]
+        present = [e for e in world.entities if self._entity_here(state, world, e)]
         legacy_names = [npc for npc in loc.npc_ids if npc not in entities]
         if target_id:
             entity = entities.get(target_id)
@@ -733,11 +780,17 @@ class RulesEngine:
                     code="nobody_here",
                     message="There is nobody here by that name to talk to.",
                 )
-            if entity.location_id != loc.id:
+            if not self._entity_here(state, world, entity):
                 return RuleOutcome(
                     ok=False,
                     code="entity_not_here",
                     message=f"{entity.name} is not here.",
+                )
+            if not self._entity_alive(state, world, entity.id):
+                return RuleOutcome(
+                    ok=False,
+                    code="entity_dead",
+                    message=f"{entity.name} is beyond conversation.",
                 )
             line = entity.dialogue[0] if entity.dialogue else ""
             message = (
