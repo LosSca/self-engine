@@ -672,6 +672,100 @@ export async function fetchCampaignStory(campaignId) {
   return jsonOrThrow(r, '读取故事线进度失败')
 }
 // ---------------------------------------------------------------- 世界工坊 / v1 引擎
+// ---------------------------------------------------------------------------
+// Rules engine lane (/api/v1). Deterministic, transactional, idempotent: these
+// calls never let the model decide an outcome, only describe one.
+// ---------------------------------------------------------------------------
+
+const ENGINE_V1 = '/api/v1'
+
+/** A fresh request id: the engine treats a repeated id as a replay, not a retry. */
+export function newRequestId() {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  } catch {}
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** Which lane should answer this campaign? 'engine' once a world is bound. */
+export async function fetchEngineAvailability(campaignId) {
+  try {
+    const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/lane`)
+    if (!r.ok) return { bound: false, state: null, error: `HTTP ${r.status}` }
+    const lane = await r.json()
+    if (!lane.bound) return { bound: false, state: null }
+    let state = null
+    try {
+      state = await fetchEngineState(campaignId)
+    } catch {}
+    return { bound: true, state, worldId: lane.world_id }
+  } catch (err) {
+    return { bound: false, state: null, error: String(err) }
+  }
+}
+
+/** Bind a world to this campaign (the moment a campaign becomes rule-driven). */
+export async function bindCampaignToWorld(campaignId, worldId, reset = false) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/world`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ world_id: worldId, reset }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function fetchEngineState(campaignId) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/state`)
+  if (!r.ok) throw new Error('Failed to fetch engine state')
+  return r.json()
+}
+
+/**
+ * Send one utterance to the rules engine.
+ *
+ * Returns the full ActionResult (status / code / message / state_version /
+ * effects / events / narrative). A non-2xx response is not swallowed: the
+ * caller needs to distinguish "rejected by rules" from "request failed".
+ */
+export async function submitTextAction(campaignId, text, { requestId, narrate = true } = {}) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/text-actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text,
+      request_id: requestId || newRequestId(),
+      narrate,
+    }),
+  })
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '')
+    throw new Error(`${r.status} ${detail.slice(0, 300)}`)
+  }
+  return r.json()
+}
+
+/** Structured action (used by UI affordances that already know the target). */
+export async function submitAction(campaignId, { action, targetId = null, params = {}, requestId, narrate = true }) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      campaign_id: campaignId,
+      request_id: requestId || newRequestId(),
+      action,
+      target_id: targetId,
+      params,
+      narrate,
+    }),
+  })
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '')
+    throw new Error(`${r.status} ${detail.slice(0, 300)}`)
+  }
+  return r.json()
+}
+
 export async function fetchWorlds(scenarioId) {
   const query = scenarioId ? `?scenario_id=${encodeURIComponent(scenarioId)}` : ''
   const r = await fetch(`${V1}/worlds${query}`)

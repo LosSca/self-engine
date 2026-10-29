@@ -339,6 +339,35 @@ def bind_world(campaign_id: str, body: BindWorldRequest):
         store.close()
 
 
+@router.get("/campaigns/{campaign_id}/lane", response_model=Dict[str, Any])
+def get_campaign_lane(campaign_id: str):
+    """Which engine answers this campaign: 'engine' (rules) or 'narrative' (LLM).
+
+    A campaign becomes rule-driven the moment a world is bound to it. Until
+    then it keeps the legacy free-form lane, so existing saves are untouched.
+    """
+    store = _get_store()
+    try:
+        state = store.get_state(campaign_id)
+    finally:
+        store.close()
+    if state is None:
+        return {
+            "campaign_id": campaign_id,
+            "lane": "narrative",
+            "bound": False,
+            "world_id": "",
+            "version": 0,
+        }
+    return {
+        "campaign_id": campaign_id,
+        "lane": "engine",
+        "bound": True,
+        "world_id": state.world_id,
+        "version": state.version,
+    }
+
+
 @router.get("/campaigns/{campaign_id}/state", response_model=GameState)
 def get_campaign_state(campaign_id: str):
     store = _get_store()

@@ -20,6 +20,17 @@ class FailingNarrator:
         return NarrativeResult(status="failed", error="narrator unavailable")
 
 
+class ExplodingNarrator:
+    """The model client raises instead of returning a failed result."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def narrate(self, *args, **kwargs):
+        self.calls += 1
+        raise TimeoutError("model call timed out")
+
+
 @pytest.fixture
 def store(tmp_path):
     store = GameStateStore(str(tmp_path / "game_state.db"))
@@ -197,4 +208,36 @@ async def test_failed_commit_does_not_leak_state(store):
             state=store.get_state("camp-1").model_copy(update={"version": 99}),
             events=[],
         )
+    assert store.get_state("camp-1").version == 0
+
+
+async def test_narrator_exception_still_commits_the_turn(store):
+    """A raising model client must not undo a rules-decided action."""
+    bound_world(store)
+    narrator = ExplodingNarrator()
+    service = ActionService(store, narrator=narrator)
+
+    result = await service.execute(_request("req-take", "take", "iron_key"))
+
+    assert result.status == "applied"
+    assert result.state_version == 1
+    assert result.narrative.status == "failed"
+    assert "TimeoutError" in result.narrative.error
+    stored = store.get_state("camp-1")
+    assert stored.version == 1
+    assert stored.inventory == {"iron_key": 1}
+    assert "narrative.failed" in [
+        event["event_type"] for event in store.list_events("camp-1")
+    ]
+
+
+async def test_narrator_exception_on_a_rejected_action_is_reported_not_raised(store):
+    bound_world(store)
+    service = ActionService(store, narrator=ExplodingNarrator())
+
+    result = await service.execute(_request("req-open", "open", "warehouse_door"))
+
+    assert result.status == "rejected"
+    assert result.code == "door_locked"
+    assert result.narrative.status == "failed"
     assert store.get_state("camp-1").version == 0

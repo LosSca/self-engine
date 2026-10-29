@@ -8,11 +8,15 @@ Order of operations for one request:
   5. rejected -> persist the request row only, state untouched
   6. accepted -> apply effects, fire events, advance quests on a copy
   7. narrate from that settled result (prose only; cannot change state)
-  8. commit state + request row + domain events in ONE transaction
+  8. commit state + request row + domain events in ONE transaction, guarded by
+     a compare-and-set on the version the turn was decided from
 
-The narrator runs before the commit but has no write access, so a narrative
-failure is recorded in the same commit instead of rolling anything back, and a
-crash can never leave prose describing a change that was not stored.
+The narrator runs before the commit but has no write access: it receives the
+settled state, it cannot mutate it, and any exception it raises is converted
+into NarrativeResult(status="failed"). The turn therefore still commits, the
+failure is recorded as a narrative.failed domain event next to the change it
+failed to describe, and a crash can never leave prose describing a change that
+was not stored.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from app.db.game_state_store import GameStateStore
+from app.db.game_state_store import GameStateStore, StateConflictError
 from app.engines.event_engine import apply_effects, run_triggered_events
 from app.engines.quest_engine import advance_quests
 from app.engines.rules_engine import RulesEngine
@@ -201,13 +205,91 @@ class ActionService:
                 result_payload=result.model_dump(mode="json"),
                 state=new_state,
                 events=events,
+                expected_version=state.version,
             )
         except sqlite3.IntegrityError:
             raced = self._replay(request, payload)
             if raced is None:
                 raise
             return raced
+        except StateConflictError as exc:
+            # Another request committed first. Nothing of this turn was
+            # written (the failed transaction also rolled back the request
+            # row), so the same request_id can safely be decided again
+            # from the new state; no side effect can be applied twice.
+            retried = await self._retry_on_conflict(request, payload, attempts=1)
+            if retried is not None:
+                return retried
+            return self._conflict(request, payload, exc)
         return result
+
+    async def _retry_on_conflict(
+        self, request: ActionRequest, payload: Dict[str, Any], attempts: int
+    ) -> Optional[ActionResult]:
+        """Re-decide one write that lost a race, at most ``attempts`` times."""
+        for _ in range(attempts):
+            state = self.store.get_state(request.campaign_id)
+            if state is None:
+                return None
+            world = self.store.get_world(state.world_id)
+            if world is None:
+                return None
+            outcome = self.rules.evaluate(
+                world, state, request.action, request.target_id, request.params
+            )
+            if not outcome.ok:
+                return None
+            quiet = request.model_copy(update={"narrate": False})
+            result, new_state, events = await self._apply(
+                quiet, payload, state, world, outcome, record_rejection=False
+            )
+            if result.status != "applied":
+                return None
+            try:
+                self.store.commit_action(
+                    campaign_id=request.campaign_id,
+                    request_id=request.request_id,
+                    request_payload=payload,
+                    status="applied",
+                    result_payload=result.model_dump(mode="json"),
+                    state=new_state,
+                    events=events,
+                    expected_version=state.version,
+                )
+            except StateConflictError:
+                continue
+            except sqlite3.IntegrityError:
+                return self._replay(request, payload)
+            # The retried turn answers with the committed result and no prose:
+            # narration is presentation only, and a second model call is not
+            # worth blocking a database write on.
+            result.message = (result.message + " (re-resolved after a concurrent change)").strip()
+            return result
+        return None
+
+    def _conflict(
+        self,
+        request: ActionRequest,
+        payload: Dict[str, Any],
+        exc: Optional[StateConflictError],
+    ) -> ActionResult:
+        current = self.store.get_state(request.campaign_id)
+        return ActionResult(
+            **self._base(request),
+            status="conflict",
+            ok=False,
+            code="version_conflict",
+            message=(
+                "the campaign state changed while this request was being resolved; "
+                "retry with a new request_id"
+            ),
+            state_version=(
+                current.version
+                if current is not None
+                else (exc.actual_version if exc is not None else 0)
+            ),
+            state=current,
+        )
 
     def _replay(
         self, request: ActionRequest, payload: Dict[str, Any]
@@ -246,22 +328,29 @@ class ActionService:
         world: WorldDefinition,
         outcome: RuleOutcome,
     ) -> ActionResult:
-        narrative = NarrativeResult(status="skipped")
+        # A refused action also gets prose, but only as explanation of the
+        # refusal: the state it describes is untouched either way.
         knowledge: List[Dict[str, Any]] = []
         context_entries: List[str] = []
         options: Optional[Dict[str, Any]] = None
+        narrative = NarrativeResult(status="skipped")
         if request.narrate:
-            blocks, context_entries, options = self._knowledge(
-                self._load_play_context(world), None
-            )
-            knowledge = blocks
-            narrative = await self.narrator.narrate(
-                request,
-                outcome,
-                state,
-                world,
-                **self._narrate_options(knowledge, options),
-            )
+            try:
+                blocks, context_entries, options = self._knowledge(
+                    self._load_play_context(world), None
+                )
+                knowledge = blocks
+                narrative = await self.narrator.narrate(
+                    request,
+                    outcome,
+                    state,
+                    world,
+                    **self._narrate_options(knowledge, options),
+                )
+            except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
+                narrative = NarrativeResult(
+                    status="failed", error=f"{type(exc).__name__}: {exc}"
+                )
         result = ActionResult(
             **self._base(request),
             status="rejected",
@@ -315,6 +404,50 @@ class ActionService:
             "facts": [fact.kind for item in applied for fact in item.facts],
         }
 
+    async def _narrate_applied(
+        self,
+        request: ActionRequest,
+        outcome: RuleOutcome,
+        new_state: GameState,
+        world: WorldDefinition,
+        executions: List[Any],
+        quest_updates: List[Any],
+        play: Optional[ScenarioPlayContext],
+        active_node: Optional[str],
+    ) -> tuple[NarrativeResult, List[str]]:
+        """Describe a settled turn, never decide it.
+
+        The state handed in here is already the committed result. Any failure
+        of the narrator is reported in the returned NarrativeResult instead of
+        propagating, so a flaky model cannot undo a rules-decided turn.
+        """
+        if not request.narrate:
+            return NarrativeResult(status="skipped"), []
+        knowledge: List[Dict[str, Any]] = []
+        context_entries: List[str] = []
+        options: Optional[Dict[str, Any]] = None
+        try:
+            blocks, context_entries, options = self._knowledge(play, active_node)
+            knowledge = blocks
+            narrative = await self.narrator.narrate(
+                request,
+                outcome,
+                new_state,
+                world,
+                executions,
+                [update.quest_id for update in quest_updates],
+                **self._narrate_options(knowledge, options),
+            )
+        except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
+            return (
+                NarrativeResult(
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
+                context_entries,
+            )
+        return narrative, context_entries
+
     async def _apply(
         self,
         request: ActionRequest,
@@ -322,6 +455,7 @@ class ActionService:
         state: GameState,
         world: WorldDefinition,
         outcome: RuleOutcome,
+        record_rejection: bool = True,
     ) -> tuple[ActionResult, GameState, List[Dict[str, Any]]]:
         new_state = state.model_copy(deep=True)
         applied = apply_effects(new_state, world, outcome.effects)
@@ -336,14 +470,15 @@ class ActionService:
                 state_version=state.version,
                 state=state,
             )
-            self.store.record_request(
-                campaign_id=request.campaign_id,
-                request_id=request.request_id,
-                request_payload=payload,
-                status="rejected",
-                result_payload=result.model_dump(mode="json"),
-                state_version=state.version,
-            )
+            if record_rejection:
+                self.store.record_request(
+                    campaign_id=request.campaign_id,
+                    request_id=request.request_id,
+                    request_payload=payload,
+                    status="rejected",
+                    result_payload=result.model_dump(mode="json"),
+                    state_version=state.version,
+                )
             return result, state, []
 
         facts = [fact for item in applied for fact in item.facts]
@@ -370,22 +505,12 @@ class ActionService:
         new_state.turn = state.turn + 1
         new_state.updated_at = _now()
 
-        narrative = NarrativeResult(status="skipped")
-        knowledge: List[Dict[str, Any]] = []
-        context_entries: List[str] = []
-        options: Optional[Dict[str, Any]] = None
-        if request.narrate:
-            blocks, context_entries, options = self._knowledge(play, active_node)
-            knowledge = blocks
-            narrative = await self.narrator.narrate(
-                request,
-                outcome,
-                new_state,
-                world,
-                executions,
-                [update.quest_id for update in quest_updates],
-                **self._narrate_options(knowledge, options),
-            )
+        # Narration is presentation only: it reads the settled state but can
+        # never fail, roll back or rewrite it. A model timeout or a bad payload
+        # degrades to status="failed" and the turn still commits.
+        narrative, context_entries = await self._narrate_applied(
+            request, outcome, new_state, world, executions, quest_updates, play, active_node
+        )
 
         result = ActionResult(
             **self._base(request),

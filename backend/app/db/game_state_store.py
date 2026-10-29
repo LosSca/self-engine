@@ -25,6 +25,9 @@ from app.models.game import GameState, WorldDefinition
 
 SCHEMA_VERSION = 2
 
+#: Seconds a writer waits for another writer's transaction before giving up.
+BUSY_TIMEOUT_SECONDS = 10.0
+
 _IDX_REQUESTS = (
     "CREATE INDEX IF NOT EXISTS idx_action_requests_campaign "
     "ON action_requests(campaign_id, created_at)"
@@ -90,6 +93,19 @@ def _now() -> str:
     return datetime.utcnow().isoformat()
 
 
+class StateConflictError(RuntimeError):
+    """The stored state moved on since the caller read it."""
+
+    def __init__(self, campaign_id: str, expected_version: int, actual_version: int):
+        self.campaign_id = campaign_id
+        self.expected_version = expected_version
+        self.actual_version = actual_version
+        super().__init__(
+            f"campaign '{campaign_id}' is at version {actual_version}, "
+            f"expected {expected_version}"
+        )
+
+
 class GameStateStore:
     """Thin, explicit SQLite store. No ORM, no hidden global state."""
 
@@ -98,7 +114,8 @@ class GameStateStore:
         parent = os.path.dirname(os.path.abspath(db_path))
         if parent:
             os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        # A concurrent writer waits instead of failing with "database is locked".
+        self._conn = sqlite3.connect(db_path, timeout=BUSY_TIMEOUT_SECONDS, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._migrate()
@@ -262,12 +279,18 @@ class GameStateStore:
         result_payload: Dict[str, Any],
         state: GameState,
         events: List[Dict[str, Any]],
+        expected_version: Optional[int] = None,
     ) -> None:
         """Commit the request row, the new state and the domain events atomically.
 
         The request row is inserted first: a duplicate request_id raises
         sqlite3.IntegrityError and the whole transaction (including the state
         update) rolls back.
+
+        ``expected_version`` is the version the caller read before deciding the
+        outcome. When given, the state row is only updated if it still holds
+        that version; otherwise StateConflictError is raised and the whole
+        transaction (request row included) rolls back.
         """
         with self._lock, self._conn:
             self._conn.execute(
@@ -285,15 +308,30 @@ class GameStateStore:
                     _now(),
                 ),
             )
-            updated = self._conn.execute(
-                "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
-                " WHERE campaign_id = ?",
-                (state.version, state.model_dump_json(), _now(), campaign_id),
-            )
-            if updated.rowcount == 0:
-                raise ValueError(
-                    f"campaign '{campaign_id}' has no bound state; bind a world first"
+            # Compare-and-set: the row is only written when the caller's
+            # expected version still matches, so a slower concurrent request
+            # cannot silently overwrite a faster one (lost update). Callers
+            # that pass no expected version keep the pre-existing behaviour.
+            if expected_version is None:
+                updated = self._conn.execute(
+                    "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
+                    " WHERE campaign_id = ?",
+                    (state.version, state.model_dump_json(), _now(), campaign_id),
                 )
+            else:
+                updated = self._conn.execute(
+                    "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
+                    " WHERE campaign_id = ? AND version = ?",
+                    (
+                        state.version,
+                        state.model_dump_json(),
+                        _now(),
+                        campaign_id,
+                        expected_version,
+                    ),
+                )
+            if updated.rowcount == 0:
+                self._raise_missing_or_conflict(campaign_id, expected_version)
             self._insert_snapshot(state, request_id=request_id)
             for event in events:
                 self._conn.execute(
@@ -311,6 +349,20 @@ class GameStateStore:
                         event.get("created_at") or _now(),
                     ),
                 )
+
+    def _raise_missing_or_conflict(self, campaign_id: str, expected: Optional[int]) -> None:
+        row = self._conn.execute(
+            "SELECT version FROM campaign_state WHERE campaign_id = ?", (campaign_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"campaign '{campaign_id}' has no bound state; bind a world first"
+            )
+        raise StateConflictError(
+            campaign_id,
+            expected_version=expected if expected is not None else -1,
+            actual_version=int(row["version"]),
+        )
 
     # ------------------------------------------------------------- snapshots
     def _insert_snapshot(

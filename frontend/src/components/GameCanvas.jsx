@@ -4,6 +4,9 @@ import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, 
 import { useGameStore } from '../store'
 import {
   streamAction,
+  fetchEngineAvailability,
+  fetchEngineState,
+  submitTextAction,
   fetchJournal,
   fetchHistory,
   fetchInventory as fetchInventoryApi,
@@ -196,6 +199,9 @@ export default function GameCanvas() {
   const [regenerating, setRegenerating] = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [draft, setDraft] = useState(null)
+  // 'engine' = the campaign has an authoritative world bound, so rules decide
+  // every outcome; 'narrative' = the legacy free-form LLM lane.
+  const [engineLane, setEngineLane] = useState({ checked: false, bound: false, state: null })
 
   // Restore session on mount if state is missing
   useEffect(() => {
@@ -375,7 +381,75 @@ export default function GameCanvas() {
     }
   }
 
+  // A campaign is rule-driven as soon as it has a bound world. Probed once per
+  // campaign; a 404 from /state means the legacy narrative lane still owns it.
+  useEffect(() => {
+    let cancelled = false
+    if (!activeCampaignId) {
+      setEngineLane({ checked: false, bound: false, state: null })
+      return () => { cancelled = true }
+    }
+    fetchEngineAvailability(activeCampaignId).then((availability) => {
+      if (cancelled) return
+      setEngineLane({ checked: true, ...availability })
+    })
+    return () => { cancelled = true }
+  }, [activeCampaignId])
+
+  const applyEngineResult = (result) => {
+    const narrative = result?.narrative
+    const text = narrative?.text?.trim()
+    const parts = []
+    if (text) {
+      parts.push(text)
+    } else if (result?.status === 'rejected') {
+      parts.push(`（${result.message || result.code || '行动被规则拒绝'}）`)
+    } else if (result?.status === 'conflict') {
+      parts.push(`（${result.message || '状态已变化，请重试'}）`)
+    } else if (result?.status === 'duplicate') {
+      parts.push('（这条行动之前已经处理过，本次没有产生新的变化。）')
+    } else if (narrative?.status === 'failed') {
+      parts.push(`（叙事生成失败：${narrative.error || '未知错误'}。行动结果与状态已经提交，当前状态版本 ${result.state_version}。）`)
+    }
+    if (parts.length === 0) parts.push('（无叙事输出）')
+    appendMessage({ role: 'assistant', content: parts.join('\n\n') })
+    if (result?.version != null) {
+      setEngineLane((prev) => ({ ...prev, checked: true, bound: true, version: result.version }))
+    }
+    if (result?.state) {
+      // The engine state is authoritative: mirror it into the本地 panels.
+      try { setEngineLane((prev) => ({ ...prev, checked: true, bound: true, state: result.state })) } catch {}
+    }
+  }
+
+  const handleEngineAction = async (action) => {
+    setSuggestions([])
+    appendMessage({ role: 'user', content: action })
+    setStreaming(true)
+    try {
+      const result = await submitTextAction(activeCampaignId, action)
+      applyEngineResult(result)
+      const triggered = Array.isArray(result?.events_fired) ? result.events_fired.length : 0
+      if (triggered > 0) {
+        pushTrace([{
+          label: '规则事件',
+          entries: result.events_fired.map((e) => `${e.event_id} ${e.status}${e.reason ? ` (${e.reason})` : ''}`),
+        }])
+      }
+    } catch (err) {
+      appendMessage({
+        role: 'assistant',
+        content: `（规则引擎请求失败：${err.message || err}。没有产生任何状态变化。）`,
+      })
+    } finally {
+      setStreaming(false)
+    }
+  }
+
   const handleAction = (action) => {
+    if (engineLane.checked && engineLane.bound) {
+      return handleEngineAction(action)
+    }
     setSuggestions([])
     appendMessage({ role: 'user', content: action })
     setStreaming(true)
@@ -487,6 +561,20 @@ export default function GameCanvas() {
               </h1>
               <div className="flex items-center gap-2 text-white/40 text-xs font-mono uppercase">
                 <span>存档 ID: {activeCampaignId?.slice(0, 8) || '离线'}</span>
+                {engineLane.checked && (
+                  <span
+                    className={`normal-case border-l border-white/10 pl-2 ${engineLane.bound ? 'text-emerald-400/70' : 'text-white/25'}`}
+                    title={
+                      engineLane.bound
+                        ? '规则引擎接管：结果由确定性规则判定，叙事只负责描述'
+                        : '自由叙事模式：本战役尚未绑定世界，结果由 LLM 驱动'
+                    }
+                  >
+                    {engineLane.bound
+                      ? `规则引擎 v${engineLane.state?.version ?? engineLane.version ?? 0}`
+                      : '自由叙事'}
+                  </span>
+                )}
                 {lastUsage && (
                   <span
                     className="text-white/30 normal-case cursor-help border-l border-white/10 pl-2"
