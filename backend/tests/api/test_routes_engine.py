@@ -12,6 +12,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GAME_STATE_DB_PATH", str(tmp_path / "game_state.db"))
     monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
     monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenarios.db"))
+    # The knowledge graph is a real Neo4j instance on the developer's box; a
+    # test must never depend on it being up or reachable.
+    monkeypatch.setenv("ENGINE_GRAPH_MIRROR", "0")
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
     from app.main import app
 
     return TestClient(app)
@@ -245,3 +249,104 @@ def test_story_endpoint_tracks_storyline_progress(client, tmp_path):
     assert story["active"] == "open"
     assert story["storyline"]["name"] == "仓库线"
     assert [node["id"] for node in story["storyline"]["nodes"]] == ["arrive", "open"]
+
+
+def test_diagnostics_reports_ok_narration_before_any_turn(client):
+    _create_world(client)
+    client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
+    body = client.get(f"{API}/campaigns/camp-1/diagnostics").json()
+    assert body["narration"]["status"] == "unreported"
+    assert body["narration"]["recent_failures"] == 0
+    assert body["narration"]["narrator"]["choice"] in {"template", "llm"}
+
+
+def test_diagnostics_sees_a_broken_narrator(client, monkeypatch):
+    """A narrator that fails every turn must be visible from /diagnostics."""
+    monkeypatch.setenv("ENGINE_NARRATOR", "template")
+    _create_world(client)
+    client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
+
+    from app.api import routes_engine
+
+    broken = routes_engine._service()
+    try:
+        class Boom:
+            async def narrate(self, *args, **kwargs):
+                raise TimeoutError("model call timed out")
+
+        broken.narrator = Boom()
+        import asyncio
+
+        from app.models.game import ActionRequest
+
+        result = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+            broken.execute(
+                ActionRequest(
+                    campaign_id="camp-1", request_id="diag-1", action="look"
+                )
+            )
+        )
+        assert result.status == "applied"
+        assert result.narrative is not None
+        assert result.narrative.status == "failed"
+    finally:
+        broken.store.close()
+
+    body = client.get(f"{API}/campaigns/camp-1/diagnostics").json()
+    assert body["narration"]["status"] == "degraded"
+    assert body["narration"]["recent_failures"] >= 1
+    assert "TimeoutError" in body["narration"]["last_failure"]["payload"]["error"]
+
+
+def test_snapshot_listing_reports_bytes(client):
+    _create_world(client)
+    client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
+    client.post(
+        f"{API}/campaigns/camp-1/actions",
+        json={"campaign_id": "camp-1", "request_id": "r1", "action": "look"},
+    )
+    rows = client.get(f"{API}/campaigns/camp-1/snapshots").json()
+    assert rows and all(row["bytes"] > 0 for row in rows)
+    latest = rows[0]
+    assert latest["stored_bytes"] >= latest["bytes"]
+    pruned = client.get(f"{API}/campaigns/camp-1/snapshots/prune").json()
+    assert pruned["bytes"] > 0
+
+
+def test_committed_narration_is_recorded_in_the_event_log(client):
+    _create_world(client)
+    client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
+    result = client.post(
+        f"{API}/campaigns/camp-1/actions",
+        json={"campaign_id": "camp-1", "request_id": "r1", "action": "look"},
+    ).json()
+    assert result["narrative"]["status"] == "ok"
+    events = client.get(f"{API}/campaigns/camp-1/events").json()
+    types = [event["event_type"] for event in events]
+    assert "narrator.response" in types, types
+    stored = next(e for e in events if e["event_type"] == "narrator.response")
+    assert stored["payload"]["text"] == result["narrative"]["text"]
+
+
+def test_graph_mirror_is_off_without_neo4j_credentials(client, monkeypatch):
+    from app.api import routes_engine
+
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
+    assert routes_engine._graph_mirror_sink() is None
+    monkeypatch.setattr(
+        "app.engines.graphiti_engine.GraphitiEngine.__init__",
+        lambda self, *a, **k: None,
+    )
+    monkeypatch.setenv("NEO4J_PASSWORD", "secret")
+    monkeypatch.setenv("ENGINE_GRAPH_MIRROR", "0")
+    sink = routes_engine._graph_mirror_sink()
+    calls = []
+    monkeypatch.setattr(
+        "app.engines.graphiti_engine.GraphitiEngine.ingest_episode",
+        lambda *a, **k: calls.append((a, k)),
+    )
+    sink("camp-1", None, type("N", (), {"text": "prose"})())
+    import time
+
+    time.sleep(0.05)
+    assert calls == [], "ENGINE_GRAPH_MIRROR=0 must silence the mirror"

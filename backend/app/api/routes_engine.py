@@ -7,8 +7,10 @@ state version it produced.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
@@ -159,6 +161,69 @@ def _history_provider():
     return provider
 
 
+def _graph_mirror_enabled() -> bool:
+    """Mirror committed turns into the knowledge graph unless told not to.
+
+    Read from the environment on every turn so a test (or an operator) can
+    turn it off without a restart; ENGINE_GRAPH_MIRROR=0 disables it.
+    """
+    raw = (os.environ.get("ENGINE_GRAPH_MIRROR") or "1").strip().lower()
+    return raw not in ("0", "off", "false", "no", "none", "")
+
+
+def _neo4j_settings():
+    uri = (os.environ.get("NEO4J_URI") or "").strip() or "bolt://localhost:7687"
+    user = (os.environ.get("NEO4J_USER") or "").strip() or "neo4j"
+    password = (os.environ.get("NEO4J_PASSWORD") or "").strip()
+    return uri, user, password
+
+
+def _graph_mirror_sink():
+    """Build the post-commit mirror: committed turns become graph episodes.
+
+    Returns None when no password is configured, so a machine without Neo4j
+    behaves exactly as before (nothing is attempted). The mirror only reads
+    what was committed; it can never change a turn.
+    """
+    from app.engines.graphiti_engine import GraphitiEngine
+
+    uri, user, password = _neo4j_settings()
+    if not password:
+        return None
+    try:
+        engine = GraphitiEngine(uri, user, password)
+    except Exception as exc:  # noqa: BLE001 - graphiti is an optional extra
+        logger.info("knowledge graph mirror unavailable: %s", exc)
+        return None
+
+    def sink(campaign_id: str, state, narrative) -> None:
+        if not _graph_mirror_enabled():
+            return
+        text = getattr(narrative, "text", "") or ""
+        if not text.strip():
+            return
+
+        def _run() -> None:
+            try:
+                asyncio.run(
+                    engine.ingest_episode(
+                        campaign_id=campaign_id,
+                        text=text,
+                        description="narrator_response",
+                    )
+                )
+            except Exception:  # noqa: BLE001 - a mirror must never hurt a turn
+                logger.warning(
+                    "knowledge graph mirror failed for %s", campaign_id, exc_info=True
+                )
+
+        threading.Thread(
+            target=_run, name=f"graph-mirror-{campaign_id}", daemon=True
+        ).start()
+
+    return sink
+
+
 def _service() -> ActionService:
     scenario_store = _get_scenario_store()
     service = ActionService(
@@ -166,6 +231,7 @@ def _service() -> ActionService:
         narrator=_get_narrator(),
         context_provider=_make_context_provider(scenario_store),
         history_provider=_history_provider(),
+        settled_sink=_graph_mirror_sink(),
     )
     #: Closed together with the game store by the request handler.
     service.scenario_store = scenario_store
@@ -591,6 +657,34 @@ def _campaign_world_and_config(game_store, scenario_store, campaign_id):
     return state, world, config
 
 
+def _narration_health(game_store, campaign_id: str, limit: int = 50) -> Dict[str, Any]:
+    """Summarize how narration has been going, without reading any model output.
+
+    A narrator that fails every turn is otherwise invisible: the turn still
+    commits, which is correct, but nothing reports that prose is missing. This
+    counts the recorded failures so a stuck model shows up in /diagnostics.
+    """
+    events = game_store.list_domain_events(
+        campaign_id, event_type_prefix="narrative.", limit=limit
+    )
+    failures = [event for event in events if event["event_type"] == "narrative.failed"]
+    if events:
+        status = "degraded" if failures else "ok"
+    else:
+        status = "unreported"
+    try:
+        narrator = narrator_factory.describe()
+    except Exception:  # pragma: no cover - never let a panel break diagnostics
+        narrator = {"choice": "unknown"}
+    return {
+        "status": status,
+        "window": limit,
+        "recent_failures": len(failures),
+        "last_failure": (failures[0] if failures else None),
+        "narrator": narrator,
+    }
+
+
 @router.get("/campaigns/{campaign_id}/diagnostics", response_model=Dict[str, Any])
 def campaign_diagnostics(campaign_id: str):
     game_store = _get_store()
@@ -610,6 +704,7 @@ def campaign_diagnostics(campaign_id: str):
             "errors": sum(1 for issue in issues if issue.severity == "error"),
             "warnings": sum(1 for issue in issues if issue.severity == "warning"),
             "issues": [issue.as_dict() for issue in issues],
+            "narration": _narration_health(game_store, campaign_id),
         }
     finally:
         game_store.close()
@@ -632,9 +727,15 @@ def campaign_snapshots_prune(campaign_id: str):
     try:
         dropped = store.prune_snapshots(campaign_id)
         remaining = len(store.list_snapshots(campaign_id, limit=500))
+        stats = store.snapshot_stats(campaign_id)
     finally:
         store.close()
-    return {"campaign_id": campaign_id, "dropped": dropped, "remaining": remaining}
+    return {
+        "campaign_id": campaign_id,
+        "dropped": dropped,
+        "remaining": remaining,
+        "bytes": stats["total_bytes"],
+    }
 
 
 @router.get("/campaigns/{campaign_id}/snapshots/{version}", response_model=GameState)

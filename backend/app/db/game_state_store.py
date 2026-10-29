@@ -14,6 +14,7 @@ Design notes (phase 1):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -23,7 +24,19 @@ from typing import Any, Dict, List, Optional
 
 from app.models.game import GameState, WorldDefinition
 
+logger = logging.getLogger(__name__)
+
 SCHEMA_VERSION = 2
+
+def _worlds_disagree(snapshot_json: str, current_world_id: str) -> bool:
+    """True when a stored snapshot described a different world than the live one."""
+    try:
+        payload = json.loads(snapshot_json)
+    except (TypeError, ValueError):
+        return False
+    stored = payload.get("world_id")
+    return bool(stored) and bool(current_world_id) and stored != current_world_id
+
 
 #: Audit event types written by storage maintenance rather than by gameplay.
 _HOUSEKEEPING_EVENTS = ("snapshot.pruned",)
@@ -377,6 +390,34 @@ class GameStateStore:
             actual_version=int(row["version"]),
         )
 
+    def _history_belongs_to_another_world(
+        self, campaign_id: str, versions: List[int]
+    ) -> bool:
+        """A rebound or locally re-edited world must not lose its old history."""
+        current = self._conn.execute(
+            "SELECT world_id, state_json FROM campaign_state WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()
+        if current is None:
+            return False
+        current_world_id = current["world_id"] or ""
+        if not current_world_id:
+            return False
+        anchor = self._conn.execute(
+            "SELECT state_json FROM campaign_snapshots"
+            " WHERE campaign_id = ? AND version = 0",
+            (campaign_id,),
+        ).fetchone()
+        if anchor is not None:
+            # Version 0 is always kept, so it is the authority on which world
+            # this history describes.
+            return _worlds_disagree(anchor["state_json"], current_world_id)
+        try:
+            live_world_id = json.loads(current["state_json"]).get("world_id") or ""
+        except (TypeError, ValueError):
+            return False
+        return bool(live_world_id) and live_world_id != current_world_id
+
     def prune_snapshots(self, campaign_id: str) -> int:
         """Drop low-value snapshots; keep every live state and the anchors.
 
@@ -402,6 +443,15 @@ class GameStateStore:
                 keep.add(version)
         dropped = [v for v in versions if v not in keep]
         if not dropped:
+            return 0
+        if self._history_belongs_to_another_world(campaign_id, versions):
+            # A local edit or a rebind changed the world under this campaign.
+            # Keep the past readable instead of rewriting it.
+            logger.warning(
+                "campaign %s: snapshots describe a different world; keeping %d rows",
+                campaign_id,
+                len(versions),
+            )
             return 0
         self._conn.executemany(
             "DELETE FROM campaign_snapshots WHERE campaign_id = ? AND version = ?",
@@ -442,11 +492,42 @@ class GameStateStore:
 
     def list_snapshots(self, campaign_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT version, request_id, created_at FROM campaign_snapshots"
+            "SELECT version, request_id, created_at, LENGTH(state_json) AS bytes"
+            " FROM campaign_snapshots"
             " WHERE campaign_id = ? ORDER BY version DESC LIMIT ?",
             (campaign_id, limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        entries: List[Dict[str, Any]] = []
+        stored_bytes = 0
+        for row in rows:
+            size = int(row["bytes"] or 0)
+            stored_bytes += size
+            entries.append(
+                {
+                    "version": row["version"],
+                    "request_id": row["request_id"],
+                    "created_at": row["created_at"],
+                    "bytes": size,
+                    "stored_bytes": stored_bytes,
+                }
+            )
+        return entries
+
+    def snapshot_stats(self, campaign_id: str) -> Dict[str, Any]:
+        """How many snapshots a campaign keeps and what one copy costs."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS count, COALESCE(SUM(LENGTH(state_json)), 0) AS bytes"
+            " FROM campaign_snapshots WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()
+        count = int(row["count"] or 0)
+        total = int(row["bytes"] or 0)
+        return {
+            "campaign_id": campaign_id,
+            "count": count,
+            "total_bytes": total,
+            "average_bytes": (total // count) if count else 0,
+        }
 
     def get_snapshot(self, campaign_id: str, version: int) -> Optional[GameState]:
         row = self._conn.execute(

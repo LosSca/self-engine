@@ -21,6 +21,7 @@ was not stored.
 from __future__ import annotations
 
 import inspect
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -44,6 +45,9 @@ from app.services.knowledge_service import build_context
 from app.services.narrative_service import TemplateNarrator
 
 
+logger = logging.getLogger(__name__)
+
+
 def _now() -> str:
     return datetime.utcnow().isoformat()
 
@@ -58,6 +62,7 @@ class ActionService:
         narrator=None,
         context_provider=None,
         history_provider=None,
+        settled_sink=None,
     ):
         self.store = store
         self.rules = rules or RulesEngine()
@@ -69,6 +74,10 @@ class ActionService:
         #: what this campaign has already committed. Injected by the API layer so
         #: the domain service never reaches into the event store directly.
         self.history_provider = history_provider
+        #: Callable[[str, GameState, str], None] - runs after a turn commits,
+        #: outside the transaction. Only for work that may fail freely: the
+        #: knowledge graph mirrors prose and must never roll a turn back.
+        self.settled_sink = settled_sink
 
     # ------------------------------------------------------------------ utils
     @staticmethod
@@ -247,7 +256,27 @@ class ActionService:
             if retried is not None:
                 return retried
             return self._conflict(request, payload, exc)
+        # The turn is durable now. Anything mirroring it elsewhere happens
+        # after the fact and is not allowed to affect the answer.
+        self._notify_settled(
+            request.campaign_id, new_state, getattr(result, "narrative", None)
+        )
         return result
+
+    def _notify_settled(
+        self, campaign_id: str, state: GameState, narrative: NarrativeResult
+    ) -> None:
+        """Hand a committed turn to external mirrors (knowledge graph, logs).
+
+        This runs after the transaction, so a mirror that is down or slow can
+        never roll a turn back; failures are reported to the sink itself.
+        """
+        if self.settled_sink is None:
+            return
+        try:
+            self.settled_sink(campaign_id, state, narrative)
+        except Exception:  # noqa: BLE001 - mirrors are best effort
+            logger.warning("settled sink failed for %s", campaign_id, exc_info=True)
 
     async def _retry_on_conflict(
         self, request: ActionRequest, payload: Dict[str, Any], attempts: int
@@ -630,6 +659,17 @@ class ActionService:
                 {
                     "event_type": "narrative.failed",
                     "payload": {"error": narrative.error},
+                    "state_version": new_state.version,
+                }
+            )
+        if narrative.status == "ok" and narrative.text:
+            events.append(
+                {
+                    "event_type": "narrator.response",
+                    "payload": {
+                        "text": narrative.text,
+                        "model": getattr(narrative, "model", ""),
+                    },
                     "state_version": new_state.version,
                 }
             )

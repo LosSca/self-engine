@@ -112,6 +112,9 @@ async def test_duplicate_request_applies_side_effects_once(store):
         "action.applied",
         "event.fired",
         "quest.progressed",
+        # The prose that was actually shown is part of the record, so a
+        # narration mirror (knowledge graph) can replay it verbatim.
+        "narrator.response",
     ]
 
 
@@ -241,3 +244,32 @@ async def test_narrator_exception_on_a_rejected_action_is_reported_not_raised(st
     assert result.code == "door_locked"
     assert result.narrative.status == "failed"
     assert store.get_state("camp-1").version == 0
+
+
+async def test_a_failing_settled_sink_cannot_fail_the_turn(store):
+    """The knowledge graph mirror runs after the commit and may fail freely."""
+    bound_world(store)
+    seen = []
+
+    def sink(campaign_id, state, narrative):
+        seen.append((campaign_id, state.version, narrative.status))
+        raise RuntimeError("neo4j is down")
+
+    service = ActionService(store, settled_sink=sink)
+    result = await service.execute(_request("req-look", "look"))
+
+    assert result.status == "applied"
+    assert store.get_state("camp-1").version == 1
+    assert seen == [("camp-1", 1, "ok")]
+
+
+async def test_a_duplicate_request_does_not_mirror_twice(store):
+    bound_world(store)
+    seen = []
+    service = ActionService(store, settled_sink=lambda *args: seen.append(args[1].version))
+
+    await service.execute(_request("req-take", "take", "iron_key"))
+    replay = await service.execute(_request("req-take", "take", "iron_key"))
+
+    assert replay.status == "duplicate"
+    assert seen == [1], "a replay describes the past, it does not happen again"

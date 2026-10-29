@@ -56,3 +56,24 @@ npm run build
   只导出组件等），本次改造前就存在，与代码分割无关。
 - `frontend/src/api.js` 被多处「既静态又动态」导入，rollup 会警告它无法移动到
   独立 chunk；这是既有结构，暂不处理。
+
+
+## 懒加载失败怎么办
+
+分块带来一个新风险：重新部署后旧的 chunk 文件名消失，用户仍停在旧页面时点击进入
+编辑器，浏览器拿到的是 404 或 index.html，动态 import 抛
+`Failed to fetch dynamically imported module` / `Importing a module script failed`，
+旧版本会直接白屏。
+
+现在 `src/components/ErrorBoundary.jsx` 会识别这一类错误：
+
+- `isChunkLoadError(error)` 用正则匹配 `dynamically imported module`、
+  `Importing a module script failed`、`Loading chunk`、`Unable to preload CSS`。
+- 第一次遇到时写 `sessionStorage['lunar.chunk-retry']='1'` 并自动 `location.reload()`，
+  刷新后就能拿到新的 chunk 文件名。
+- 如果刷新后仍然失败（真的没网、后端没起），边界显示「界面资源已更新 / 刷新页面」卡片
+  而不是白屏，按钮会清掉标记再刷新。
+- 页面正常挂载时 `componentDidMount` 调用 `clearAutoRetry()`，下一次部署后仍可自动重试。
+- `sessionStorage` 不可写（隐私模式）时退化为不自动刷新，直接显示提示卡片。
+
+其他运行期异常仍走原来的「服务出现异常」卡片。
