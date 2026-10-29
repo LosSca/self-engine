@@ -261,9 +261,40 @@ def apply_effect(
         if quest is None:
             return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
         progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
+        if progress.status == "failed":
+            return AppliedEffect(effect, False, f"quest '{quest.id}' has already failed")
         progress.status = "completed"
         state.quests[quest.id] = progress
         return AppliedEffect(effect, True, facts=[Fact("quest_completed", quest.id)])
+
+    if kind == "quest_accept":
+        quest = next((q for q in world.quests if q.id == effect.target), None)
+        if quest is None:
+            return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
+        progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
+        if progress.status == "completed":
+            return AppliedEffect(
+                effect, False, f"quest '{quest.id}' is already completed"
+            )
+        for objective in quest.objectives:
+            progress.objectives.setdefault(objective.id, 0)
+        if progress.status == "inactive":
+            progress.status = "active"
+        state.quests[quest.id] = progress
+        return AppliedEffect(effect, True, facts=[Fact("quest_accepted", quest.id)])
+
+    if kind == "quest_fail":
+        quest = next((q for q in world.quests if q.id == effect.target), None)
+        if quest is None:
+            return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
+        progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
+        if progress.status == "completed":
+            return AppliedEffect(
+                effect, False, f"quest '{quest.id}' is already completed"
+            )
+        progress.status = "failed"
+        state.quests[quest.id] = progress
+        return AppliedEffect(effect, True, facts=[Fact("quest_failed", quest.id)])
 
     if kind == "combat_hp":
         entity = next((entry for entry in world.entities if entry.id == effect.target), None)

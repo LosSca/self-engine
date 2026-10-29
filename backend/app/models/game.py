@@ -168,6 +168,8 @@ class Effect(_ConfigModel):
         "player_damage",
         "move_entity",
         "seed_entity",
+        "quest_accept",
+        "quest_fail",
         "emit",
     ]
     target: str = ""
@@ -206,12 +208,29 @@ class ObjectiveDef(_ConfigModel):
 
 
 class QuestDef(_ConfigModel):
+    """A configurable quest: gating, objectives, rewards and failure.
+
+    A quest is never completed because a model said so. It becomes active only
+    once its prerequisites are completed and its accept conditions hold, its
+    objectives advance from facts the rules already committed, and it fails when
+    its fail conditions hold. Everything here is validated data.
+    """
+
     id: str = Field(..., min_length=1, max_length=64)
     title: str = Field(..., min_length=1, max_length=200)
     description: str = ""
     objectives: List[ObjectiveDef] = Field(default_factory=list)
     rewards: List[Effect] = Field(default_factory=list)
     enabled: bool = True
+    #: Quests that must be completed before this one can become active.
+    prerequisites: List[str] = Field(default_factory=list)
+    #: Conditions that must all hold for the quest to be accepted.
+    accept_requires: List[Condition] = Field(default_factory=list)
+    #: Conditions that fail the quest while it is active.
+    fail_conditions: List[Condition] = Field(default_factory=list)
+    #: Whether activation is re-evaluated automatically every turn.
+    #: False means only an explicit quest_accept effect can start the quest.
+    auto_accept: bool = True
 
 
 class GameEventDef(_ConfigModel):
@@ -378,6 +397,39 @@ class WorldDefinition(BaseModel):
                         f"quest '{quest.id}' objective '{objective.id}' targets "
                         f"unknown location '{objective.target}'"
                     )
+            for prerequisite in quest.prerequisites:
+                if prerequisite == quest.id:
+                    errors.append(
+                        f"quest '{quest.id}' lists itself as a prerequisite"
+                    )
+                elif prerequisite not in quest_ids:
+                    errors.append(
+                        f"quest '{quest.id}' requires unknown quest '{prerequisite}'"
+                    )
+            for condition in quest.accept_requires:
+                errors.extend(
+                    f"quest '{quest.id}' accept condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for condition in quest.fail_conditions:
+                errors.extend(
+                    f"quest '{quest.id}' fail condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
             for reward in quest.rewards:
                 errors.extend(
                     f"quest '{quest.id}' reward: {msg}"
@@ -385,6 +437,8 @@ class WorldDefinition(BaseModel):
                         reward, item_ids, door_ids, quest_ids, entity_ids, location_ids
                     )
                 )
+
+        errors.extend(self._quest_prerequisite_cycles())
 
         for event in self.events:
             for condition in event.conditions:
@@ -499,6 +553,26 @@ class WorldDefinition(BaseModel):
                 )
         return errors
 
+    def _quest_prerequisite_cycles(self) -> List[str]:
+        """Report quests that can never become active because they wait on each other."""
+        errors: List[str] = []
+        graph = {quest.id: list(quest.prerequisites) for quest in self.quests}
+        for start in graph:
+            seen: set = set()
+            stack = list(graph.get(start, []))
+            while stack:
+                current = stack.pop()
+                if current == start:
+                    errors.append(
+                        f"quest '{start}' has a circular prerequisite chain"
+                    )
+                    break
+                if current in seen or current not in graph:
+                    continue
+                seen.add(current)
+                stack.extend(graph[current])
+        return errors
+
     @staticmethod
     def _validate_condition(
         condition: Condition,
@@ -548,7 +622,10 @@ class WorldDefinition(BaseModel):
             errors.append(f"unknown item '{effect.target}'")
         if effect.kind in ("open_door", "close_door") and effect.target not in door_ids:
             errors.append(f"unknown door '{effect.target}'")
-        if effect.kind in ("quest_progress", "quest_complete") and effect.target not in quest_ids:
+        if (
+            effect.kind in ("quest_progress", "quest_complete", "quest_accept", "quest_fail")
+            and effect.target not in quest_ids
+        ):
             errors.append(f"unknown quest '{effect.target}'")
         if effect.kind == "quest_progress" and not isinstance(effect.value, str):
             errors.append("quest_progress requires value = objective id")

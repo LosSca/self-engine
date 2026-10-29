@@ -901,10 +901,57 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             <FieldLabel>描述</FieldLabel>
             <textarea className={inputClass + ' min-h-[70px]'} value={value.description || ''} onChange={(e) => update({ description: e.target.value })} />
           </label>
-          <label className="flex items-center gap-2 text-xs text-white/60">
-            <input type="checkbox" checked={Boolean(value.enabled)} onChange={(e) => update({ enabled: e.target.checked })} />
-            启用（绑定世界时自动激活）
-          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="flex items-center gap-2 text-xs text-white/60">
+              <input type="checkbox" checked={Boolean(value.enabled)} onChange={(e) => update({ enabled: e.target.checked })} />
+              启用
+            </label>
+            <label className="flex items-center gap-2 text-xs text-white/60">
+              <input type="checkbox" checked={value.auto_accept !== false} onChange={(e) => update({ auto_accept: e.target.checked })} />
+              满足条件时自动接受
+            </label>
+          </div>
+          <div>
+            <FieldLabel>前置任务（全部完成后才会激活）</FieldLabel>
+            <div className="flex flex-wrap gap-2">
+              {(world?.quests || [])
+                .filter((other) => other.id !== value.id)
+                .map((other) => {
+                  const picked = (value.prerequisites || []).includes(other.id)
+                  return (
+                    <button
+                      key={other.id}
+                      type="button"
+                      onClick={() => {
+                        const current = value.prerequisites || []
+                        update({
+                          prerequisites: picked ? current.filter((id) => id !== other.id) : [...current, other.id],
+                        })
+                      }}
+                      className={
+                        'text-[10px] font-mono rounded-full px-2 py-1 border transition ' +
+                        (picked
+                          ? 'border-white/40 text-white bg-white/10'
+                          : 'border-white/10 text-white/40 hover:text-white/70')
+                      }
+                    >
+                      {other.title || other.id}
+                    </button>
+                  )
+                })}
+              {(world?.quests || []).filter((other) => other.id !== value.id).length === 0 && (
+                <span className="text-[10px] text-white/30">（没有其他任务可选）</span>
+              )}
+            </div>
+          </div>
+          <div>
+            <FieldLabel>接受条件（全部满足才会激活）</FieldLabel>
+            <ConditionRows value={value.accept_requires || []} onChange={(accept_requires) => update({ accept_requires })} world={world} />
+          </div>
+          <div>
+            <FieldLabel>失败条件（任一满足即失败）</FieldLabel>
+            <ConditionRows value={value.fail_conditions || []} onChange={(fail_conditions) => update({ fail_conditions })} world={world} />
+          </div>
           <div>
             <FieldLabel>任务目标</FieldLabel>
             <ObjectiveRows value={value.objectives || []} onChange={(objectives) => update({ objectives })} />
@@ -1023,7 +1070,18 @@ const EMPTY_FOR = {
     priority: 0,
     repeat: 'once',
   },
-  quest: { id: '', title: '', description: '', enabled: true, objectives: [], rewards: [] },
+  quest: {
+    id: '',
+    title: '',
+    description: '',
+    enabled: true,
+    objectives: [],
+    rewards: [],
+    prerequisites: [],
+    accept_requires: [],
+    fail_conditions: [],
+    auto_accept: true,
+  },
   action: {
     id: '',
     label: '',
@@ -1370,7 +1428,8 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
           {kind === 'door' && '门是独立配置：上锁、钥匙和是否消耗钥匙都在这里决定，开门仍要经过规则判定。'}
           {kind === 'entity' && '实体只保存固定配置；它当前在哪个地点、携带什么属于运行时状态。'}
           {kind === 'event' && '事件由条件与效果组成，保存时服务端会做结构校验，执行前再校验一次；未知条件或效果会安全失败。'}
-          {kind === 'quest' && '任务目标由规则与事件驱动更新；模型只负责描述任务，不负责判定完成。'}
+          {kind === 'quest' &&
+            '任务的目标、前置、接受与失败条件都是配置；进度由规则与事件驱动，模型只负责描述任务，不负责判定完成。'}
           {kind === 'action' &&
             '自定义行动只是配置：条件与效果都由规则引擎判定，绝不执行任意代码。条件不满足时会安全拒绝。'}
         </SectionNote>
@@ -1434,6 +1493,13 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               <div className="text-[10px] font-mono text-white/30 mt-2">
                 拾取条件 {(item.pickup_requires || []).length} · 使用效果 {(item.use_effects || []).length}
                 {item.consumable ? ' · 使用后消耗' : ''}
+              </div>
+            )}
+            {kind === 'quest' && (
+              <div className="text-[10px] font-mono text-white/30 mt-2">
+                前置 {(item.prerequisites || []).length} · 接受条件 {(item.accept_requires || []).length} ·
+                失败条件 {(item.fail_conditions || []).length} · 奖励 {(item.rewards || []).length}
+                {item.auto_accept === false ? ' · 需手动接受' : ''}
               </div>
             )}
             {kind === 'event' && (
