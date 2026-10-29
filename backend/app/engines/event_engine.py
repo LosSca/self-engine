@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.game import (
+    CombatantState,
     Condition,
     Effect,
     EventExecution,
@@ -90,6 +91,15 @@ def condition_holds(
         progress = state.quests.get(condition.target)
         status = progress.status if progress else "inactive"
         return _compare(status, condition.value, condition.op)
+    if kind == "combatant_hp":
+        combatant = state.combatants.get(condition.target)
+        hp = combatant.hp if combatant else 0
+        return _compare(hp, condition.value if condition.value is not None else 0, condition.op)
+    if kind == "combatant_alive":
+        combatant = state.combatants.get(condition.target)
+        alive = bool(combatant and combatant.alive)
+        expected = True if condition.value is None else bool(condition.value)
+        return _compare(alive, expected, condition.op)
     return False
 
 
@@ -191,6 +201,53 @@ def apply_effect(
         state.quests[quest.id] = progress
         return AppliedEffect(effect, True, facts=[Fact("quest_completed", quest.id)])
 
+    if kind == "combat_hp":
+        entity = next((entry for entry in world.entities if entry.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        combatant = state.combatants.get(entity.id)
+        if combatant is None:
+            # Seed the same way the rules engine does, so authored attributes
+            # (max_hp/attack/defense) are the single source of enemy numbers.
+            def _number(key: str, default: float) -> float:
+                value = entity.attributes.get(key, default)
+                return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+            max_hp = max(1, int(_number("max_hp", _number("hp", 10))))
+            combatant = CombatantState(
+                entity_id=entity.id,
+                name=entity.name,
+                hp=max_hp,
+                max_hp=max_hp,
+                attack=max(1, int(_number("attack", 3))),
+                defense=max(0, int(_number("defense", 1))),
+                flee_chance=min(1.0, max(0.0, _number("flee_chance", 0.5))),
+            )
+        hp = 0 if effect.value is None else int(effect.value)
+        combatant.hp = max(0, min(hp, combatant.max_hp))
+        was_alive = combatant.alive
+        combatant.alive = combatant.hp > 0
+        state.combatants[entity.id] = combatant
+        facts = [Fact("combat_hp", entity.id, combatant.hp)]
+        if was_alive and not combatant.alive:
+            facts.append(Fact("combatant_defeated", entity.id))
+            state.combat["active"] = False
+            state.flags["combat_active"] = False
+        return AppliedEffect(effect, True, facts=facts)
+
+    if kind == "player_damage":
+        amount = max(1, int(effect.amount or 1))
+        current = state.flags.get("player_hp")
+        if not isinstance(current, int):
+            current = int(state.flags.get("player_max_hp", 20) or 20)
+        remaining = max(0, current - amount)
+        state.flags["player_hp"] = remaining
+        facts = [Fact("player_damage", "player", amount)]
+        if remaining <= 0 and not state.flags.get("player_defeated"):
+            state.flags["player_defeated"] = True
+            facts.append(Fact("player_defeated", "player", 0))
+        return AppliedEffect(effect, True, facts=facts)
+
     if kind == "emit":
         return AppliedEffect(
             effect, True, facts=[Fact("emit", effect.target, effect.value)]
@@ -289,14 +346,19 @@ def validate_event(world: WorldDefinition, event: GameEventDef) -> List[str]:
     door_ids = {door.id for door in world.doors}
     location_ids = {loc.id for loc in world.locations}
     quest_ids = {quest.id for quest in world.quests}
+    entity_ids = {entity.id for entity in world.entities}
     for condition in event.conditions:
         errors.extend(
             WorldDefinition._validate_condition(
-                condition, item_ids, door_ids, location_ids, quest_ids
+                condition, item_ids, door_ids, location_ids, quest_ids, entity_ids
             )
         )
     for effect in event.effects:
-        errors.extend(WorldDefinition._validate_effect(effect, item_ids, door_ids, quest_ids))
+        errors.extend(
+            WorldDefinition._validate_effect(
+                effect, item_ids, door_ids, quest_ids, entity_ids
+            )
+        )
     if event.trigger == "action" and not event.trigger_action:
         errors.append("trigger 'action' requires trigger_action")
     return errors

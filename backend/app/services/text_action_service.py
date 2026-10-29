@@ -22,10 +22,13 @@ from app.models.game import ActionRequest, ActionResult, GameState, WorldDefinit
 from app.services import world_service
 from app.services.action_service import ActionService
 
-ACTIONS = ("look", "move", "take", "open", "use", "talk")
+ACTIONS = ("look", "move", "take", "open", "use", "talk", "attack", "defend", "flee")
 
 #: Verb table. Longest phrases first so "打开" wins over "打".
 _VERBS: Sequence[Tuple[str, Tuple[str, ...]]] = (
+    ("attack", ("攻击", "打击", "砍", "劈", "刺向", "刺", "揍", "attack", "strike", "fight", "kill", "stab", "slash", "hit the", "hit ")),
+    ("flee", ("逃跑", "逃走", "撤离", "撤退", "跑", "flee", "run away", "retreat", "escape")),
+    ("defend", ("防御", "格挡", "防守", "架起", "defend", "block", "guard", "parry")),
     ("take", ("拾取", "捡起", "拿走", "拿起", "拿到", "拿", "拿取", "take", "pick up", "grab")),
     ("open", ("打开", "开启", "推开", "开锁", "开", "open", "unlock")),
     ("use", ("使用", "用", "use", "apply")),
@@ -198,6 +201,35 @@ class TextActionParser:
     ) -> Optional[ParsedAction]:
         if action == "look":
             return ParsedAction(action="look", confidence="verb_only")
+        if action == "defend":
+            enemies = self._enemy_candidates(world, state)
+            matched = self._best(fragment, enemies) if fragment else None
+            return ParsedAction(
+                action="defend",
+                target_id=matched.id if matched else None,
+                matched_name=self._display(matched, world, "defend") if matched else "",
+                confidence="verb_only" if matched is None else "exact",
+            )
+        if action == "flee":
+            return ParsedAction(action="flee", confidence="verb_only")
+        if action == "attack":
+            enemies = self._enemy_candidates(world, state)
+            matched = self._best(fragment, enemies) if fragment else None
+            if matched is None and not enemies:
+                return ParsedAction(
+                    action="attack",
+                    confidence="no_target",
+                    note="没有可以攻击的目标。",
+                )
+            if matched is None:
+                # One hostile present is an unambiguous target.
+                matched = enemies[0] if len(enemies) == 1 else None
+            return ParsedAction(
+                action="attack",
+                target_id=matched.id if matched else None,
+                matched_name=self._display(matched, world, "attack") if matched else "",
+                confidence="exact" if matched else "ambiguous",
+            )
         if action == "move":
             rules = ("move", self._move_candidates(world, state))
         elif action in ("take", "use"):
@@ -265,7 +297,7 @@ class TextActionParser:
             for door in world.doors:
                 if door.id == candidate.id:
                     return door.name
-        if action == "talk":
+        if action in ("talk", "attack", "defend"):
             for entity in world.entities:
                 if entity.id == candidate.id:
                     return entity.name
@@ -301,6 +333,22 @@ class TextActionParser:
             for door in world.doors
             if door.location_id == state.location_id
         ]
+
+    @staticmethod
+    def _enemy_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
+        """Creatures to fight: hostile NPCs, creatures, or an ongoing target."""
+        candidates = []
+        for entity in world.entities:
+            if entity.location_id != state.location_id:
+                continue
+            if entity.kind == "creature" or entity.hostile:
+                candidates.append(_Candidate(entity.id, [entity.name, entity.id], "entity"))
+        target = state.combat.get("target_id")
+        if target and all(candidate.id != target for candidate in candidates):
+            entity = next((e for e in world.entities if e.id == target), None)
+            if entity is not None:
+                candidates.append(_Candidate(entity.id, [entity.name, entity.id], "entity"))
+        return candidates
 
     @staticmethod
     def _talk_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
@@ -407,7 +455,7 @@ class TextActionService:
 
         message = (
             "无法理解这条行动：" + text[:80]
-            + "。可以尝试「看」「前往 <地点>」「拿 <物品>」「打开 <门>」「用 <物品>」「说 <人物>」。"
+            + "。可以尝试「看」「前往 <地点>」「拿 <物品>」「打开 <门>」「用 <物品>」「说 <人物>」「攻击 <敌人>」「防御」「逃跑」。"
         )
         result = ActionResult(
             request_id=request_id,

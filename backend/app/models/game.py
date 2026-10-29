@@ -128,6 +128,8 @@ class Condition(_ConfigModel):
         "door_open",
         "at_location",
         "quest_status",
+        "combatant_hp",
+        "combatant_alive",
     ]
     target: str = ""
     op: Literal["eq", "ne", "gte", "lte", "gt", "lt"] = "eq"
@@ -146,6 +148,8 @@ class Effect(_ConfigModel):
         "close_door",
         "quest_progress",
         "quest_complete",
+        "combat_hp",
+        "player_damage",
         "emit",
     ]
     target: str = ""
@@ -216,6 +220,7 @@ class WorldDefinition(BaseModel):
         item_ids = {item.id for item in self.items}
         door_ids = {door.id for door in self.doors}
         quest_ids = {quest.id for quest in self.quests}
+        entity_ids = {entity.id for entity in self.entities}
 
         for name, ids in (
             ("location", [loc.id for loc in self.locations]),
@@ -350,6 +355,7 @@ class WorldDefinition(BaseModel):
         door_ids: set,
         location_ids: set,
         quest_ids: set,
+        entity_ids: Optional[set] = None,
     ) -> List[str]:
         errors: List[str] = []
         if condition.kind in ("has_item", "item_count") and condition.target not in item_ids:
@@ -365,11 +371,19 @@ class WorldDefinition(BaseModel):
                 errors.append(f"unknown quest status '{condition.value}'")
         if condition.kind in ("has_item", "item_count") and condition.op not in ("eq", "gte"):
             errors.append("item conditions only support op 'eq' or 'gte'")
+        if condition.kind in ("combatant_hp", "combatant_alive"):
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
         return errors
 
     @staticmethod
     def _validate_effect(
-        effect: Effect, item_ids: set, door_ids: set, quest_ids: set
+        effect: Effect,
+        item_ids: set,
+        door_ids: set,
+        quest_ids: set,
+        entity_ids: Optional[set] = None,
     ) -> List[str]:
         errors: List[str] = []
         if effect.kind in ("give_item", "remove_item") and effect.target not in item_ids:
@@ -384,6 +398,13 @@ class WorldDefinition(BaseModel):
             errors.append("set_flag requires a target flag name")
         if effect.kind == "move_player" and not effect.target:
             errors.append("move_player requires a target location id")
+        if effect.kind == "combat_hp":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+        if effect.kind == "player_damage":
+            if int(effect.amount or 0) <= 0:
+                errors.append("player_damage requires a positive amount")
         return errors
 
 
@@ -396,6 +417,24 @@ class QuestProgress(BaseModel):
     quest_id: str
     status: Literal["inactive", "active", "completed", "failed"] = "active"
     objectives: Dict[str, int] = Field(default_factory=dict)
+
+
+class CombatantState(BaseModel):
+    """Authoritative combat state for one entity in this campaign.
+
+    The numbers are seeded from EntityDef.attributes (max_hp/attack/defense/
+    flee_chance) the first time the entity is fought, so authored world
+    documents keep their existing format.
+    """
+
+    entity_id: str
+    name: str = ""
+    hp: int = 1
+    max_hp: int = 1
+    alive: bool = True
+    attack: int = 1
+    defense: int = 0
+    flee_chance: float = 0.5
 
 
 class GameState(BaseModel):
@@ -415,6 +454,9 @@ class GameState(BaseModel):
     #: Storyline nodes entered so far (append-only; empty in free mode and for
     #: campaigns created before storyline support).
     story_nodes: List[str] = Field(default_factory=list)
+    #: Enemy vitals and the current combat encounter, if any.
+    combatants: Dict[str, CombatantState] = Field(default_factory=dict)
+    combat: Dict[str, Any] = Field(default_factory=dict)
     updated_at: str = ""
 
 
@@ -426,7 +468,9 @@ class GameState(BaseModel):
 class ActionRequest(BaseModel):
     campaign_id: str = Field(..., min_length=1, max_length=64)
     request_id: str = Field(..., min_length=1, max_length=128)
-    action: Literal["move", "look", "take", "open", "use", "talk"]
+    action: Literal[
+        "move", "look", "take", "open", "use", "talk", "attack", "defend", "flee"
+    ]
     actor_id: str = "player"
     target_id: Optional[str] = None
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -475,5 +519,7 @@ class ActionResult(BaseModel):
     story_nodes_entered: List[str] = Field(default_factory=list)
     #: Knowledge entry ids the narrator was given (debug/audit only).
     context_entries: List[str] = Field(default_factory=list)
+    #: Deterministic combat resolution for this request (None outside combat).
+    combat_round: Optional[Dict[str, Any]] = None
     narrative: NarrativeResult = Field(default_factory=NarrativeResult)
     state: Optional[GameState] = None

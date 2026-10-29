@@ -283,6 +283,38 @@ class ActionService:
         )
         return result
 
+    @staticmethod
+    def _combat_round(
+        request: ActionRequest,
+        state: GameState,
+        new_state: GameState,
+        applied,
+    ) -> Optional[Dict[str, Any]]:
+        """Describe the deterministic combat turn this request resolved.
+
+        The round record is built from settled state, so it can be stored in
+        the same transaction as the change it describes and replayed verbatim
+        on a duplicate request.
+        """
+        if request.action not in ("attack", "defend", "flee"):
+            return None
+        target_id = request.target_id or str(state.combat.get("target_id") or "")
+        before = state.combatants.get(target_id)
+        after = new_state.combatants.get(target_id)
+        return {
+            "round": int(new_state.flags.get("combat_round", 0) or 0),
+            "action": request.action,
+            "target_id": target_id,
+            "target_hp_before": before.hp if before else None,
+            "target_hp_after": after.hp if after else None,
+            "target_alive": after.alive if after else None,
+            "player_hp_before": state.flags.get("player_hp"),
+            "player_hp_after": new_state.flags.get("player_hp"),
+            "player_defeated": bool(new_state.flags.get("player_defeated")),
+            "in_combat": bool(new_state.combat.get("active")),
+            "facts": [fact.kind for item in applied for fact in item.facts],
+        }
+
     async def _apply(
         self,
         request: ActionRequest,
@@ -315,6 +347,7 @@ class ActionService:
             return result, state, []
 
         facts = [fact for item in applied for fact in item.facts]
+        combat_round = self._combat_round(request, state, new_state, applied)
         new_state, executions, event_facts = run_triggered_events(
             world, new_state, request.action, request.target_id, facts
         )
@@ -366,6 +399,7 @@ class ActionService:
             quests={qid: progress.status for qid, progress in new_state.quests.items()},
             story_nodes_entered=story_entered,
             context_entries=context_entries,
+            combat_round=combat_round,
             narrative=narrative,
             state=new_state,
         )
