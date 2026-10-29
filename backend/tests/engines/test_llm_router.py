@@ -75,7 +75,12 @@ async def test_complete_reasoning_false_disables_deepseek_reasoning(router):
             messages=[{"role": "user", "content": "test"}], reasoning=False
         )
     _, call_kwargs = mock_acompletion.call_args
-    assert call_kwargs.get("reasoning_effort") == "none"
+    # The DeepSeek API rejects reasoning_effort outright ("deepseek does not
+    # support parameters: ['reasoning_effort']"), so the flag is never sent;
+    # reasoning is already off by default there. Unknown params are additionally
+    # dropped via litellm instead of failing the call.
+    assert "reasoning_effort" not in call_kwargs
+    assert call_kwargs.get("drop_params") is True
     assert "reasoning" not in call_kwargs
 
 

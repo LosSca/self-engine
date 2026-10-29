@@ -343,6 +343,12 @@ def _reasoning_kwargs(provider: LLMProvider, reasoning: bool) -> dict:
         return {}
     if provider == LLMProvider.ANTHROPIC:
         return {"thinking": {"type": "disabled"}}
+    if provider == LLMProvider.DEEPSEEK:
+        # The DeepSeek API rejects reasoning_effort with UnsupportedParamsError
+        # ("deepseek does not support parameters: ['reasoning_effort']"), which
+        # killed every narrative call that asked for reasoning=False. Reasoning is
+        # already off by default there, so the parameter is simply not sent.
+        return {}
     return {"reasoning_effort": "none"}
 
 
@@ -627,14 +633,20 @@ class LLMRouter:
             out.append(msg)
         return out
 
-    def _sampling_kwargs(self, model: str) -> dict:
+    def _sampling_kwargs(
+        self, model: str, provider: LLMProvider | None = None
+    ) -> dict:
         """Sampling params for models that accept them; empty for the rest."""
+        provider = provider or self.config.primary_provider
         params: dict = {}
         if _accepts_temperature(model):
             params["temperature"] = self.config.temperature
-        if self.config.primary_provider == LLMProvider.LOCAL:
+        if provider in (LLMProvider.LOCAL, LLMProvider.DEEPSEEK):
             # NInfer validates OpenAI fields strictly; let litellm drop params the
             # local server does not implement instead of failing the whole call.
+            # DeepSeek reports unsupported params (reasoning_effort) as a hard
+            # error, so it gets the same treatment: drop unknown fields instead
+            # of failing the whole narrative call.
             params["drop_params"] = True
         return params
 
@@ -761,7 +773,10 @@ class LLMRouter:
                     model=fallback_model,
                     messages=messages,
                     max_tokens=self.config.max_tokens,
-                    **{**self._sampling_kwargs(fallback_model), **fb_kwargs},
+                    # The fallback provider has its own capability profile; using the
+                    # primary model string here sent unsupported params (e.g.
+                    # reasoning_effort to deepseek) on the retry path too.
+                    **{**self._sampling_kwargs(fallback_model, self.config.fallback_provider), **fb_kwargs},
                 )
                 _log_call(caller, messages, max_tokens, response, time.monotonic() - t0, model=fallback_model)
                 return response.choices[0].message.content
