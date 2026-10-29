@@ -116,12 +116,56 @@ def _make_context_provider(store: ScenarioStore):
     return provider
 
 
+def _history_provider():
+    """Recall what this campaign already committed, for the narrator only.
+
+    This is a read of the append-only event log, nothing more: the recap never
+    feeds back into the rules, and any failure degrades to no recap at all
+    rather than failing the turn.
+    """
+    from app.config import settings
+    from app.db.event_store import EventStore
+    from app.services.narrative_service import HISTORY_TURNS, render_history_note
+
+    db_path = os.environ.get("EVENT_DB_PATH", "") or os.environ.get(
+        "GAME_STATE_DB_PATH", ""
+    )
+
+    def provider(campaign_id: str, state) -> List[dict]:
+        if not db_path:
+            return []
+        store = EventStore(db_path)
+        try:
+            events = store.get_recent(campaign_id, limit=HISTORY_TURNS * 2)
+        except Exception as exc:  # noqa: BLE001 - recap is optional
+            logger.warning("history recap unavailable for %s: %s", campaign_id, exc)
+            return []
+        finally:
+            close = getattr(store, "close", None)
+            if callable(close):
+                close()
+        note = render_history_note(events or [], limit=HISTORY_TURNS)
+        if not note:
+            return []
+        return [
+            {
+                "id": f"history:{campaign_id}",
+                "layer": "history",
+                "title": "recent turns",
+                "content": note,
+            }
+        ]
+
+    return provider
+
+
 def _service() -> ActionService:
     scenario_store = _get_scenario_store()
     service = ActionService(
         _get_store(),
         narrator=_get_narrator(),
         context_provider=_make_context_provider(scenario_store),
+        history_provider=_history_provider(),
     )
     #: Closed together with the game store by the request handler.
     service.scenario_store = scenario_store

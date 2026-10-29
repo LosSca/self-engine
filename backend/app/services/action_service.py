@@ -57,6 +57,7 @@ class ActionService:
         rules: Optional[RulesEngine] = None,
         narrator=None,
         context_provider=None,
+        history_provider=None,
     ):
         self.store = store
         self.rules = rules or RulesEngine()
@@ -64,6 +65,10 @@ class ActionService:
         #: Callable[[scenario_id], Optional[ScenarioPlayContext]] - authored
         #: knowledge, play mode and model preset for a world's scenario.
         self.context_provider = context_provider
+        #: Callable[[campaign_id, GameState], Sequence[dict]] - read-only recap of
+        #: what this campaign has already committed. Injected by the API layer so
+        #: the domain service never reaches into the event store directly.
+        self.history_provider = history_provider
 
     # ------------------------------------------------------------------ utils
     @staticmethod
@@ -116,31 +121,52 @@ class ActionService:
         except Exception:  # noqa: BLE001 - degrade instead of failing the action
             return None
 
-    @staticmethod
     def _knowledge(
+        self,
         play: Optional[ScenarioPlayContext],
         story_node: Optional[str],
+        state: Optional[GameState] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
-        if play is None:
+        provider = self.history_provider
+        blocks: List[Dict[str, Any]] = []
+        if play is None and (state is None or provider is None):
+            # Nothing authored and no record to recall: no context at all.
+            # Every local this function later assigns is already bound here, so
+            # this early return cannot trip over an unbound name.
             return [], [], None
-        try:
-            context = build_context(
-                play.entries,
-                mode=play.config.mode,
-                max_depth=play.config.max_depth,
-                story_node=story_node,
-                storyline=play.config.storyline,
-                scenario_id=play.scenario_id,
-            )
-            blocks = context.prompt_blocks()
-        except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
-            return [], [], None
+        if play is not None:
+            try:
+                context = build_context(
+                    play.entries,
+                    mode=play.config.mode,
+                    max_depth=play.config.max_depth,
+                    story_node=story_node,
+                    storyline=play.config.storyline,
+                    scenario_id=play.scenario_id,
+                )
+                blocks = [dict(block, kind="canon") for block in context.prompt_blocks()]
+            except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
+                blocks = []
+        #: Committed history is a separate channel from authored canon: it is
+        #: written by the engine after each turn, never by the player or an editor,
+        #: and the narrator is told it is a record rather than an instruction.
+        if state is not None and provider is not None:
+            try:
+                history = provider(state.campaign_id, state) or []
+            except Exception:  # noqa: BLE001 - a broken log must not fail a turn
+                history = []
+            for block in history:
+                blocks.append(dict(block, kind="history"))
         options: Optional[Dict[str, Any]] = None
-        if play.preset is not None:
+        if play is not None and play.preset is not None:
             options = {
                 "temperature": play.preset.temperature,
                 "max_tokens": play.preset.max_tokens,
             }
+        if not blocks:
+            # Sampling settings are authored too: they apply even when the
+            # scenario has no knowledge entries to hand over.
+            return [], [], options
         return blocks, [block["id"] for block in blocks], options
 
     def _narrate_options(
@@ -337,7 +363,7 @@ class ActionService:
         if request.narrate:
             try:
                 blocks, context_entries, options = self._knowledge(
-                    self._load_play_context(world), None
+                    self._load_play_context(world), None, state
                 )
                 knowledge = blocks
                 narrative = await self.narrator.narrate(
@@ -404,6 +430,9 @@ class ActionService:
             "facts": [fact.kind for item in applied for fact in item.facts],
         }
 
+    async def _call_narrator(self, *args, **kwargs):
+        return await self.narrator.narrate(*args, **kwargs)
+
     async def _narrate_applied(
         self,
         request: ActionRequest,
@@ -427,8 +456,16 @@ class ActionService:
         context_entries: List[str] = []
         options: Optional[Dict[str, Any]] = None
         try:
-            blocks, context_entries, options = self._knowledge(play, active_node)
-            knowledge = blocks
+            blocks, context_entries, options = self._knowledge(
+                play, active_node, new_state
+            )
+        except Exception as exc:  # noqa: BLE001 - context is advisory only
+            return (
+                NarrativeResult(status="failed", error=f"{type(exc).__name__}: {exc}"),
+                [],
+            )
+        knowledge = blocks
+        try:
             narrative = await self.narrator.narrate(
                 request,
                 outcome,
