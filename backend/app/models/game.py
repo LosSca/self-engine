@@ -82,11 +82,25 @@ class LocationDef(_ConfigModel):
 
 
 class ItemDef(_ConfigModel):
+    """An authored item.
+
+    `pickup_requires` and `use_effects` are validated Condition/Effect data, so a
+    world can make "the key is stuck until you move the crate" or "the potion
+    heals 5" configurable without any code being executed.
+    """
+
     id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=200)
     description: str = ""
     tags: List[str] = Field(default_factory=list)
     stackable: bool = True
+    #: All of these must hold before the item can be picked up.
+    pickup_requires: List[Condition] = Field(default_factory=list)
+    #: What using the item does. Empty means the built-in behaviour: if the item
+    #: is a door key standing at that door, using it opens the door.
+    use_effects: List[Effect] = Field(default_factory=list)
+    #: Whether using the item spends one of it.
+    consumable: bool = False
 
 
 class EntityDef(_ConfigModel):
@@ -321,6 +335,27 @@ class WorldDefinition(BaseModel):
             if door.key_item_id and door.key_item_id not in item_ids:
                 errors.append(
                     f"door '{door.id}' requires unknown key item '{door.key_item_id}'"
+                )
+
+        for item in self.items:
+            for condition in item.pickup_requires:
+                errors.extend(
+                    f"item '{item.id}' pickup condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for effect in item.use_effects:
+                errors.extend(
+                    f"item '{item.id}' use effect: {msg}"
+                    for msg in self._validate_effect(
+                        effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
                 )
 
         for quest in self.quests:

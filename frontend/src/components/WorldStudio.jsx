@@ -698,6 +698,18 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               可堆叠
             </label>
           </div>
+          <div>
+            <FieldLabel>拾取条件（全部满足才能拿起）</FieldLabel>
+            <ConditionRows value={value.pickup_requires || []} onChange={(pickup_requires) => update({ pickup_requires })} world={world} />
+          </div>
+          <div>
+            <FieldLabel>使用效果（留空则沿用内置行为：作为钥匙开门）</FieldLabel>
+            <EffectRows value={value.use_effects || []} onChange={(use_effects) => update({ use_effects })} world={world} />
+          </div>
+          <label className="flex items-center gap-2 text-xs text-white/60">
+            <input type="checkbox" checked={Boolean(value.consumable)} onChange={(e) => update({ consumable: e.target.checked })} />
+            使用后消耗一个
+          </label>
         </>
       )}
 
@@ -985,7 +997,7 @@ const DELETERS = {
 
 const EMPTY_FOR = {
   location: { id: '', name: '', description: '', tags: [], exits: [], door_ids: [], item_ids: [], npc_ids: [] },
-  item: { id: '', name: '', description: '', tags: [], stackable: true },
+  item: { id: '', name: '', description: '', tags: [], stackable: true, pickup_requires: [], use_effects: [], consumable: false },
   door: { id: '', name: '', location_id: '', locked: true, opened: false, key_item_id: null, consumes_key: false },
   entity: {
     id: '',
@@ -1353,7 +1365,8 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionNote>
-          {kind === 'item' && '物品只在这里定义名称与标签；数量与持有关系属于权威状态，由行动规则改变。'}
+          {kind === 'item' &&
+            '物品在这里定义名称、拾取条件与使用效果；数量与持有关系属于权威状态，由规则引擎改变。'}
           {kind === 'door' && '门是独立配置：上锁、钥匙和是否消耗钥匙都在这里决定，开门仍要经过规则判定。'}
           {kind === 'entity' && '实体只保存固定配置；它当前在哪个地点、携带什么属于运行时状态。'}
           {kind === 'event' && '事件由条件与效果组成，保存时服务端会做结构校验，执行前再校验一次；未知条件或效果会安全失败。'}
@@ -1415,6 +1428,12 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               <div className="text-[10px] font-mono text-white/30 mt-2">
                 触发词 {(item.verbs || []).join(' / ') || '（无）'} · 目标 {item.target} · 条件{' '}
                 {(item.requires || []).length} · 效果 {(item.effects || []).length}
+              </div>
+            )}
+            {kind === 'item' && (
+              <div className="text-[10px] font-mono text-white/30 mt-2">
+                拾取条件 {(item.pickup_requires || []).length} · 使用效果 {(item.use_effects || []).length}
+                {item.consumable ? ' · 使用后消耗' : ''}
               </div>
             )}
             {kind === 'event' && (

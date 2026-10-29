@@ -12,6 +12,7 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 from app.engines.action_registry import get_action
+from app.engines.event_engine import condition_holds, entity_location
 from app.models.game import (
     CombatantState,
     Condition,
@@ -118,8 +119,6 @@ class RulesEngine:
                 message=f"{label} needs a target.",
             )
         # Imported lazily so the rules module stays free of an import cycle.
-        from app.engines.event_engine import condition_holds
-
         unmet = [condition for condition in spec.requires if not condition_holds(state, world, condition)]
         if unmet:
             reasons = "; ".join(self._describe_condition(condition) for condition in unmet)
@@ -166,6 +165,11 @@ class RulesEngine:
         if kind == "combatant_hp":
             return f"'{condition.target}' health must be {condition.op} {condition.value}"
         if kind == "combatant_alive":
+            wanted = "alive" if condition.value in (None, True) else "dead"
+            return f"'{condition.target}' must be {wanted}"
+        if kind == "entity_at":
+            return f"'{condition.target}' must be at '{condition.value}'"
+        if kind == "entity_alive":
             wanted = "alive" if condition.value in (None, True) else "dead"
             return f"'{condition.target}' must be {wanted}"
         return f"{kind} '{condition.target}'"
@@ -365,6 +369,21 @@ class RulesEngine:
                 code="item_not_here",
                 message=f"The {item.name} is not here.",
             )
+        if item.pickup_requires:
+            unmet = [
+                condition
+                for condition in item.pickup_requires
+                if not condition_holds(state, world, condition)
+            ]
+            if unmet:
+                reasons = "; ".join(
+                    self._describe_condition(condition) for condition in unmet
+                )
+                return RuleOutcome(
+                    ok=False,
+                    code="pickup_refused",
+                    message=f"You cannot pick up the {item.name} yet: {reasons}.",
+                )
         return RuleOutcome(
             ok=True,
             code="taken",
@@ -466,6 +485,18 @@ class RulesEngine:
                 code="item_not_carried",
                 message=f"You are not carrying the {item.name}.",
             )
+        # Authored behaviour wins: the world decides what using this item does.
+        if item.use_effects:
+            effects: List[Effect] = list(item.use_effects)
+            if item.consumable:
+                effects.append(Effect(kind="remove_item", target=target_id, amount=1))
+            return RuleOutcome(
+                ok=True,
+                code="used_item",
+                message=f"You use the {item.name}.",
+                effects=effects,
+            )
+        # Otherwise the built-in behaviour: a key standing at its own door.
         usable_doors = [
             door
             for door in world.doors
@@ -480,14 +511,16 @@ class RulesEngine:
                 message=f"You use the {item.name}, but nothing happens.",
             )
         door = usable_doors[0]
-        effects: List[Effect] = [Effect(kind="open_door", target=door.id)]
+        door_effects: List[Effect] = [Effect(kind="open_door", target=door.id)]
         if door.consumes_key:
-            effects.append(Effect(kind="remove_item", target=target_id, amount=1))
+            door_effects.append(
+                Effect(kind="remove_item", target=target_id, amount=1)
+            )
         return RuleOutcome(
             ok=True,
             code="used_item",
             message=f"You use the {item.name} to open the {door.name}.",
-            effects=effects,
+            effects=door_effects,
         )
 
     # -- combat -------------------------------------------------------------
