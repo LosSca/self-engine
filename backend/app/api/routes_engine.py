@@ -7,6 +7,7 @@ state version it produced.
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
@@ -14,6 +15,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.db.game_state_store import GameStateStore
 from app.db.scenario_store import ScenarioStore
 from app.engines.action_registry import all_actions
@@ -40,6 +42,8 @@ from app.models.knowledge import ScenarioPlayContext
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services import narrator_factory
 from app.services.text_action_service import TextActionService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["engine"])
 
@@ -124,6 +128,26 @@ def _service() -> ActionService:
     return service
 
 
+def _build_advisor():
+    """Wire the optional intent advisor from the same router the narrator uses.
+
+    Returns None when the switch is off or no model is reachable, so the text
+    lane behaves exactly as before by default.
+    """
+    from app.services import intent_advisor
+
+    if not intent_advisor.enabled():
+        return None
+    try:
+        router, _provider = narrator_factory.build_router()
+    except Exception as exc:  # noqa: BLE001 - advice is optional
+        logger.info("intent advisor could not build a router: %s", exc)
+        return None
+    if router is None:
+        return None
+    return intent_advisor.IntentAdvisor(router)
+
+
 class BindWorldRequest(BaseModel):
     world_id: str = Field(..., min_length=1)
     reset: bool = False
@@ -144,8 +168,17 @@ class RepairRequest(BaseModel):
 
 
 def _debug_tools_enabled() -> bool:
-    flag = os.environ.get("ENGINE_DEBUG_TOOLS", "1").strip().lower()
-    return flag not in ("0", "false", "off", "no")
+    """Whether state-mutating debug endpoints (rollback, repair) may run.
+
+    `ENGINE_DEBUG_TOOLS` is authoritative when set. When it is not set, the
+    answer is derived from config.settings.debug so that a production install
+    (no DEBUG) does not expose rollback to anyone who can reach the port. Set
+    it to 1 explicitly to keep the tools while running the engine locally.
+    """
+    flag = os.environ.get("ENGINE_DEBUG_TOOLS", "").strip().lower()
+    if flag:
+        return flag not in ("0", "false", "off", "no")
+    return bool(getattr(settings, "debug", False))
 
 
 def _require_debug_tools() -> None:
@@ -767,6 +800,7 @@ async def run_text_action(campaign_id: str, request: TextActionBody):
         service.store,
         scenario_store=service.scenario_store,
         action_service=service,
+        advisor=_build_advisor(),
     )
     try:
         return await text_service.execute(

@@ -20,8 +20,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.engines.action_registry import action_names, verb_table
 from app.models.game import ActionRequest, ActionResult, GameState, WorldDefinition
-from app.services import world_service
+import logging
+
+from app.services import intent_advisor, world_service
 from app.services.action_service import ActionService
+
+logger = logging.getLogger(__name__)
 
 #: The parser accepts exactly the actions the rule catalogue declares, and the
 #: verb table is read from the same place, so the two can never drift apart.
@@ -29,6 +33,12 @@ ACTIONS = action_names()
 
 #: Verb table. Longest phrases first so "打开" wins over "打".
 _VERBS: Sequence[Tuple[str, Tuple[str, ...]]] = verb_table()
+
+#: The canonical verb per action, used when an advisor has named an action but
+#: the utterance itself never contained a word the parser recognises.
+_VERBS_PRIMARY: Dict[str, str] = {
+    action: verbs[0] for action, verbs in _VERBS if verbs
+}
 
 _TRAILING = ("", "。", "！", "?", "？", ".", "吧", "啊", "呢")
 _LEADING_PARTICLES = ("请", "我想", "我要", "帮我", "试着", "试图", "麻烦")
@@ -459,11 +469,16 @@ class TextActionService:
         scenario_store=None,
         action_service: Optional[ActionService] = None,
         parser: Optional[TextActionParser] = None,
+        advisor: Optional[intent_advisor.IntentAdvisor] = None,
     ):
         self.game_store = game_store
         self.scenario_store = scenario_store
         self.action_service = action_service or ActionService(game_store)
         self.parser = parser or TextActionParser()
+        #: Optional LLM that may *suggest* a mapping when the parser finds none.
+        #: Off unless ENGINE_INTENT_ADVISOR is set; even when on, its suggestion
+        #: is re-parsed and re-validated, and the rule engine still decides.
+        self.advisor = advisor
 
     # ---------------------------------------------------------------- binding
     def bindable_world(self, campaign_id: str) -> Optional[WorldDefinition]:
@@ -515,6 +530,11 @@ class TextActionService:
         state = self.ensure_state(campaign_id)
         world = world_service.get_world(self.game_store, state.world_id)
         parsed = self.parser.parse(text, world, state)
+        advised = None
+        if parsed is None or not parsed.action:
+            advised = await self._advise(text, world, state)
+            if advised is not None:
+                parsed = advised
         if parsed is None or not parsed.action:
             return self._unparsed(campaign_id, request_id, text, state)
         request = ActionRequest(
@@ -532,6 +552,55 @@ class TextActionService:
             "parsed": parsed.as_dict(),
             "result": json.loads(result.model_dump_json()),
         }
+
+    async def _advise(
+        self, text: str, world: WorldDefinition, state: GameState
+    ) -> Optional[ParsedAction]:
+        """Second chance for an utterance the deterministic parser did not map.
+
+        The suggestion is fed back through the same parser, so the model can
+        only ever steer *which* verb table entry is tried - the resolution of
+        the target, the preconditions and the effects stay in code.
+        """
+        if not intent_advisor.enabled():
+            return None
+        advisor = self.advisor
+        if advisor is None:
+            logger.info("intent advisor is enabled but not wired; keeping the rejection")
+            return None
+        extra = [
+            {"name": action.id, "description": action.label or action.description}
+            for action in getattr(world, "custom_actions", []) or []
+        ]
+        try:
+            suggestion = await advisor.suggest(text, world, extra)
+        except Exception as exc:  # noqa: BLE001 - advice must never break a turn
+            logger.info("intent advisor failed: %s", exc)
+            return None
+        if suggestion is None:
+            return None
+        # The model names an action and the words it thinks name the target.
+        # Rebuild a verb+target utterance from exactly those two pieces: the
+        # parser then resolves the target against the real world, so an
+        # invented target cannot survive and the verb table stays in charge.
+        primary = _VERBS_PRIMARY.get(suggestion.action, "")
+        candidate = f"{primary} {suggestion.fragment}".strip() if primary else ""
+        if not candidate:
+            return None
+        parsed = self.parser.parse(candidate, world, state)
+        if parsed is None or not parsed.action:
+            return None
+        if parsed.action != suggestion.action and suggestion.action != "custom":
+            # The parser disagrees with the model about which verb this is. The
+            # parser wins: it matched real words against the real verb table.
+            logger.info(
+                "intent advisor suggested %s, parser says %s; keeping the parser",
+                suggestion.action,
+                parsed.action,
+            )
+        parsed.note = (parsed.note + " " if parsed.note else "") + "intent advisor"
+        parsed.confidence = "advised"
+        return parsed
 
     def _unparsed(
         self, campaign_id: str, request_id: str, text: str, state: GameState

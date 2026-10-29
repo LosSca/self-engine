@@ -25,6 +25,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GAME_STATE_DB_PATH", str(tmp_path / "game_state.db"))
     monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
     monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenarios.db"))
+    # A local model server on this box must not make these assertions depend on
+    # what a model chose to mention; the narrative is exercised separately.
+    monkeypatch.setenv("ENGINE_NARRATOR", "template")
     from app.main import app
 
     return TestClient(app)
