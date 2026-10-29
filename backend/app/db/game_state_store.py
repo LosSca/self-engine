@@ -152,6 +152,17 @@ class GameStateStore:
                 ),
             )
 
+    def delete_world(self, world_id: str) -> bool:
+        """Remove a world definition; campaigns keep their own state rows.
+
+        Campaigns bound to the deleted world are not cascade-deleted: their
+        history and snapshots stay inspectable, and re-creating a world with the
+        same id makes them playable again.
+        """
+        with self._lock, self._conn:
+            cursor = self._conn.execute("DELETE FROM worlds WHERE world_id = ?", (world_id,))
+            return cursor.rowcount > 0
+
     def get_world(self, world_id: str) -> Optional[WorldDefinition]:
         row = self._conn.execute(
             "SELECT definition_json FROM worlds WHERE world_id = ?", (world_id,)

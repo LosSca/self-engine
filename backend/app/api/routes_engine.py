@@ -911,6 +911,19 @@ def replace_world(world_id: str, body: WorldDefinition):
         store.close()
 
 
+@router.delete("/worlds/{world_id}")
+def delete_world(world_id: str):
+    """Delete a world definition (campaign state rows are preserved)."""
+    store = _get_store()
+    try:
+        _world_or_404(store, world_id)
+        if not store.delete_world(world_id):
+            raise HTTPException(status_code=404, detail=f"unknown world '{world_id}'")
+        return {"deleted": world_id}
+    finally:
+        store.close()
+
+
 @router.put("/worlds/{world_id}/locations/{location_id}", response_model=WorldDefinition)
 def upsert_location(world_id: str, location_id: str, body: LocationDef):
     from app.services import world_editor
