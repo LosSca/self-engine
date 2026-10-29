@@ -37,6 +37,7 @@ from app.services.knowledge_service import build_context
 from app.engines.story_engine import storyline_status
 from app.models.knowledge import ScenarioPlayContext
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
+from app.services import narrator_factory
 from app.services.text_action_service import TextActionService
 
 router = APIRouter(tags=["engine"])
@@ -63,29 +64,17 @@ def _get_store() -> GameStateStore:
 
 
 def _get_narrator():
-    """Template by default; set ENGINE_NARRATOR=llm to use the existing router."""
-    choice = os.environ.get("ENGINE_NARRATOR", "template").strip().lower()
-    if choice not in ("llm", "template"):
-        choice = "template"
-    if choice not in _narrator_cache:
-        if choice == "llm":
-            try:
-                from app.config import settings
-                from app.engines.llm_router import LLMConfig, LLMProvider, LLMRouter
+    """Narrator for the engine lane, from the shared factory.
 
-                if os.environ.get("ENGINE_LLM_PROVIDER", "").strip().lower() == "local":
-                    config = LLMConfig(
-                        primary_provider=LLMProvider.LOCAL,
-                        primary_model=settings.local_llm_model,
-                    )
-                    _narrator_cache[choice] = LLMNarrator(LLMRouter(config))
-                else:
-                    _narrator_cache[choice] = LLMNarrator(LLMRouter(LLMConfig()))
-            except Exception:  # noqa: BLE001 - never block actions on narrator setup
-                _narrator_cache[choice] = TemplateNarrator()
-        else:
-            _narrator_cache[choice] = TemplateNarrator()
-    return _narrator_cache[choice]
+    `ENGINE_NARRATOR` is `auto` by default: the model is used when one is
+    configured (a local NInfer server counts), the template otherwise. The
+    decision lives in app.services.narrator_factory so both lanes agree.
+    """
+    key = narrator_factory.describe()["choice"] + ":" + narrator_factory.describe()["provider"]
+    if key not in _narrator_cache:
+        narrator, _provider = narrator_factory.build_narrator("ENGINE_NARRATOR")
+        _narrator_cache[key] = narrator
+    return _narrator_cache[key]
 
 
 def _get_scenario_store() -> ScenarioStore:

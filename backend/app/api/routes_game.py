@@ -348,13 +348,27 @@ def _api_key_configured(provider: LLMProvider) -> bool:
 
 
 def _unified_narrator(language: str, max_tokens: int):
-    """Narrator for the rules lane: the model when configured, else template."""
-    choice = os.environ.get("ENGINE_UNIFIED_NARRATOR", "auto").strip().lower()
-    if choice in ("template", "off", "0"):
-        return TemplateNarrator()
-    if choice == "auto" and not _api_key_configured(_llm.config.primary_provider):
+    """Narrator for the chat lane, decided by the shared factory.
+
+    `auto` uses the model only when one is actually reachable-by-configuration:
+    a local NInfer server counts even with no cloud key, which is the normal
+    setup on this machine. The router is per-narrator for the local provider so
+    the request-scoped model policy applied to `_llm` cannot redirect it.
+    """
+    from app.services import narrator_factory
+
+    if narrator_factory.narrator_choice("ENGINE_UNIFIED_NARRATOR") == "template":
         return TemplateNarrator()
     try:
+        if narrator_factory.prefer_local():
+            narrator, _provider = narrator_factory.build_narrator(
+                "ENGINE_UNIFIED_NARRATOR",
+                language=language or "zh",
+                max_tokens=max(256, min(int(max_tokens or 600), 900)),
+                temperature=0.9,
+                timeout=60.0,
+            )
+            return narrator
         return LLMNarrator(
             _llm,
             max_tokens=max(256, min(int(max_tokens or 600), 900)),

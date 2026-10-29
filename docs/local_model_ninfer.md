@@ -50,6 +50,33 @@ Invoke-RestMethod http://127.0.0.1:8094/health
 
 ## 4. 使用方式
 
+### 默认行为（不需要任何开关）
+
+`ENGINE_NARRATOR` 默认 `auto`：只要 `LOCAL_LLM_BASE_URL` 与
+`LOCAL_LLM_API_KEY` 都有值，叙事就走本机模型；两者缺一才退回模板叙事。
+决策集中在 `backend/app/services/narrator_factory.py`，两条链路
+（`/api/v1/.../actions` 与 `/api/game/action`）共用同一个判断，
+不再各写一套。
+
+| 变量 | 作用 |
+| --- | --- |
+| `ENGINE_NARRATOR` | `auto`（默认）/ `llm` / `template` |
+| `ENGINE_LLM_PROVIDER` | 留空＝优先本机；`local` / `deepseek` / `openai` / `anthropic` 强制 |
+| `ENGINE_UNIFIED_NARRATOR` | 只覆盖聊天链路，取值同上 |
+
+### 显存被占用时
+
+如果另一程序已经占着显存（游戏、渲染器），标准启动脚本会报
+`requested Engine runtime reservation requires ... but only ... are available`。
+改用低显存启动器，模型相同，只是设备预算更小：
+
+```powershell
+E:\ninfer\start-local-lowvram.bat   # kv-capacity 24576 / 窗口 24576 + 检索 8192
+```
+
+有效上下文从 49152 降到 32768——叙事提示词只有几百 token，实际不受影响。
+
+
 ### 前端
 
 设置面板 → Provider 选「本地 NInfer」→ 模型 `qwen3.8-27b`。选择会随请求
@@ -78,6 +105,10 @@ cd E:\shujia\backend
 .\.venv\Scripts\python.exe scripts\check_local_model.py
 .\.venv\Scripts\python.exe -m pytest tests/engines/test_llm_router_local.py tests/api/test_local_model_status.py -q
 ```
+
+`scripts/e2e_local_narration.py` 会跑完整一局：建世界 → 绑定战役 → 观察 /
+拾取钥匙 / 开门，逐回合检查叙事来自模型且状态已提交，最后核对门、背包、
+任务与诊断结果；退出码 0 才算通过。
 
 `check_local_model.py` 会依次验证：`/v1/models` 可达 → 非流式补全 → 流式补全，
 全部走 `LLMRouter`，与游戏实际调用一致。
