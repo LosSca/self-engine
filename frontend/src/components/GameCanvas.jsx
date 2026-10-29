@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, RefreshCw, Terminal, UserRound, Globe } from 'lucide-react'
 import { useGameStore } from '../store'
@@ -26,7 +26,8 @@ import PlotGeneratorPanel from './PlotGeneratorPanel'
 import TimeskipModal from './TimeskipModal'
 import NpcInspector from './NpcInspector'
 import MemoryInspector from './MemoryInspector'
-import WorldMapModal from './WorldMapModal'
+// 地图看一眼才用到，ForceGraph2D 连同 d3 有 300KB+，不能让它压在游玩首屏上。
+const WorldMapModal = lazy(() => import('./WorldMapModal'))
 import InventoryPanel from './InventoryPanel'
 import DevtoolsPanel from './DevtoolsPanel'
 import CharacterProfilePanel from './CharacterProfilePanel'
@@ -825,7 +826,11 @@ export default function GameCanvas() {
       <TimeskipModal open={timeskipOpen} onClose={() => setTimeskipOpen(false)} campaignId={activeCampaignId} onTimeskip={handleTimeskip} />
       <NpcInspector open={npcOpen} onClose={() => setNpcOpen(false)} campaignId={activeCampaignId} />
       <MemoryInspector open={memoryOpen} onClose={() => setMemoryOpen(false)} campaignId={activeCampaignId} />
-      <WorldMapModal open={mapOpen} onClose={() => setMapOpen(false)} campaignId={activeCampaignId} />
+      {mapOpen && (
+  <Suspense fallback={null}>
+    <WorldMapModal open onClose={() => setMapOpen(false)} campaignId={activeCampaignId} />
+  </Suspense>
+)}
       <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} />
       <JournalPanel open={journalOpen} onClose={() => setJournalOpen(false)} entries={journal} onRefresh={refreshJournal} />
       <WorldStudio

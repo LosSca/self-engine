@@ -1,14 +1,30 @@
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useGameStore } from './store'
 import { fetchScenarios, exportScenario, fetchCampaigns, createCampaign, checkNeo4j, deleteCampaign, deleteScenario, fetchSetupState } from './api'
 import ErrorBoundary from './components/ErrorBoundary'
-import GameCanvas from './components/GameCanvas'
-import ScenarioBuilder from './components/ScenarioBuilder'
-import SetupWizard from './components/SetupWizard'
-import KnowledgeStudio from './components/KnowledgeStudio'
-import WorldStudio from './components/WorldStudio'
 import { ALL_TYPES, WORLD_TYPE_LABELS } from './lib/scenarioTypes'
+
+// 编辑器与游戏画布占了主包一半以上，首屏只需要首页。
+// 这些模块拆成独立 chunk，只有真正进入对应界面时才下载。
+const GameCanvas = lazy(() => import('./components/GameCanvas'))
+const ScenarioBuilder = lazy(() => import('./components/ScenarioBuilder'))
+const SetupWizard = lazy(() => import('./components/SetupWizard'))
+const KnowledgeStudio = lazy(() => import('./components/KnowledgeStudio'))
+const WorldStudio = lazy(() => import('./components/WorldStudio'))
+
+// 懒加载期间的占位：同款全屏底色与文案，避免空白闪一下。
+const ChunkFallback = () => (
+  <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
+    载入中…
+  </div>
+)
+
+const ModalFallback = () => (
+  <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center text-white/40 text-xs uppercase tracking-[0.3em]">
+    载入中…
+  </div>
+)
 
 const ArchiveIcon = () => (
   <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
@@ -332,20 +348,28 @@ function Home() {
         </div>
       </div>
 
-      <WorldStudio
-        open={Boolean(worldStudio)}
-        scenarioId={worldStudio?.scenarioId}
-        campaignId={undefined}
-        onClose={() => setWorldStudio(null)}
-      />
+      {worldStudio && (
+        <Suspense fallback={<ModalFallback />}>
+          <WorldStudio
+            open
+            scenarioId={worldStudio?.scenarioId}
+            campaignId={undefined}
+            onClose={() => setWorldStudio(null)}
+          />
+        </Suspense>
+      )}
 
-      <KnowledgeStudio
-        open={Boolean(studioScenario)}
-        scenarioId={studioScenario?.id}
-        scenarioTitle={studioScenario?.title}
-        initialTab={studioTab}
-        onClose={() => setStudioScenario(null)}
-      />
+      {studioScenario && (
+        <Suspense fallback={<ModalFallback />}>
+          <KnowledgeStudio
+            open
+            scenarioId={studioScenario?.id}
+            scenarioTitle={studioScenario?.title}
+            initialTab={studioTab}
+            onClose={() => setStudioScenario(null)}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
@@ -384,15 +408,21 @@ function PlayGate() {
   }
   if (effectiveState.status === 'wizard') {
     return (
-      <SetupWizard
-        scenario={activeScenario}
-        campaignId={activeCampaignId}
-        questions={effectiveState.questions}
-        onComplete={() => setState({ status: 'ready', questions: [] })}
-      />
+      <Suspense fallback={<ChunkFallback />}>
+        <SetupWizard
+          scenario={activeScenario}
+          campaignId={activeCampaignId}
+          questions={effectiveState.questions}
+          onComplete={() => setState({ status: 'ready', questions: [] })}
+        />
+      </Suspense>
     )
   }
-  return <GameCanvas />
+  return (
+    <Suspense fallback={<ChunkFallback />}>
+      <GameCanvas />
+    </Suspense>
+  )
 }
 
 export default function App() {
@@ -405,7 +435,14 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/create" element={<ScenarioBuilder onCreated={() => window.location.href = '/'} />} />
+          <Route
+            path="/create"
+            element={
+              <Suspense fallback={<ChunkFallback />}>
+                <ScenarioBuilder onCreated={() => window.location.href = '/'} />
+              </Suspense>
+            }
+          />
           <Route path="/play" element={<PlayGate />} />
         </Routes>
       </BrowserRouter>
