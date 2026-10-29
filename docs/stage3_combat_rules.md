@@ -91,3 +91,62 @@ POST /api/v1/campaigns/{campaign_id}/combat
 - 尚未实现进入战斗的显式判定（现在由玩家发起 attack 即开始交战）；主动敌对（怪物先攻击）依赖事件系统 `player_damage` 效果。
 - 战斗无网格/距离，属于叙事级数值战斗；需要在阶段 2 地图坐标落地后再加距离规则。
 - 前端战斗 HUD 依赖 `/combat` 接口，旧 `/api/game/action` 流式链路中的 LLM 战斗评分仍保留，但不再是结构化链路的一部分。
+
+
+---
+
+# 阶段 3b：声明式行动目录（action registry）
+
+## 问题
+
+行动类型原本散在三处硬编码：`rules_engine.evaluate` 的 if 链、`text_action_service.ACTIONS`、
+`ActionRequest.action` 的 Literal。新增一种行动要同时改三处，漏一处就出现"接口接受但规则不认识"
+或"解析器能识别但接口 422"。
+
+## 改动
+
+新增 `backend/app/engines/action_registry.py`：每个行动是一条 `ActionSpec`。
+
+```python
+@dataclass(frozen=True)
+class ActionSpec:
+    name: str            # 稳定 id，等于 ActionRequest.action 的取值
+    label: str           # 中文显示名，给编辑器和调试台用
+    handler: str         # 规则方法名，如 "_take"
+    target: TargetNeed   # "none" | "required" | "optional"
+    description: str = ""
+    verbs: Tuple[str, ...] = ()   # 文本解析用的动词表
+    verb_priority: int = 100      # 同一条话里多个动词都能匹配时的顺序
+```
+
+- `register_action(spec)` 幂等注册（同名替换，位置不变）。
+- `get_action(name)` / `action_names()` / `all_actions()` / `verb_table()`。
+- `RulesEngine.evaluate` 改为查目录后 `getattr(self, spec.handler)(world, state, target_id, params)`，
+  所有规则方法签名统一为 `(world, state, target_id=None, params=None)`。
+- `text_action_service.ACTIONS = action_names()`，`_VERBS = verb_table()`，解析器与规则表不可能再漂移。
+- 新端点 `GET /api/v1/action-types` 返回目录（name/label/target/description/verbs），编辑器与调试台读它。
+
+## 刻意保留的两条约束
+
+1. **目录不含代码**：`ActionSpec` 只有数据，`handler` 只是本类方法名，配置无法在运行时注入实现。
+   可配置性通过"新增 ActionSpec + 新增规则方法"实现，仍然走代码评审与测试。
+2. **动词顺序是作者写的，不是算出来的**：中文短语无法按字符数排序（`打开` 只有 2 字却必须
+   先于 `开`，`unlock` 有 6 个字符却要排在后面），所以 `verb_table()` 原样保留声明顺序。
+
+## 测试
+
+`backend/tests/engines/test_action_registry.py`（7 条）与 `backend/tests/api/test_routes_action_types.py`（1 条）：
+
+- 每条目录项都指向真实存在的规则方法；
+- 目录名字集合 == `ActionRequest.action` 的 Literal 取值（防止接口与目录漂移）；
+- 未知行动返回 `action_not_supported` 且消息带行动名；
+- 目录项确实被 `evaluate` 派发（monkeypatch 规则方法后观察调用参数）；
+- target 需求元数据正确；动词顺序保持声明顺序；
+- 重复注册不产生重复项，可回滚；
+- API 返回顺序与目录一致。
+
+## 已知限制
+
+- 行动仍是代码里声明的；世界配置暂时只能引用这 9 种行动，还不能定义"场景自定义行动"
+  （需要先有参数模式校验，见后续阶段）。
+- `ActionRequest.action` 仍是静态 Literal（Pydantic 需要），由测试保证与目录同步。

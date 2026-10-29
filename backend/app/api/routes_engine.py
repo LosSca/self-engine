@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.db.game_state_store import GameStateStore
 from app.db.scenario_store import ScenarioStore
+from app.engines.action_registry import all_actions
 from app.engines.event_engine import diff_states, simulate_event, validate_event
 from app.models.game import (
     ActionResult,
@@ -39,6 +40,16 @@ from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services.text_action_service import TextActionService
 
 router = APIRouter(tags=["engine"])
+
+
+@router.get("/action-types", response_model=List[Dict[str, Any]])
+def list_action_types():
+    """The verbs the rules engine can decide, as declared in the catalogue.
+
+    Editors and the debug console read this instead of hard-coding a list, so a
+    new action shows up everywhere the moment it is registered.
+    """
+    return [spec.as_dict() for spec in all_actions()]
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _narrator_cache: Dict[str, Any] = {}

@@ -11,6 +11,7 @@ import hashlib
 import random
 from typing import Dict, List, Optional, Tuple
 
+from app.engines.action_registry import get_action
 from app.models.game import (
     CombatantState,
     DoorDef,
@@ -37,29 +38,17 @@ class RulesEngine:
     ) -> RuleOutcome:
         params = params or {}
         kind = str(action)
-        if kind == "look":
-            return self._look(world, state)
-        if kind == "move":
-            return self._move(world, state, target_id)
-        if kind == "take":
-            return self._take(world, state, target_id)
-        if kind == "open":
-            return self._open(world, state, target_id)
-        if kind == "use":
-            return self._use(world, state, target_id)
-        if kind == "talk":
-            return self._talk(world, state, target_id)
-        if kind == "attack":
-            return self._attack(world, state, target_id, params)
-        if kind == "defend":
-            return self._defend(world, state, target_id, params)
-        if kind == "flee":
-            return self._flee(world, state, params)
-        return RuleOutcome(
-            ok=False,
-            code="action_not_supported",
-            message=f"The action '{kind}' is not supported by the rules engine.",
-        )
+        # The catalogue, not this method, decides which verbs exist: adding an
+        # action means registering an ActionSpec, never editing a branch chain.
+        spec = get_action(kind)
+        handler = getattr(self, spec.handler, None) if spec is not None else None
+        if spec is None or handler is None:
+            return RuleOutcome(
+                ok=False,
+                code="action_not_supported",
+                message=f"The action '{kind}' is not supported by the rules engine.",
+            )
+        return handler(world, state, target_id, params)
 
     # -- helpers -----------------------------------------------------------
 
@@ -81,7 +70,13 @@ class RulesEngine:
 
     # -- actions -----------------------------------------------------------
 
-    def _look(self, world: WorldDefinition, state: GameState) -> RuleOutcome:
+    def _look(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
         locations = self._locations(world)
         items = self._items(world)
         doors = self._doors(world)
@@ -128,7 +123,11 @@ class RulesEngine:
         )
 
     def _move(
-        self, world: WorldDefinition, state: GameState, target_id: Optional[str]
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
     ) -> RuleOutcome:
         if not target_id:
             return RuleOutcome(
@@ -191,7 +190,11 @@ class RulesEngine:
         )
 
     def _take(
-        self, world: WorldDefinition, state: GameState, target_id: Optional[str]
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
     ) -> RuleOutcome:
         if not target_id:
             return RuleOutcome(
@@ -227,7 +230,11 @@ class RulesEngine:
         )
 
     def _open(
-        self, world: WorldDefinition, state: GameState, target_id: Optional[str]
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
     ) -> RuleOutcome:
         if not target_id:
             return RuleOutcome(
@@ -289,7 +296,11 @@ class RulesEngine:
         )
 
     def _use(
-        self, world: WorldDefinition, state: GameState, target_id: Optional[str]
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
     ) -> RuleOutcome:
         if not target_id:
             return RuleOutcome(
@@ -547,6 +558,7 @@ class RulesEngine:
         self,
         world: WorldDefinition,
         state: GameState,
+        target_id: Optional[str] = None,
         params: Optional[Dict] = None,
     ) -> RuleOutcome:
         if not self._player_alive(state):
@@ -592,6 +604,7 @@ class RulesEngine:
         world: WorldDefinition,
         state: GameState,
         target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
     ) -> RuleOutcome:
         locations = self._locations(world)
         loc = locations.get(state.location_id)

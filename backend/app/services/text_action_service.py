@@ -18,24 +18,17 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from app.engines.action_registry import action_names, verb_table
 from app.models.game import ActionRequest, ActionResult, GameState, WorldDefinition
 from app.services import world_service
 from app.services.action_service import ActionService
 
-ACTIONS = ("look", "move", "take", "open", "use", "talk", "attack", "defend", "flee")
+#: The parser accepts exactly the actions the rule catalogue declares, and the
+#: verb table is read from the same place, so the two can never drift apart.
+ACTIONS = action_names()
 
 #: Verb table. Longest phrases first so "打开" wins over "打".
-_VERBS: Sequence[Tuple[str, Tuple[str, ...]]] = (
-    ("attack", ("攻击", "打击", "砍", "劈", "刺向", "刺", "揍", "attack", "strike", "fight", "kill", "stab", "slash", "hit the", "hit ")),
-    ("flee", ("逃跑", "逃走", "撤离", "撤退", "跑", "flee", "run away", "retreat", "escape")),
-    ("defend", ("防御", "格挡", "防守", "架起", "defend", "block", "guard", "parry")),
-    ("take", ("拾取", "捡起", "拿走", "拿起", "拿到", "拿", "拿取", "take", "pick up", "grab")),
-    ("open", ("打开", "开启", "推开", "开锁", "开", "open", "unlock")),
-    ("use", ("使用", "用", "use", "apply")),
-    ("talk", ("交谈", "对话", "说话", "说说", "问", "说", "talk", "speak", "ask")),
-    ("move", ("前往", "移动到", "走到", "走到", "进入", "回到", "去往", "去", "前往", "go to", "head to", "travel to", "move to", "walk to", "enter")),
-    ("look", ("观察", "环顾", "查看", "调查", "检查", "看看", "看", "look", "observe", "examine", "inspect")),
-)
+_VERBS: Sequence[Tuple[str, Tuple[str, ...]]] = verb_table()
 
 _TRAILING = ("", "。", "！", "?", "？", ".", "吧", "啊", "呢")
 _LEADING_PARTICLES = ("请", "我想", "我要", "帮我", "试着", "试图", "麻烦")
