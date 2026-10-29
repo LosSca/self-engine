@@ -489,6 +489,18 @@ def campaign_snapshots(campaign_id: str, limit: int = Query(100, ge=1, le=500)):
         store.close()
 
 
+@router.get("/campaigns/{campaign_id}/snapshots/prune", response_model=Dict[str, Any])
+def campaign_snapshots_prune(campaign_id: str):
+    """Drop old snapshots by hand (same policy the commit path applies)."""
+    store = _get_store()
+    try:
+        dropped = store.prune_snapshots(campaign_id)
+        remaining = len(store.list_snapshots(campaign_id, limit=500))
+    finally:
+        store.close()
+    return {"campaign_id": campaign_id, "dropped": dropped, "remaining": remaining}
+
+
 @router.get("/campaigns/{campaign_id}/snapshots/{version}", response_model=GameState)
 def campaign_snapshot(campaign_id: str, version: int):
     store = _get_store()

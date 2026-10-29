@@ -25,8 +25,20 @@ from app.models.game import GameState, WorldDefinition
 
 SCHEMA_VERSION = 2
 
+#: Audit event types written by storage maintenance rather than by gameplay.
+_HOUSEKEEPING_EVENTS = ("snapshot.pruned",)
+
 #: Seconds a writer waits for another writer's transaction before giving up.
 BUSY_TIMEOUT_SECONDS = 10.0
+
+#: Snapshot retention. Every turn writes a full state copy (~13 KB for the
+#: sample village), so keeping all of them grows without bound. The newest
+#: SNAPSHOT_KEEP_RECENT versions are always kept (rollback needs them), the
+#: oldest ones are always kept (they are the only record of the opening state),
+#: and in between only every SNAPSHOT_KEEP_EVERY-th version survives.
+SNAPSHOT_KEEP_RECENT = 20
+SNAPSHOT_KEEP_OLDEST = 5
+SNAPSHOT_KEEP_EVERY = 10
 
 _IDX_REQUESTS = (
     "CREATE INDEX IF NOT EXISTS idx_action_requests_campaign "
@@ -333,6 +345,7 @@ class GameStateStore:
             if updated.rowcount == 0:
                 self._raise_missing_or_conflict(campaign_id, expected_version)
             self._insert_snapshot(state, request_id=request_id)
+            self.prune_snapshots(campaign_id)
             for event in events:
                 self._conn.execute(
                     "INSERT INTO domain_events"
@@ -363,6 +376,52 @@ class GameStateStore:
             expected_version=expected if expected is not None else -1,
             actual_version=int(row["version"]),
         )
+
+    def prune_snapshots(self, campaign_id: str) -> int:
+        """Drop low-value snapshots; keep every live state and the anchors.
+
+        Called after a commit, inside the same transaction. Returns the number
+        of rows deleted. Rollback and state-diff read snapshots, so the newest
+        versions and version 0..SNAPSHOT_KEEP_OLDEST-1 are never removed.
+        """
+        rows = self._conn.execute(
+            "SELECT version FROM campaign_snapshots"
+            " WHERE campaign_id = ? ORDER BY version DESC",
+            (campaign_id,),
+        ).fetchall()
+        versions = [int(row["version"]) for row in rows]
+        if len(versions) <= SNAPSHOT_KEEP_RECENT + SNAPSHOT_KEEP_OLDEST:
+            return 0
+        keep = set(versions[:SNAPSHOT_KEEP_RECENT])
+        keep.update(v for v in versions if v < SNAPSHOT_KEEP_OLDEST)
+        oldest_kept = max(keep) if keep else 0
+        for version in versions:
+            if version in keep:
+                continue
+            if version > oldest_kept and version % SNAPSHOT_KEEP_EVERY == 0:
+                keep.add(version)
+        dropped = [v for v in versions if v not in keep]
+        if not dropped:
+            return 0
+        self._conn.executemany(
+            "DELETE FROM campaign_snapshots WHERE campaign_id = ? AND version = ?",
+            [(campaign_id, version) for version in dropped],
+        )
+        for version in dropped:
+            self._conn.execute(
+                "INSERT INTO domain_events"
+                " (id, campaign_id, request_id, event_type, payload_json,"
+                "  state_version, created_at)"
+                " VALUES (?, ?, '', 'snapshot.pruned', ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    campaign_id,
+                    json.dumps({"version": version}, sort_keys=True),
+                    version,
+                    _now(),
+                ),
+            )
+        return len(dropped)
 
     # ------------------------------------------------------------- snapshots
     def _insert_snapshot(
@@ -438,9 +497,11 @@ class GameStateStore:
     def list_events(
         self, campaign_id: str, limit: int = 50, after_version: int = 0
     ) -> List[Dict[str, Any]]:
+        housekeeping = ", ".join(f"'{name}'" for name in _HOUSEKEEPING_EVENTS)
         rows = self._conn.execute(
             "SELECT * FROM domain_events"
             " WHERE campaign_id = ? AND state_version > ?"
+            f" AND event_type NOT IN ({housekeeping})"
             " ORDER BY rowid ASC LIMIT ?",
             (campaign_id, after_version, limit),
         ).fetchall()
