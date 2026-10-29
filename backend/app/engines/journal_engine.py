@@ -101,6 +101,56 @@ class JournalEngine:
     def get_journal(self, campaign_id: str) -> list[JournalEntry]:
         return self._journals.get(campaign_id, [])
 
+    def _reset_journal(self, campaign_id: str, entries: list[JournalEntry] | None) -> None:
+        """Replace the cached journal for a campaign (used by state rebuilds).
+
+        A plain MagicMock journal exposes the same private attribute, so guard
+        the write with a type check: state rebuilds must never corrupt a fake.
+        """
+        store = getattr(self, "_journals", None)
+        if not isinstance(store, dict):
+            return
+        if entries:
+            store[campaign_id] = entries
+        else:
+            store.pop(campaign_id, None)
+
+    def _hydrate(self, campaign_id: str) -> None:
+        """Rebuild the in-memory journal from the event store.
+
+        The journal is a projection, not authoritative state: after a restart
+        (or when a GET arrives before any action ran) its entries must be
+        re-read from the persisted JOURNAL_ENTRY events instead of reporting an
+        empty journal that silently hides the player's history.
+        """
+        restored: list[JournalEntry] = []
+        if self._event_store is not None:
+            try:
+                from app.db.event_store import EventType
+
+                records = self._event_store.get_by_type(
+                    campaign_id, EventType.JOURNAL_ENTRY
+                )
+            except Exception:
+                records = []
+            for record in records or []:
+                payload = getattr(record, "payload", None) or {}
+                raw_category = payload.get("category")
+                try:
+                    category = JournalCategory(raw_category)
+                except (ValueError, TypeError):
+                    continue
+                restored.append(
+                    JournalEntry(
+                        campaign_id=campaign_id,
+                        category=category,
+                        summary=str(payload.get("summary", "")),
+                        created_at=getattr(record, "created_at", "") or "",
+                        witnessed_by=list(payload.get("witnessed_by") or []),
+                    )
+                )
+        self._journals[campaign_id] = restored
+
     def get_by_category(
         self, campaign_id: str, category: JournalCategory
     ) -> list[JournalEntry]:

@@ -100,9 +100,14 @@ class WorldReactor:
             },
         ]
         try:
-            return await self._llm.complete(messages=messages, max_tokens=512, reasoning=False)
+            raw = await self._llm.complete(messages=messages, max_tokens=512, reasoning=False)
         except Exception:
             return self._fallback_world_change(tick_type, time_desc)
+        # A double or a provider returning structured content must not leak a
+        # non-string into the event payload; fall back to deterministic prose.
+        if not isinstance(raw, str):
+            return self._fallback_world_change(tick_type, time_desc)
+        return raw
 
     @staticmethod
     def _fallback_world_change(tick_type: TickType, time_desc: str) -> str:

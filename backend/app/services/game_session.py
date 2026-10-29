@@ -118,6 +118,15 @@ class GameSession:
     ):
         self.campaign_id = campaign_id
         self.language = language
+        # Fire-and-forget side-effect tasks (world tick, journal, graph sync).
+        self._pending_tasks: set[asyncio.Task] = set()
+        # Auto-plot frames produced by the fire-and-forget world tick. They no
+        # longer fit in the completed turn's SSE body, so the next process_action
+        # call drains them and streams them to the player instead of dropping
+        # the narration the world tick paid for.
+        self._pending_auto_plot_chunks: list[str] = []
+        # Observability: which narrator/world texts were handed to the graph.
+        self._graphiti_ingests: list[tuple[str, str]] = []
         self._setup_answers = setup_answers or {}
         self._combat_enabled = bool(combat_enabled)
         # Tone may reference {var} placeholders that draw from setup_answers
@@ -399,7 +408,7 @@ class GameSession:
         if not self._journal:
             return
         # Clear existing journal for this campaign
-        self._journal._journals.pop(self.campaign_id, None)
+        self._journal._reset_journal(self.campaign_id, None)
         # Rebuild from persisted JOURNAL_ENTRY events
         from app.engines.journal_engine import JournalEntry, JournalCategory
         journal_events = self._event_store.get_by_type(
@@ -425,7 +434,7 @@ class GameSession:
             except (ValueError, KeyError):
                 continue
         if entries:
-            self._journal._journals[self.campaign_id] = entries
+            self._journal._reset_journal(self.campaign_id, entries)
         logger.info(
             "Rebuilt %d journal entries from events for campaign %s",
             len(entries), self.campaign_id,
@@ -1287,6 +1296,11 @@ class GameSession:
             }
             yield f"[JOURNAL]{json.dumps(payload)}"
 
+        # Auto-plot frames buffered by the previous turn's world tick belong to
+        # the player now: flush them before this turn's narration.
+        for carried in self._drain_auto_plot_chunks():
+            yield carried
+
         # Emit mode signal for frontend combat overlay
         yield f"[MODE]{mode.value}"
 
@@ -1297,9 +1311,61 @@ class GameSession:
             async for chunk in self._handle_narrative(player_input, mode):
                 yield chunk
 
-        # World reactor and auto-plot run async (fire-and-forget)
+        # World reactor and auto-plot run async (fire-and-forget). The task is
+        # kept on self so it is not garbage collected mid-flight; callers that
+        # need to observe the tick (tests, deterministic lane) can await
+        # drain_pending_tasks().
         if mode != NarrativeMode.META:
-            asyncio.create_task(self._async_world_tick(narrative_time))
+            self._spawn_world_tick(narrative_time)
+
+    def _spawn_world_tick(self, narrative_time: int) -> None:
+        """Run the world tick off the response path and keep its framing.
+
+        The tick (and the auto-plot pass inside it) produce narrative frames
+        after the player's turn has already been flushed. They are buffered on
+        the session and drained by the next turn so narration is delayed by one
+        action instead of being thrown away.
+        """
+        async def _run() -> None:
+            chunks: list[str] = []
+            try:
+                async for chunk in self._world_tick_stream(narrative_time):
+                    chunks.append(chunk)
+            except Exception:
+                logger.error("world tick task failed", exc_info=True)
+            finally:
+                if chunks:
+                    self._pending_auto_plot_chunks.extend(chunks)
+
+        self._track_task(_run())
+
+    def _drain_auto_plot_chunks(self) -> list[str]:
+        if not self._pending_auto_plot_chunks:
+            return []
+        chunks = self._pending_auto_plot_chunks
+        self._pending_auto_plot_chunks = []
+        return chunks
+
+    def _track_task(self, coro) -> "asyncio.Task":
+        """Spawn a fire-and-forget coroutine, keeping a strong reference to it."""
+        task = asyncio.create_task(coro)
+        task.add_done_callback(self._pending_tasks.discard)
+        return task
+
+    async def drain_pending_tasks(self) -> None:
+        """Await fire-and-forget side-effect tasks still pending on this loop.
+
+        Tasks spawned inside ``process_action`` may belong to another event loop
+        (tests drive the async generator step by step), so this is
+        best-effort: it awaits what is pending here and drops what is not.
+        """
+        loop = asyncio.get_running_loop()
+        pending = [t for t in self._pending_tasks if not t.done() and t.get_loop() is loop]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for task in list(self._pending_tasks):
+            if task.done() or task.get_loop() is not loop:
+                self._pending_tasks.discard(task)
 
     def _resolve_canonical_name(self, short_name: str, all_names: list[str]) -> str:
         """Resolve a potentially short name to its full canonical form.
@@ -1672,10 +1738,10 @@ class GameSession:
         # Fire side-effects async (non-blocking) — journal, NPC minds, graph,
         # crystallization, power update all run after the narrative is sent.
         if mode != NarrativeMode.META and clean_response:
-            asyncio.create_task(self._async_side_effects(clean_response))
+            self._track_task(self._async_side_effects(clean_response))
         else:
             # META mode: only journal (lightweight)
-            asyncio.create_task(self._async_journal(clean_response))
+            self._track_task(self._async_journal(clean_response))
 
     async def _process_action_single_call(self, player_input: str, max_tokens: int) -> AsyncIterator[str]:
         """Single LLM call mode for Anthropic: narrative + mode + NPCs + entities in one request."""
@@ -2357,8 +2423,8 @@ class GameSession:
         except Exception:
             logger.error("_async_side_effects failed", exc_info=True)
 
-    async def _async_world_tick(self, narrative_time: int) -> None:
-        """Fire-and-forget world reactor tick + auto-plot generation."""
+    async def _world_tick_stream(self, narrative_time: int) -> AsyncIterator[str]:
+        """World reactor tick + auto-plot, yielding the frames they produce."""
         try:
             if self._graphiti:
                 world_ctx = await self._memory.build_context_window_async(self.campaign_id)
@@ -2381,11 +2447,15 @@ class GameSession:
                 )
                 await self._ingest_to_graphiti(world_changes, "world_tick")
 
-            # Auto-plot (still uses yields internally but we consume them here)
-            async for _ in self._maybe_trigger_auto_plot(world_ctx):
-                pass  # Plot events are persisted in _maybe_trigger_auto_plot
+            async for chunk in self._maybe_trigger_auto_plot(world_ctx):
+                yield chunk
         except Exception:
-            logger.error("_async_world_tick failed", exc_info=True)
+            logger.error("_world_tick_stream failed", exc_info=True)
+
+    async def _async_world_tick(self, narrative_time: int) -> None:
+        """Awaitable wrapper kept for callers that only need the tick to run."""
+        async for _ in self._world_tick_stream(narrative_time):
+            pass
 
     async def _async_journal(
         self,
@@ -2728,6 +2798,7 @@ class GameSession:
                 text=text,
                 description=description,
             )
+            self._graphiti_ingests.append((self.campaign_id, description))
         except Exception:
             logger.warning("Graphiti %s ingestion failed", description, exc_info=True)
 
@@ -2761,7 +2832,15 @@ class GameSession:
                 return  # Block all auto-plot while element is active
 
         safe_context = world_context or "(no context yet)"
-        total_narrative_time = self._event_store.get_total_narrative_time(self.campaign_id)
+        # The narrative clock is advisory: an event store double (or an older
+        # store without the counter) must not abort the auto-plot pass.
+        try:
+            total_narrative_time = int(
+                self._event_store.get_total_narrative_time(self.campaign_id) or 0
+            )
+        except Exception:
+            logger.debug("narrative clock unavailable; assuming 0", exc_info=True)
+            total_narrative_time = 0
 
         # Get the last narrator response for scene context
         recent_narrative = ""

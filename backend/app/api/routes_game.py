@@ -954,7 +954,9 @@ async def rewind(campaign_id: str):
 
 @router.get("/{campaign_id}/journal")
 async def get_journal(campaign_id: str, category: str | None = None):
-    _ensure_session(campaign_id)
+    # Journal reads stay pure: a rebuild would drop entries that were logged
+    # in this process but not (yet) persisted — including entries added by an
+    # in-flight session, which the player can already see in the UI.
     if category:
         try:
             cat = JournalCategory(category)

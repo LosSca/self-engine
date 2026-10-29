@@ -76,6 +76,11 @@ class NpcMind:
         }
 
 
+# A single character name stays short; longer strings are sentence fragments
+# leaked from a neighbouring JSON field.
+_MAX_NAME_WORDS = 3
+
+
 def _is_generic_npc_name(name: str) -> bool:
     """Return True if the name looks like a generic/unnamed NPC description.
 
@@ -113,10 +118,24 @@ def _is_generic_npc_name(name: str) -> bool:
     ]
 
     words = set(re.split(r"\s+", n))
+
+    # Title-cased single words ("Guard", "Captain") are how narrators name
+    # people by role; keep them so their minds can still be tracked. Generic
+    # descriptions arrive lowercase, or with a descriptor prefixed
+    # ("young servant", "the gate guardian"), which the checks below catch.
+    if len(words) == 1 and name[:1].isupper():
+        return False
+
     # If ALL words in the name are generic markers or short connectors, it's generic
     connectors = {"do", "da", "dos", "das", "de", "o", "a", "os", "as", "the", "of"}
     all_markers = set(generic_markers_pt + generic_markers_en) | connectors
     if words and words.issubset(all_markers):
+        return True
+
+    # Sentence-shaped names ("hold the line", "guard the east gate") are
+    # actions the model mis-parsed into the name slot, not characters. A
+    # proper name is a handful of tokens and never a verb phrase.
+    if len(words) > _MAX_NAME_WORDS:
         return True
 
     return False

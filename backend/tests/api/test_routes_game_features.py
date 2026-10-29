@@ -98,7 +98,9 @@ def test_get_memory_crystals_empty(client):
 def test_timeskip_logs_world_changes_in_journal(client, monkeypatch):
     from app.api import routes_game
 
-    async def fake_process_tick(campaign_id, narrative_seconds, world_context):
+    async def fake_process_tick(campaign_id, narrative_seconds, world_context, language="en", **kwargs):
+        # The production call site passes language=; the double mirrors the real
+        # signature so an extra keyword can never silently swallow the tick.
         return "Factions shift in the capital."
 
     journal_spy = AsyncMock(return_value=None)
