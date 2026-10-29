@@ -119,30 +119,40 @@ def test_the_probe_is_cached_when_it_succeeds(monkeypatch):
     monkeypatch.setattr(
         narrator_factory, "_probe_cache", {"url": "", "at": 0.0, "alive": False}
     )
-    calls = []
+    connects = []
 
-    class _Response:
-        status = 200
-
+    class _Socket:
         def __enter__(self):
             return self
 
         def __exit__(self, *exc):
             return False
 
-    class _Opener:
-        def open(self, request, timeout=None):
-            calls.append(request.full_url)
-            return _Response()
+    def fake_connect(address, timeout=None):
+        connects.append((address, timeout))
+        return _Socket()
 
+    monkeypatch.setattr(narrator_factory.socket, "create_connection", fake_connect)
+    assert narrator_factory.local_llm_reachable() is True
+    assert narrator_factory.local_llm_reachable() is True
+    assert connects == [(("127.0.0.1", 8094), narrator_factory.PROBE_TIMEOUT)], connects
+
+
+def test_a_refused_port_is_reported_as_unreachable(monkeypatch):
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8094/v1")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "sk-local")
     monkeypatch.setattr(
-        narrator_factory.urllib.request,
-        "build_opener",
-        lambda *a, **k: _Opener(),
+        narrator_factory, "_probe_cache", {"url": "", "at": 0.0, "alive": False}
     )
-    assert narrator_factory.local_llm_reachable() is True
-    assert narrator_factory.local_llm_reachable() is True
-    assert len(calls) == 1, calls
+
+    def fake_connect(address, timeout=None):
+        raise ConnectionRefusedError("nobody home")
+
+    monkeypatch.setattr(narrator_factory.socket, "create_connection", fake_connect)
+    assert narrator_factory.local_llm_reachable() is False
+    assert narrator_factory.narrator_choice() == "template"
+    # Failures are not cached, so a server that comes back is picked up at once.
+    assert narrator_factory.describe()["local_reachable"] is False
 
 
 def test_describe_reports_the_local_endpoint(monkeypatch):

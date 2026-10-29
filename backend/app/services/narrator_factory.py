@@ -19,8 +19,9 @@ Nothing here decides game state: a narrator that fails only produces
 from __future__ import annotations
 
 import os
+import socket
 import time
-import urllib.request
+import urllib.parse
 from typing import Dict, Optional, Tuple
 
 from app.config import settings
@@ -84,19 +85,17 @@ def local_llm_reachable(timeout: float = PROBE_TIMEOUT) -> bool:
         and _probe_cache.get("alive")
     ):
         return True
-    # A loopback probe must never be routed through an HTTP proxy.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    root = _base_root()
+    # Ask the socket directly: HTTP through urllib would cost ~700 ms even for
+    # a refused connection, which is the same order as a real local generation.
+    parsed = urllib.parse.urlsplit(_base_root())
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     alive = False
-    for path in ("/health", "/v1/models"):
-        try:
-            request = urllib.request.Request(root + path, method="GET")
-            # urllib raises on 4xx/5xx, so any completed response means "up".
-            with opener.open(request, timeout=timeout):
-                alive = True
-            break
-        except Exception:  # noqa: BLE001 - a probe must never raise
-            continue
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            alive = True
+    except OSError:  # noqa: BLE001 - an unreachable model is not an error
+        alive = False
     if alive:
         _probe_cache.update({"url": base, "at": now, "alive": True})
     else:
