@@ -28,6 +28,7 @@ import {
   rollbackCampaign,
   fetchActionDetail,
 } from '../api'
+import WorldMapGraph from './WorldMapGraph'
 
 const CONDITION_KINDS = [
   ['flag', '剧情标记'],
@@ -989,6 +990,23 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     }
   }
 
+  const removeExit = async (sourceId, targetId) => {
+    if (!worldId || !world) return
+    const source = (world.locations || []).find((item) => item.id === sourceId)
+    if (!source) return
+    const exits = (source.exits || []).filter((exit) => exit.target_id !== targetId)
+    setErrors([])
+    setNotice('')
+    try {
+      const updated = await saveWorldLocation(worldId, sourceId, { ...source, exits })
+      setWorld(updated)
+      setMapData(await fetchWorldMap(worldId))
+      setNotice('已删除出口 ' + sourceId + ' → ' + targetId)
+    } catch (err) {
+      report(err)
+    }
+  }
+
   const openEditor = (kind, value) => {
     setErrors([])
     setNotice('')
@@ -997,6 +1015,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       value: value ? JSON.parse(JSON.stringify(value)) : { ...EMPTY_FOR[kind] },
       isNew: !value,
     })
+  }
+
+  const editLocationById = (locationId) => {
+    const location = ((world && world.locations) || []).find((item) => item.id === locationId)
+    if (location) openEditor('location', location)
   }
 
   const save = async () => {
@@ -1345,6 +1368,15 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   onSave={save}
                   onCancel={() => setEditor(null)}
                   saving={saving}
+                />
+              )}
+
+              {world.locations.length > 0 && (
+                <WorldMapGraph
+                  worldId={worldId}
+                  mapData={mapData}
+                  onEditLocation={editLocationById}
+                  onDeleteExit={removeExit}
                 />
               )}
 
