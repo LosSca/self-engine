@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   createWorld,
   deleteWorldDoor,
@@ -1149,6 +1149,16 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     setMapData(map)
   }, [])
 
+  const fetchActionCatalogue = useCallback(async () => {
+    try {
+      setBuiltinActions((await fetchActionTypes()) || [])
+    } catch {
+      // The catalogue is a convenience reference; failing to load it must not
+      // block editing the world itself.
+      setBuiltinActions([])
+    }
+  }, [])
+
   useEffect(() => {
     if (!open || tab !== 'actions' || builtinActions.length > 0) return undefined
     fetchActionCatalogue()
@@ -1259,16 +1269,6 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       report(err)
     }
   }
-
-  const fetchActionCatalogue = useCallback(async () => {
-    try {
-      setBuiltinActions((await fetchActionTypes()) || [])
-    } catch {
-      // The catalogue is a convenience reference; failing to load it must not
-      // block editing the world itself.
-      setBuiltinActions([])
-    }
-  }, [])
 
   const openEditor = (kind, value) => {
     setErrors([])
