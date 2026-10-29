@@ -157,6 +157,28 @@ class Effect(_ConfigModel):
     amount: int = 1
 
 
+class CustomActionDef(_ConfigModel):
+    """An action a world declares for itself: conditions plus effects.
+
+    Configuration can *describe* an action but never supply an implementation:
+    `requires` holds the same validated Condition rows events use and
+    `effects` the same validated Effect rows, both decided by the same engine.
+    Nothing here is ever executed as code.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(default="", max_length=120)
+    description: str = ""
+    #: Words the deterministic text parser maps onto this action, e.g.
+    #: ["祈祷", "pray"]. Verbs must not shadow a built-in action's verbs.
+    verbs: List[str] = Field(default_factory=list)
+    target: Literal["none", "required", "optional"] = "none"
+    #: Preconditions; all of them must hold for the action to be allowed.
+    requires: List[Condition] = Field(default_factory=list)
+    #: What the action does once it is allowed.
+    effects: List[Effect] = Field(default_factory=list)
+
+
 class ObjectiveDef(_ConfigModel):
     id: str = Field(..., min_length=1, max_length=64)
     kind: Literal["obtain_item", "open_door", "reach_location", "flag"]
@@ -206,6 +228,7 @@ class WorldDefinition(BaseModel):
     entities: List[EntityDef] = Field(default_factory=list)
     quests: List[QuestDef] = Field(default_factory=list)
     events: List[GameEventDef] = Field(default_factory=list)
+    custom_actions: List[CustomActionDef] = Field(default_factory=list)
 
     def validate_references(self) -> List[str]:
         """Return human-readable reference errors (empty list == valid).
@@ -346,6 +369,86 @@ class WorldDefinition(BaseModel):
                         f"event '{event.id}' trigger_target '{event.trigger_target}' "
                         f"is unknown for action '{event.trigger_action}'"
                     )
+        errors.extend(
+            self._validate_custom_actions(item_ids, door_ids, location_ids, quest_ids, entity_ids)
+        )
+        return errors
+
+    def _validate_custom_actions(
+        self,
+        item_ids: set,
+        door_ids: set,
+        location_ids: set,
+        quest_ids: set,
+        entity_ids: set,
+    ) -> List[str]:
+        """Check world-authored actions: ids, verbs and their conditions/effects."""
+        errors: List[str] = []
+        if not self.custom_actions:
+            return errors
+        # Imported lazily: the catalogue is the single source of truth for the
+        # built-in verbs, but the model module must not import the engine layer
+        # at module import time.
+        from app.engines.action_registry import action_names, verb_table
+
+        builtin_actions = set(action_names())
+        builtin_verbs = {
+            verb.strip().lower()
+            for _action, verbs in verb_table()
+            for verb in verbs
+            if verb.strip()
+        }
+        seen_ids = set()
+        verb_owner: Dict[str, str] = {}
+        for custom in self.custom_actions:
+            if custom.id in seen_ids:
+                errors.append(f"duplicate custom action id '{custom.id}'")
+            seen_ids.add(custom.id)
+            if custom.id in builtin_actions:
+                errors.append(
+                    f"custom action '{custom.id}' collides with a built-in action name"
+                )
+            if not custom.verbs:
+                errors.append(
+                    f"custom action '{custom.id}' declares no verbs, so no player "
+                    "utterance could ever reach it"
+                )
+            for verb in custom.verbs:
+                cleaned = (verb or "").strip().lower()
+                if not cleaned:
+                    errors.append(f"custom action '{custom.id}' has an empty verb")
+                    continue
+                if cleaned in builtin_verbs:
+                    errors.append(
+                        f"custom action '{custom.id}' verb '{cleaned}' is already "
+                        "mapped to a built-in action"
+                    )
+                owner = verb_owner.get(cleaned)
+                if owner is not None and owner != custom.id:
+                    errors.append(
+                        f"custom action '{custom.id}' verb '{cleaned}' is already "
+                        f"used by custom action '{owner}'"
+                    )
+                verb_owner[cleaned] = custom.id
+            for condition in custom.requires:
+                errors.extend(
+                    f"custom action '{custom.id}' condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for effect in custom.effects:
+                errors.extend(
+                    f"custom action '{custom.id}' effect: {msg}"
+                    for msg in self._validate_effect(
+                        effect, item_ids, door_ids, quest_ids, entity_ids
+                    )
+                )
         return errors
 
     @staticmethod
@@ -469,7 +572,16 @@ class ActionRequest(BaseModel):
     campaign_id: str = Field(..., min_length=1, max_length=64)
     request_id: str = Field(..., min_length=1, max_length=128)
     action: Literal[
-        "move", "look", "take", "open", "use", "talk", "attack", "defend", "flee"
+        "move",
+        "look",
+        "take",
+        "open",
+        "use",
+        "talk",
+        "attack",
+        "defend",
+        "flee",
+        "custom",
     ]
     actor_id: str = "player"
     target_id: Optional[str] = None

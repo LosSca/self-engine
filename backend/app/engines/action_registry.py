@@ -170,6 +170,20 @@ register_action(
 )
 register_action(
     ActionSpec(
+        name="custom",
+        label="自定义行动",
+        handler="_custom",
+        target="optional",
+        description=(
+            "An action the world itself declares (conditions plus effects). "
+            "The world supplies the verbs, so this entry declares none."
+        ),
+        verbs=(),
+        verb_priority=200,
+    )
+)
+register_action(
+    ActionSpec(
         name="look",
         label="观察",
         handler="_look",

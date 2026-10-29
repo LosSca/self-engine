@@ -7,6 +7,9 @@ import {
   deleteWorldItem,
   deleteWorldLocation,
   deleteWorldQuest,
+  deleteWorldCustomAction,
+  saveWorldCustomAction,
+  fetchActionTypes,
   fetchCampaignDiagnostics,
   fetchEventExecutions,
   fetchQuestProgress,
@@ -90,6 +93,7 @@ const TABS = [
   ['entities', '实体'],
   ['events', '事件'],
   ['quests', '任务'],
+  ['actions', '行动'],
   ['debug', '调试'],
 ]
 
@@ -791,6 +795,50 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
         </>
       )}
 
+      {kind === 'action' && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <label>
+              <FieldLabel>行动 ID</FieldLabel>
+              <input className={inputClass} value={value.id} onChange={(e) => update({ id: e.target.value })} placeholder="pray" />
+            </label>
+            <label>
+              <FieldLabel>显示名称</FieldLabel>
+              <input className={inputClass} value={value.label || ''} onChange={(e) => update({ label: e.target.value })} placeholder="祈祷" />
+            </label>
+            <label>
+              <FieldLabel>目标要求</FieldLabel>
+              <select className={inputClass} value={value.target || 'none'} onChange={(e) => update({ target: e.target.value })}>
+                <option value="none">不需要目标</option>
+                <option value="optional">目标可选</option>
+                <option value="required">必须指定目标</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <FieldLabel>描述（规则通过后作为行动结果说明）</FieldLabel>
+            <textarea className={inputClass + ' min-h-[70px]'} value={value.description || ''} onChange={(e) => update({ description: e.target.value })} />
+          </label>
+          <label>
+            <FieldLabel>触发词（逗号分隔，不能与内置动词重复）</FieldLabel>
+            <input
+              className={inputClass}
+              value={(value.verbs || []).join(', ')}
+              onChange={(e) => update({ verbs: splitList(e.target.value) })}
+              placeholder="祈祷, pray"
+            />
+          </label>
+          <div>
+            <FieldLabel>前置条件（全部满足才允许执行）</FieldLabel>
+            <ConditionRows value={value.requires || []} onChange={(requires) => update({ requires })} />
+          </div>
+          <div>
+            <FieldLabel>行动效果（通过校验后由规则引擎执行）</FieldLabel>
+            <EffectRows value={value.effects || []} onChange={(effects) => update({ effects })} />
+          </div>
+        </>
+      )}
+
       <div className="flex items-center gap-3">
         <button onClick={onSave} disabled={saving} className={primaryButton}>
           {saving ? '保存中…' : editor.isNew ? '创建' : '保存修改'}
@@ -808,6 +856,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
 
 const SAVERS = {
   location: saveWorldLocation,
+  action: saveWorldCustomAction,
   item: saveWorldItem,
   door: saveWorldDoor,
   entity: saveWorldEntity,
@@ -817,6 +866,7 @@ const SAVERS = {
 
 const DELETERS = {
   location: deleteWorldLocation,
+  action: deleteWorldCustomAction,
   item: deleteWorldItem,
   door: deleteWorldDoor,
   entity: deleteWorldEntity,
@@ -853,10 +903,20 @@ const EMPTY_FOR = {
     repeat: 'once',
   },
   quest: { id: '', title: '', description: '', enabled: true, objectives: [], rewards: [] },
+  action: {
+    id: '',
+    label: '',
+    description: '',
+    verbs: [],
+    target: 'none',
+    requires: [],
+    effects: [],
+  },
 }
 
 const KIND_LABELS = {
   location: '地点',
+  action: '行动',
   item: '物品',
   door: '门',
   entity: '实体',
@@ -864,7 +924,14 @@ const KIND_LABELS = {
   quest: '任务',
 }
 
-const TAB_KIND = { items: 'item', doors: 'door', entities: 'entity', events: 'event', quests: 'quest' }
+const TAB_KIND = {
+  items: 'item',
+  doors: 'door',
+  entities: 'entity',
+  events: 'event',
+  quests: 'quest',
+  actions: 'action',
+}
 
 export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [worlds, setWorlds] = useState([])
@@ -883,6 +950,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [debugBusy, setDebugBusy] = useState(false)
   const [debugNonce, setDebugNonce] = useState(0)
   const [binding, setBinding] = useState(false)
+  const [builtinActions, setBuiltinActions] = useState([])
 
   const report = useCallback((err) => {
     if (Array.isArray(err && err.detail)) setErrors(err.detail)
@@ -901,6 +969,12 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     setWorld(definition)
     setMapData(map)
   }, [])
+
+  useEffect(() => {
+    if (!open || tab !== 'actions' || builtinActions.length > 0) return undefined
+    fetchActionCatalogue()
+    return undefined
+  }, [open, tab, builtinActions.length, fetchActionCatalogue])
 
   useEffect(() => {
     if (!open) return undefined
@@ -1007,6 +1081,16 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     }
   }
 
+  const fetchActionCatalogue = useCallback(async () => {
+    try {
+      setBuiltinActions((await fetchActionTypes()) || [])
+    } catch {
+      // The catalogue is a convenience reference; failing to load it must not
+      // block editing the world itself.
+      setBuiltinActions([])
+    }
+  }, [])
+
   const openEditor = (kind, value) => {
     setErrors([])
     setNotice('')
@@ -1036,7 +1120,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       const updated = await SAVERS[kind](worldId, value.id, value)
       setWorld(updated)
       setEditor(null)
-      setNotice('已保存 ' + (value.name || value.title || value.id))
+      setNotice('已保存 ' + (value.name || value.title || value.label || value.id))
       setMapData(await fetchWorldMap(worldId))
       setWorlds((prev) =>
         prev.map((item) =>
@@ -1054,7 +1138,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
 
   const remove = async (kind, value) => {
     if (!worldId) return
-    const label = value.name || value.title || value.id
+    const label = value.name || value.title || value.label || value.id
     if (!window.confirm('删除「' + label + '」？引用它的出口与列表项也会被清理。')) return
     setErrors([])
     setNotice('')
@@ -1165,6 +1249,8 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
           {kind === 'entity' && '实体只保存固定配置；它当前在哪个地点、携带什么属于运行时状态。'}
           {kind === 'event' && '事件由条件与效果组成，保存时服务端会做结构校验，执行前再校验一次；未知条件或效果会安全失败。'}
           {kind === 'quest' && '任务目标由规则与事件驱动更新；模型只负责描述任务，不负责判定完成。'}
+          {kind === 'action' &&
+            '自定义行动只是配置：条件与效果都由规则引擎判定，绝不执行任意代码。条件不满足时会安全拒绝。'}
         </SectionNote>
         <button onClick={() => openEditor(kind, null)} className={primaryButton}>
           新建{KIND_LABELS[kind]}
@@ -1182,6 +1268,21 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
         />
       )}
 
+      {kind === 'action' && builtinActions.length > 0 && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+          <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 mb-2">
+            内置行动（由引擎提供，无需配置）
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {builtinActions.map((spec) => (
+              <span key={spec.name} className="text-[10px] font-mono text-white/40 border border-white/10 rounded-full px-2 py-0.5">
+                {spec.label} · {spec.name} · 目标 {spec.target}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {items.length === 0 && <EmptyHint>还没有配置{KIND_LABELS[kind]}。</EmptyHint>}
 
       {items.map((item) => (
@@ -1191,7 +1292,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
         >
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-bold text-white">{item.name || item.title || item.id}</span>
+              <span className="text-sm font-bold text-white">
+                {item.name || item.title || item.label || item.id}
+              </span>
               <Badge>{item.id}</Badge>
               {item.enabled === false && <Badge tone="warn">已停用</Badge>}
               {kind === 'door' && item.locked && <Badge tone="warn">上锁</Badge>}
@@ -1199,6 +1302,12 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               {kind === 'event' && <Badge>{item.repeat === 'once' ? '只执行一次' : '可重复'}</Badge>}
             </div>
             <p className="text-xs text-white/40 mt-2 leading-relaxed">{item.description || '（无描述）'}</p>
+            {kind === 'action' && (
+              <div className="text-[10px] font-mono text-white/30 mt-2">
+                触发词 {(item.verbs || []).join(' / ') || '（无）'} · 目标 {item.target} · 条件{' '}
+                {(item.requires || []).length} · 效果 {(item.effects || []).length}
+              </div>
+            )}
             {kind === 'event' && (
               <div className="text-[10px] font-mono text-white/30 mt-2">
                 触发 {item.trigger} / {item.trigger_action || '*'} / {item.trigger_target || '*'} · 条件{' '}
@@ -1244,6 +1353,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     entity: (world && world.entities) || [],
     event: (world && world.events) || [],
     quest: (world && world.quests) || [],
+    action: (world && world.custom_actions) || [],
   }
 
   return (

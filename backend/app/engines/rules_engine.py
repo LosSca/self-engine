@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from app.engines.action_registry import get_action
 from app.models.game import (
     CombatantState,
+    Condition,
     DoorDef,
     Effect,
     EntityDef,
@@ -49,6 +50,107 @@ class RulesEngine:
                 message=f"The action '{kind}' is not supported by the rules engine.",
             )
         return handler(world, state, target_id, params)
+
+    # -- world-authored actions -------------------------------------------
+
+    def _custom(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        """Decide an action the world declared, using the event engine's checks.
+
+        The world supplies conditions and effects as data; this method is the
+        only code involved, so a configuration can never add behaviour.
+        """
+        params = params or {}
+        action_id = str(params.get("action_id") or "").strip()
+        if not action_id:
+            return RuleOutcome(
+                ok=False,
+                code="custom_action_missing",
+                message=(
+                    "A custom action needs params.action_id naming the world's "
+                    "custom action."
+                ),
+            )
+        spec = next(
+            (item for item in getattr(world, "custom_actions", []) or [] if item.id == action_id),
+            None,
+        )
+        if spec is None:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_custom_action",
+                message=f"This world declares no custom action '{action_id}'.",
+            )
+        label = spec.label or spec.id
+        if target_id and spec.target != "none" and not self._known_target(world, state, target_id):
+            return RuleOutcome(
+                ok=False,
+                code="unknown_target",
+                message=f"'{target_id}' is not something {label} can act on here.",
+            )
+        if spec.target == "required" and not target_id:
+            return RuleOutcome(
+                ok=False,
+                code="custom_target_required",
+                message=f"{label} needs a target.",
+            )
+        # Imported lazily so the rules module stays free of an import cycle.
+        from app.engines.event_engine import condition_holds
+
+        unmet = [condition for condition in spec.requires if not condition_holds(state, world, condition)]
+        if unmet:
+            reasons = "; ".join(self._describe_condition(condition) for condition in unmet)
+            return RuleOutcome(
+                ok=False,
+                code="condition_failed",
+                message=f"{label} is not possible right now: {reasons}.",
+            )
+        return RuleOutcome(
+            ok=True,
+            code="custom_action",
+            message=spec.description or label,
+            effects=list(spec.effects),
+        )
+
+    @staticmethod
+    def _known_target(world: WorldDefinition, state: GameState, target_id: str) -> bool:
+        if any(item.id == target_id for item in world.items):
+            return True
+        if any(door.id == target_id for door in world.doors):
+            return True
+        if any(entity.id == target_id for entity in world.entities):
+            return True
+        if any(location.id == target_id for location in world.locations):
+            return True
+        return target_id in state.inventory
+
+    @staticmethod
+    def _describe_condition(condition: Condition) -> str:
+        kind = condition.kind
+        if kind == "has_item":
+            return f"you need '{condition.target}'"
+        if kind == "item_count":
+            return f"you need {condition.value} x '{condition.target}'"
+        if kind == "door_open":
+            wanted = "open" if condition.value in (None, True) else "closed"
+            return f"door '{condition.target}' must be {wanted}"
+        if kind == "at_location":
+            return f"you must be at '{condition.target}'"
+        if kind == "quest_status":
+            return f"quest '{condition.target}' must be {condition.value}"
+        if kind == "flag":
+            return f"'{condition.target}' must be {condition.value}"
+        if kind == "combatant_hp":
+            return f"'{condition.target}' health must be {condition.op} {condition.value}"
+        if kind == "combatant_alive":
+            wanted = "alive" if condition.value in (None, True) else "dead"
+            return f"'{condition.target}' must be {wanted}"
+        return f"{kind} '{condition.target}'"
 
     # -- helpers -----------------------------------------------------------
 

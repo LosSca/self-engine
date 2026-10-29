@@ -861,6 +861,25 @@ export async function deleteWorldQuest(worldId, questId) {
   return jsonOrThrow(r, '删除任务失败')
 }
 
+export async function saveWorldCustomAction(worldId, actionId, body) {
+  return jsonOrThrow(
+    await worldChild(worldId, 'custom-actions', actionId, body),
+    '保存自定义行动失败'
+  )
+}
+export async function deleteWorldCustomAction(worldId, actionId) {
+  const r = await fetch(
+    `${V1}/worlds/${worldId}/custom-actions/${encodeURIComponent(actionId)}`,
+    { method: 'DELETE' }
+  )
+  return jsonOrThrow(r, '删除自定义行动失败')
+}
+
+export async function fetchActionTypes() {
+  const r = await fetch(`${V1}/action-types`)
+  return jsonOrThrow(r, '读取行动目录失败')
+}
+
 export async function fetchCampaignSnapshots(campaignId, limit = 50) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/snapshots?limit=${limit}`)
   return jsonOrThrow(r, '读取状态快照失败')

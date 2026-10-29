@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, TypeVar
 
 from app.models.game import (
+    CustomActionDef,
     DoorDef,
     EntityDef,
     GameEventDef,
@@ -175,6 +176,26 @@ def delete_quest(world: WorldDefinition, quest_id: str) -> WorldDefinition:
     if len(remaining) == len(draft.quests):
         raise LookupError(f"unknown quest '{quest_id}'")
     draft.quests = remaining
+    return _finish(draft)
+
+
+def upsert_custom_action(
+    world: WorldDefinition,
+    action: CustomActionDef,
+    action_id: Optional[str] = None,
+) -> WorldDefinition:
+    _require_id("custom action", action.id, action_id)
+    draft = _copy(world)
+    _replace_or_append(draft.custom_actions, action, action.id)
+    return _finish(draft)
+
+
+def delete_custom_action(world: WorldDefinition, action_id: str) -> WorldDefinition:
+    draft = _copy(world)
+    remaining = [item for item in draft.custom_actions if item.id != action_id]
+    if len(remaining) == len(draft.custom_actions):
+        raise LookupError(f"unknown custom action '{action_id}'")
+    draft.custom_actions = remaining
     return _finish(draft)
 
 

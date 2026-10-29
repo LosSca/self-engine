@@ -42,6 +42,9 @@ class ParsedAction:
     confidence: str = "exact"
     candidates: List[str] = field(default_factory=list)
     note: str = ""
+    #: Extra ActionRequest params the parse produced (e.g. action_id for a
+    #: world-authored custom action).
+    params: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -51,6 +54,7 @@ class ParsedAction:
             "confidence": self.confidence,
             "candidates": list(self.candidates),
             "note": self.note,
+            "params": dict(self.params),
         }
 
 
@@ -131,6 +135,11 @@ class TextActionParser:
                 lowered = lowered[: -len(suffix)].strip()
         action, fragment = self._split_verb(lowered)
         if action is None:
+            custom = self._split_custom_verb(lowered, world)
+            if custom is not None:
+                parsed = self._resolve_custom(custom[0], custom[1], world, state)
+                if parsed is not None:
+                    return parsed
             guessed = self._guess_without_verb(lowered, world, state)
             if guessed is None:
                 return None
@@ -159,6 +168,89 @@ class TextActionParser:
                 if verb in ("look", "go", "take") and text.startswith(verb + " "):
                     return action, text[len(verb):].strip()
         return None, text
+
+    # -- world-authored actions --------------------------------------------
+    @staticmethod
+    def _custom_verbs(world: WorldDefinition) -> List[Tuple[str, str]]:
+        """(verb, custom action id) pairs, longest phrase first."""
+        pairs: List[Tuple[str, str]] = []
+        for spec in getattr(world, "custom_actions", []) or []:
+            for verb in spec.verbs:
+                cleaned = (verb or "").strip().lower()
+                if cleaned:
+                    pairs.append((cleaned, spec.id))
+        pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
+        return pairs
+
+    def _split_custom_verb(
+        self, text: str, world: WorldDefinition
+    ) -> Optional[Tuple[str, str]]:
+        for verb, action_id in self._custom_verbs(world):
+            if text == verb:
+                return action_id, ""
+            if text.startswith(verb):
+                return action_id, _clean_target(text[len(verb):])
+        return None
+
+    def _resolve_custom(
+        self, action_id: str, fragment: str, world: WorldDefinition, state: GameState
+    ) -> Optional[ParsedAction]:
+        spec = next(
+            (
+                item
+                for item in getattr(world, "custom_actions", []) or []
+                if item.id == action_id
+            ),
+            None,
+        )
+        if spec is None:
+            return None
+        label = spec.label or spec.id
+        params = {"action_id": spec.id}
+        if spec.target == "none" or not fragment:
+            if spec.target == "required":
+                return ParsedAction(
+                    action="custom",
+                    confidence="missing_target",
+                    note=f"{label} needs a target.",
+                    params=params,
+                )
+            return ParsedAction(action="custom", confidence="verb_only", params=params)
+        matched = self._best(fragment, self._custom_candidates(world, state))
+        if matched is None:
+            if spec.target == "required":
+                return ParsedAction(
+                    action="custom",
+                    confidence="missing_target",
+                    note=f"could not resolve a target from '{fragment}'",
+                    params=params,
+                )
+            return ParsedAction(action="custom", confidence="verb_only", params=params)
+        return ParsedAction(
+            action="custom",
+            target_id=matched.id,
+            matched_name=matched.names[0] if matched.names else matched.id,
+            confidence="exact",
+            params=params,
+        )
+
+    def _custom_candidates(
+        self, world: WorldDefinition, state: GameState
+    ) -> List[_Candidate]:
+        """Anything the player could name as the target of a world action."""
+        candidates: List[_Candidate] = []
+        seen = set()
+        for candidate in (
+            self._move_candidates(world, state)
+            + self._item_candidates(world, state)
+            + self._door_candidates(world, state)
+            + self._talk_candidates(world, state)
+        ):
+            if candidate.id in seen:
+                continue
+            seen.add(candidate.id)
+            candidates.append(candidate)
+        return candidates
 
     def _guess_without_verb(
         self, text: str, world: WorldDefinition, state: GameState
@@ -430,7 +522,7 @@ class TextActionService:
             request_id=request_id,
             action=parsed.action,
             target_id=parsed.target_id,
-            params={"text": text},
+            params={**parsed.params, "text": text},
             narrate=narrate,
         )
         result = await self.action_service.execute(request)

@@ -21,6 +21,7 @@ from app.engines.event_engine import diff_states, simulate_event, validate_event
 from app.models.game import (
     ActionResult,
     ActionRequest,
+    CustomActionDef,
     DoorDef,
     EntityDef,
     GameEventDef,
@@ -1047,6 +1048,28 @@ def delete_quest(world_id: str, quest_id: str):
     from app.services import world_editor
 
     return _edit_world(world_id, lambda world: world_editor.delete_quest(world, quest_id))
+
+
+@router.put(
+    "/worlds/{world_id}/custom-actions/{action_id}", response_model=WorldDefinition
+)
+def upsert_custom_action(world_id: str, action_id: str, body: CustomActionDef):
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id, lambda world: world_editor.upsert_custom_action(world, body, action_id)
+    )
+
+
+@router.delete(
+    "/worlds/{world_id}/custom-actions/{action_id}", response_model=WorldDefinition
+)
+def delete_custom_action(world_id: str, action_id: str):
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id, lambda world: world_editor.delete_custom_action(world, action_id)
+    )
 
 
 # ---------------------------------------------------------------- local model

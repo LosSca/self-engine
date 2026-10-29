@@ -19,7 +19,9 @@ Nothing here decides game state: a narrator that fails only produces
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple
+import time
+import urllib.request
+from typing import Dict, Optional, Tuple
 
 from app.config import settings
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
@@ -51,6 +53,57 @@ def local_llm_configured() -> bool:
     return bool(local_llm_base_url() and local_llm_api_key())
 
 
+PROBE_TTL_SECONDS = 30.0
+PROBE_TIMEOUT = 0.35
+_probe_cache: Dict[str, object] = {"url": "", "at": 0.0, "alive": False}
+
+
+def _base_root() -> str:
+    """`http://host:port` from the configured OpenAI-compatible base URL."""
+    base = local_llm_base_url().rstrip("/")
+    index = base.find("/v1")
+    return base[:index] if index > 0 else base
+
+
+def local_llm_reachable(timeout: float = PROBE_TIMEOUT) -> bool:
+    """Cheap liveness probe for the local server.
+
+    Configuration alone is not availability: the NInfer server may be down (or
+    killed mid-session), and every turn would then spend the narrator timeout
+    waiting for a refused connection. A probe keeps that from happening while
+    still letting the model come back automatically. Successful probes are
+    cached for `PROBE_TTL_SECONDS`; failures are not, so recovery is immediate.
+    """
+    base = local_llm_base_url()
+    if not local_llm_configured():
+        return False
+    now = time.monotonic()
+    if (
+        _probe_cache.get("url") == base
+        and float(_probe_cache.get("at") or 0) + PROBE_TTL_SECONDS > now
+        and _probe_cache.get("alive")
+    ):
+        return True
+    # A loopback probe must never be routed through an HTTP proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    root = _base_root()
+    alive = False
+    for path in ("/health", "/v1/models"):
+        try:
+            request = urllib.request.Request(root + path, method="GET")
+            # urllib raises on 4xx/5xx, so any completed response means "up".
+            with opener.open(request, timeout=timeout):
+                alive = True
+            break
+        except Exception:  # noqa: BLE001 - a probe must never raise
+            continue
+    if alive:
+        _probe_cache.update({"url": base, "at": now, "alive": True})
+    else:
+        _probe_cache.update({"url": base, "at": 0.0, "alive": False})
+    return alive
+
+
 def narrator_choice(env_var: str = "ENGINE_NARRATOR") -> str:
     """`"llm"` or `"template"` for this lane."""
     raw = _env(env_var, "auto").lower()
@@ -58,7 +111,7 @@ def narrator_choice(env_var: str = "ENGINE_NARRATOR") -> str:
         return "template"
     if raw == "llm":
         return "llm"
-    return "llm" if local_llm_configured() else "template"
+    return "llm" if local_llm_reachable() else "template"
 
 
 def prefer_local() -> bool:
@@ -66,7 +119,7 @@ def prefer_local() -> bool:
     explicit = _env("ENGINE_LLM_PROVIDER").lower()
     if explicit:
         return explicit == "local"
-    return local_llm_configured()
+    return local_llm_reachable()
 
 
 def build_router(provider: Optional[str] = None):
@@ -123,6 +176,7 @@ def describe() -> dict:
         "choice": choice,
         "provider": "local" if prefer_local() else _env("ENGINE_LLM_PROVIDER") or "default",
         "local_configured": local_llm_configured(),
+        "local_reachable": local_llm_reachable() if local_llm_configured() else False,
         "local_base_url": local_llm_base_url(),
         "local_model": local_llm_model(),
     }
