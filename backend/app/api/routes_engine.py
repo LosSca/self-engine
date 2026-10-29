@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -594,6 +594,40 @@ def campaign_repair(campaign_id: str, body: RepairRequest):
     finally:
         game_store.close()
         scenario_store.close()
+
+
+class CombatActionBody(BaseModel):
+    """A grid-free combat command; the rules engine decides the outcome."""
+
+    action: Literal["attack", "defend", "flee"] = "attack"
+    target_id: Optional[str] = Field(None, max_length=120)
+    request_id: Optional[str] = Field(None, max_length=128)
+    narrate: bool = True
+
+
+@router.post("/campaigns/{campaign_id}/combat", response_model=ActionResult)
+async def run_combat_action(campaign_id: str, request: CombatActionBody):
+    """Expose attack/defend/flee to the UI without inventing a second lane.
+
+    Everything goes through ActionService, so an LLM never decides who wins;
+    the combat round is recorded in the same transaction as the state change.
+    """
+    service = _service()
+    try:
+        return await service.execute(
+            ActionRequest(
+                campaign_id=campaign_id,
+                request_id=request.request_id or "",
+                action=request.action,
+                target_id=request.target_id,
+                narrate=request.narrate,
+            )
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        service.store.close()
+        service.scenario_store.close()
 
 
 @router.post("/campaigns/{campaign_id}/actions", response_model=ActionResult)

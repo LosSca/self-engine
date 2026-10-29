@@ -821,6 +821,20 @@ export async function fetchCampaignEngineState(campaignId) {
   return jsonOrThrow(r, '读取权威状态失败')
 }
 
+export async function runCombatAction(campaignId, { action = 'attack', targetId = null, requestId = null, narrate = true } = {}) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/combat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action,
+      target_id: targetId,
+      request_id: requestId || `ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      narrate,
+    }),
+  })
+  return jsonOrThrow(r, '战斗行动失败')
+}
+
 export async function fetchQuestProgress(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/quest-progress`)
   return jsonOrThrow(r, '读取任务进度失败')

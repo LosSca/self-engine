@@ -448,7 +448,18 @@ export default function GameCanvas() {
       <div className="flex flex-col h-full bg-black/80 backdrop-blur-md">
 
         {/* Combat Overlay */}
-        <CombatOverlay active={combatMode} />
+        <CombatOverlay
+          active={combatMode}
+          campaignId={activeCampaignId}
+          onNarrate={(text) => appendMessage({ role: 'assistant', content: text })}
+          onResolved={(result) => {
+            const round = result?.combat_round
+            if (!round) return
+            if (round.target_alive === false) {
+              setCombatMode(false)
+            }
+          }}
+        />
 
         {/* Header */}
         <header className="flex-none flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-black/80 backdrop-blur-xl border-b border-white/5 z-10 shadow-lg gap-2">
