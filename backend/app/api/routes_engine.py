@@ -445,6 +445,9 @@ def get_world_map(world_id: str, campaign_id: Optional[str] = None):
                 "name": location.name,
                 "description": location.description,
                 "tags": list(location.tags),
+                "region": location.region,
+                "x": location.x,
+                "y": location.y,
                 "is_start": location.id == world.start_location_id,
                 "exits": exits,
                 "items": [_item_ref(item_id) for item_id in location.item_ids],
@@ -455,12 +458,25 @@ def get_world_map(world_id: str, campaign_id: Optional[str] = None):
             }
         )
 
+    regions: List[Dict[str, Any]] = []
+    for location in world.locations:
+        if not location.region:
+            continue
+        entry = next(
+            (item for item in regions if item["id"] == location.region), None
+        )
+        if entry is None:
+            entry = {"id": location.region, "locations": []}
+            regions.append(entry)
+        entry["locations"].append(location.id)
+
     return {
         "world_id": world.world_id,
         "scenario_id": world.scenario_id,
         "name": world.name,
         "description": world.description,
         "start_location_id": world.start_location_id,
+        "regions": regions,
         "locations": locations,
         "items": [item.model_dump(mode="json") for item in world.items],
         "doors": [door.model_dump(mode="json") for door in world.doors],
@@ -473,6 +489,7 @@ def get_world_map(world_id: str, campaign_id: Optional[str] = None):
                         "hp": live[entity.id].hp,
                         "max_hp": live[entity.id].max_hp,
                         "alive": live[entity.id].alive,
+                        "inventory": dict(live[entity.id].inventory),
                     }
                     if entity.id in live
                     else {}

@@ -195,3 +195,27 @@ def test_event_execution_history_filters_by_state_version(client):
         params={"after_version": take_version},
     ).json()
     assert [entry["event_id"] for entry in later] == ["keeper_alert"]
+
+def test_world_map_exposes_regions_and_coordinates(client):
+    scenario = client.post("/api/scenarios/", json={"title": "Regions", "language": "zh"}).json()
+    world = {
+        "world_id": "region_world",
+        "scenario_id": scenario["id"],
+        "name": "Regions",
+        "start_location_id": "a",
+        "locations": [
+            {"id": "a", "name": "A", "region": "village", "x": 1, "y": 2},
+            {"id": "b", "name": "B", "region": "forest", "x": 3, "y": 4},
+        ],
+        "items": [],
+        "doors": [],
+        "entities": [],
+        "quests": [],
+        "events": [],
+    }
+    assert client.post("/api/v1/worlds", json=world).status_code == 200
+    payload = client.get("/api/v1/worlds/region_world/map").json()
+    by_id = {item["id"]: item for item in payload["locations"]}
+    assert by_id["a"]["region"] == "village"
+    assert (by_id["a"]["x"], by_id["a"]["y"]) == (1, 2)
+    assert {item["id"] for item in payload["regions"]} == {"village", "forest"}

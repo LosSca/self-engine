@@ -75,6 +75,12 @@ class LocationDef(_ConfigModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = ""
     tags: List[str] = Field(default_factory=list)
+    #: Optional editorial grouping; an empty region means ungrouped.
+    region: str = Field(default="", max_length=64)
+    #: Optional grid coordinates for the map view. Set both or neither; the
+    #: editor falls back to automatic layout when they are absent.
+    x: Optional[int] = Field(None, ge=0, le=10000)
+    y: Optional[int] = Field(None, ge=0, le=10000)
     exits: List[ExitDef] = Field(default_factory=list)
     door_ids: List[str] = Field(default_factory=list)
     item_ids: List[str] = Field(default_factory=list)
@@ -120,6 +126,9 @@ class EntityDef(_ConfigModel):
     dialogue: List[str] = Field(default_factory=list)
     hostile: bool = False
     attributes: Dict[str, Any] = Field(default_factory=dict)
+    #: Items this entity starts with (repeated ids mean quantity). A chest is an
+    #: object entity with items; an NPC uses the same field for belongings.
+    items: List[str] = Field(default_factory=list)
 
 
 class DoorDef(_ConfigModel):
@@ -146,10 +155,13 @@ class Condition(_ConfigModel):
         "combatant_alive",
         "entity_at",
         "entity_alive",
+        "entity_item_count",
     ]
     target: str = ""
     op: Literal["eq", "ne", "gte", "lte", "gt", "lt"] = "eq"
     value: Any = True
+    #: Expected quantity for numeric entity conditions (entity_item_count).
+    count: int = Field(1, ge=0)
 
 
 class Effect(_ConfigModel):
@@ -168,6 +180,8 @@ class Effect(_ConfigModel):
         "player_damage",
         "move_entity",
         "seed_entity",
+        "give_entity",
+        "take_entity",
         "quest_accept",
         "quest_fail",
         "emit",
@@ -333,6 +347,10 @@ class WorldDefinition(BaseModel):
             )
 
         for loc in self.locations:
+            if (loc.x is None) != (loc.y is None):
+                errors.append(
+                    f"location '{loc.id}' must set both coordinates or neither"
+                )
             for exit_def in loc.exits:
                 if exit_def.target_id not in location_ids:
                     errors.append(
@@ -471,6 +489,13 @@ class WorldDefinition(BaseModel):
                 )
 
         errors.extend(self._quest_prerequisite_cycles())
+
+        for entity in self.entities:
+            for item_id in entity.items:
+                if item_id not in item_ids:
+                    errors.append(
+                        f"entity '{entity.id}' starts with unknown item '{item_id}'"
+                    )
 
         for event in self.events:
             for condition in event.conditions:
@@ -674,6 +699,14 @@ class WorldDefinition(BaseModel):
             known_entities = entity_ids if entity_ids is not None else set()
             if condition.target not in known_entities:
                 errors.append(f"unknown entity '{condition.target}'")
+        if condition.kind == "entity_item_count":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+            if not isinstance(condition.value, str):
+                errors.append("entity_item_count requires value = item id")
+            elif condition.value not in item_ids:
+                errors.append(f"unknown item '{condition.value}'")
         if condition.kind == "entity_at":
             known_entities = entity_ids if entity_ids is not None else set()
             if condition.target not in known_entities:
@@ -733,6 +766,16 @@ class WorldDefinition(BaseModel):
                 errors.append("move_entity requires value = location id (string)")
             elif effect.value not in (location_ids or set()):
                 errors.append(f"unknown location '{effect.value}'")
+        if effect.kind in ("give_entity", "take_entity"):
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            if not isinstance(effect.value, str):
+                errors.append(f"{effect.kind} requires value = item id")
+            elif effect.value not in item_ids:
+                errors.append(f"unknown item '{effect.value}'")
+            if int(effect.amount or 0) <= 0:
+                errors.append(f"{effect.kind} requires a positive amount")
         return errors
 
 
@@ -781,6 +824,8 @@ class EntityState(BaseModel):
     max_hp: int = 1
     alive: bool = True
     flags: Dict[str, Any] = Field(default_factory=dict)
+    #: Items this entity currently owns or contains.
+    inventory: Dict[str, int] = Field(default_factory=dict)
 
 
 class GameState(BaseModel):

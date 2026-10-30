@@ -5,6 +5,8 @@ const NODE_H = 58
 const GAP_X = 96
 const GAP_Y = 74
 const PAD = 28
+const CELL_X = 190
+const CELL_Y = 120
 
 function positionsKey(worldId) {
   return 'lunar.map.positions.' + (worldId || '')
@@ -53,6 +55,15 @@ function layoutNodes(locations, startId) {
         y: PAD + index * (NODE_H + GAP_Y),
       })
     })
+  }
+  for (const location of locations) {
+    if (typeof location.x === 'number' && typeof location.y === 'number') {
+      nodes.set(location.id, {
+        id: location.id,
+        x: PAD + location.x * CELL_X,
+        y: PAD + location.y * CELL_Y,
+      })
+    }
   }
   return nodes
 }
@@ -309,7 +320,8 @@ export default function WorldMapGraph({ worldId, mapData, onEditLocation, onDele
                   className="fill-white/40"
                   style={{ fontSize: 9, fontFamily: 'monospace' }}
                 >
-                  {location.id.length > 18 ? location.id.slice(0, 18) + '…' : location.id}
+                  {(location.region ? location.region + ' · ' : '') +
+                    (location.id.length > 18 ? location.id.slice(0, 18) + '…' : location.id)}
                 </text>
                 <text x={12} y={50} className="fill-white/35" style={{ fontSize: 8 }}>
                   {location.items.length} 物品 · {location.npcs.length} 实体 ·{' '}

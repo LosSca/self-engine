@@ -121,3 +121,46 @@ def test_authored_combat_hp_preserves_convertible_numeric_values(value):
     data["entities"] = [{"id": "guard", "name": "Guard", "location_id": "village_square"}]
     data["events"][0]["effects"] = [{"kind": "combat_hp", "target": "guard", "value": value}]
     assert WorldDefinition.model_validate(data).validate_references() == []
+
+
+def test_coordinates_must_be_set_as_a_pair():
+    from tests.support import village_world_data
+    from app.models.game import WorldDefinition
+
+    data = village_world_data()
+    data["locations"][0]["x"] = 10
+    errors = WorldDefinition.model_validate(data).validate_references()
+    assert any("coordinates" in error for error in errors)
+
+    data["locations"][0]["y"] = 4
+    assert WorldDefinition.model_validate(data).validate_references() == []
+
+
+def test_entity_items_and_transfer_effects_are_validated():
+    from tests.support import village_world_data
+    from app.models.game import WorldDefinition
+
+    data = village_world_data()
+    data["entities"] = [
+        {
+            "id": "chest",
+            "name": "Chest",
+            "location_id": data["start_location_id"],
+            "kind": "object",
+            "items": ["ghost_item"],
+        }
+    ]
+    data["events"] = [
+        {
+            "id": "loot",
+            "name": "Loot",
+            "trigger": "action",
+            "trigger_action": "look",
+            "effects": [
+                {"kind": "take_entity", "target": "chest", "value": "ghost_item"}
+            ],
+        }
+    ]
+    errors = WorldDefinition.model_validate(data).validate_references()
+    assert any("starts with unknown item 'ghost_item'" in error for error in errors)
+    assert any("unknown item 'ghost_item'" in error for error in errors)

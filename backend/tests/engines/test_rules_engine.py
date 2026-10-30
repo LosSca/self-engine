@@ -234,3 +234,38 @@ def test_talk_and_look_do_not_list_dead_entities_or_objects():
         assert "Guard" not in outcome.message
         assert "Chest" not in outcome.message
         assert outcome.effects == []
+
+
+def test_take_from_a_present_container_uses_transfer_effect():
+    world, state = _setup()
+    state.item_locations.pop("iron_key", None)
+    world.entities.append(
+        EntityDef(
+            id="chest", name="Chest", location_id="village_square",
+            kind="object", items=["iron_key"],
+        )
+    )
+    outcome = RulesEngine().evaluate(world, state, "take", "iron_key")
+    assert outcome.ok and outcome.code == "taken"
+    assert [effect.kind for effect in outcome.effects] == ["take_entity"]
+    assert outcome.effects[0].target == "chest"
+    assert outcome.effects[0].value == "iron_key"
+
+    apply_effects(state, world, outcome.effects)
+    assert state.inventory["iron_key"] == 1
+    assert state.entities["chest"].inventory.get("iron_key", 0) == 0
+
+
+def test_look_reports_container_contents():
+    world, state = _setup()
+    state.item_locations.pop("iron_key", None)
+    world.entities.append(
+        EntityDef(
+            id="chest", name="Chest", location_id="village_square",
+            kind="object", items=["iron_key"],
+        )
+    )
+    outcome = RulesEngine().evaluate(world, state, "look")
+    assert outcome.ok
+    assert "Containers here" in outcome.message
+    assert "Chest" in outcome.message and "Iron Key" in outcome.message

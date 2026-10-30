@@ -333,3 +333,18 @@ async def test_custom_actions_keep_object_targets_and_ui_envelopes(service):
     assert result["parsed"]["params"] == {"action_id": "bless"}
     assert result["parsed"]["target_id"] == "chest"
     assert store.get_state("camp-1").flags["blessed"] is True
+
+
+async def test_text_take_can_loot_a_present_container(service):
+    store = service.game_store
+    state = store.get_state("camp-1")
+    world = store.get_world(state.world_id)
+    chest = next(entity for entity in world.entities if entity.id == "chest")
+    chest.items = ["iron_key"]
+    save_world(store, world)
+    state.item_locations.pop("iron_key", None)
+    store.bind_campaign(state)
+    out = await service.execute("camp-1", "take iron_key", "loot", narrate=False)
+    assert out["status"] == "applied"
+    assert out["result"]["state"]["inventory"]["iron_key"] == 1
+    assert out["result"]["state"]["entities"]["chest"]["inventory"].get("iron_key", 0) == 0

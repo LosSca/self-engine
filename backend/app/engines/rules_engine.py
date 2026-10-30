@@ -12,7 +12,7 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 from app.engines.action_registry import get_action
-from app.engines.event_engine import condition_holds, entity_location
+from app.engines.event_engine import condition_holds, entity_item_count, entity_location
 from app.models.game import (
     CombatantState,
     Condition,
@@ -255,6 +255,20 @@ class RulesEngine:
             if exit_def.target_id in locations
         ]
         people = [entity.name for entity in self._entities_present(world, state)]
+        containers = []
+        for entity in world.entities:
+            if entity.kind != "object":
+                continue
+            if entity_location(state, world, entity.id) != state.location_id:
+                continue
+            contents = [
+                items[item_id].name
+                for item_id in entity.items
+                if item_id in items
+                and entity_item_count(state, world, entity.id, item_id) > 0
+            ]
+            if contents:
+                containers.append(f"{entity.name}: " + ", ".join(contents))
         parts = [loc.description or loc.name]
         if here:
             parts.append("You can see: " + ", ".join(here) + ".")
@@ -262,6 +276,8 @@ class RulesEngine:
             parts.append("Doors: " + ", ".join(door_names) + ".")
         if people:
             parts.append("People here: " + ", ".join(people) + ".")
+        if containers:
+            parts.append("Containers here: " + "; ".join(containers) + ".")
         if exits:
             parts.append("Exits: " + ", ".join(exits) + ".")
         return RuleOutcome(
@@ -370,7 +386,14 @@ class RulesEngine:
                 code="already_carried",
                 message=f"You are already carrying the {item.name}.",
             )
-        if state.item_locations.get(target_id) != state.location_id:
+        owner_id: Optional[str] = None
+        for entity in world.entities:
+            if entity_location(state, world, entity.id) != state.location_id:
+                continue
+            if entity_item_count(state, world, entity.id, target_id) > 0:
+                owner_id = entity.id
+                break
+        if state.item_locations.get(target_id) != state.location_id and owner_id is None:
             return RuleOutcome(
                 ok=False,
                 code="item_not_here",
@@ -391,6 +414,20 @@ class RulesEngine:
                     code="pickup_refused",
                     message=f"You cannot pick up the {item.name} yet: {reasons}.",
                 )
+        if owner_id is not None:
+            return RuleOutcome(
+                ok=True,
+                code="taken",
+                message=f"You take the {item.name}.",
+                effects=[
+                    Effect(
+                        kind="take_entity",
+                        target=owner_id,
+                        value=target_id,
+                        amount=1,
+                    )
+                ],
+            )
         return RuleOutcome(
             ok=True,
             code="taken",

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.engines.action_registry import action_names, verb_table
-from app.engines.event_engine import condition_holds, entity_location
+from app.engines.event_engine import condition_holds, entity_item_count, entity_location
 from app.models.game import ActionRequest, ActionResult, Condition, GameState, WorldDefinition
 import logging
 import sqlite3
@@ -412,6 +412,12 @@ class TextActionParser:
             if state.inventory.get(item.id, 0) > 0:
                 items.append(_Candidate(item.id, [item.name, item.id], "item"))
             elif state.item_locations.get(item.id) == state.location_id:
+                items.append(_Candidate(item.id, [item.name, item.id], "item"))
+            elif any(
+                entity_location(state, world, entity.id) == state.location_id
+                and entity_item_count(state, world, entity.id, item.id) > 0
+                for entity in world.entities
+            ):
                 items.append(_Candidate(item.id, [item.name, item.id], "item"))
         return items
 

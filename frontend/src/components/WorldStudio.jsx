@@ -625,6 +625,43 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             <FieldLabel>标签（逗号分隔）</FieldLabel>
             <input className={inputClass} value={(value.tags || []).join(', ')} onChange={(e) => update({ tags: splitList(e.target.value) })} />
           </label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <label>
+              <FieldLabel>区域（留空 = 未分组）</FieldLabel>
+              <input
+                className={inputClass}
+                value={value.region || ''}
+                onChange={(e) => update({ region: e.target.value })}
+                placeholder="village / forest"
+                list="world-regions"
+              />
+              <datalist id="world-regions">
+                {Array.from(new Set((world.locations || []).map((item) => item.region).filter(Boolean))).map((region) => (
+                  <option key={region} value={region} />
+                ))}
+              </datalist>
+            </label>
+            <label>
+              <FieldLabel>坐标 X（网格，留空自动布局）</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                min="0"
+                value={value.x ?? ''}
+                onChange={(e) => update({ x: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              <FieldLabel>坐标 Y（与 X 成对）</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                min="0"
+                value={value.y ?? ''}
+                onChange={(e) => update({ y: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+            </label>
+          </div>
           <div>
             <FieldLabel>出口与可达关系</FieldLabel>
             <ExitRows world={world} value={value.exits || []} onChange={(exits) => update({ exits })} />
@@ -818,10 +855,21 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               onChange={(e) => update({ dialogue: e.target.value.split('\n').filter((line) => line.trim()) })}
             />
           </label>
-          <label className="flex items-center gap-2 text-xs text-white/60">
-            <input type="checkbox" checked={Boolean(value.hostile)} onChange={(e) => update({ hostile: e.target.checked })} />
-            敌对
-          </label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label>
+              <FieldLabel>携带 / 容器物品（item id，逗号分隔；重复表示数量）</FieldLabel>
+              <input
+                className={inputClass}
+                value={(value.items || []).join(', ')}
+                onChange={(e) => update({ items: splitList(e.target.value) })}
+                placeholder="iron_key, potion"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs text-white/60 mt-6">
+              <input type="checkbox" checked={Boolean(value.hostile)} onChange={(e) => update({ hostile: e.target.checked })} />
+              敌对
+            </label>
+          </div>
         </>
       )}
 
@@ -1164,7 +1212,7 @@ const DELETERS = {
 }
 
 const EMPTY_FOR = {
-  location: { id: '', name: '', description: '', tags: [], exits: [], door_ids: [], item_ids: [], npc_ids: [] },
+  location: { id: '', name: '', description: '', tags: [], region: '', x: null, y: null, exits: [], door_ids: [], item_ids: [], npc_ids: [] },
   item: { id: '', name: '', description: '', tags: [], stackable: true, pickup_requires: [], use_effects: [], consumable: false },
   door: { id: '', name: '', location_id: '', locked: true, opened: false, key_item_id: null, consumes_key: false },
   entity: {
@@ -1177,6 +1225,7 @@ const EMPTY_FOR = {
     dialogue: [],
     hostile: false,
     attributes: {},
+    items: [],
   },
   event: {
     id: '',
@@ -1622,6 +1671,13 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 {item.consumable ? ' · 使用后消耗' : ''}
               </div>
             )}
+            {kind === 'entity' && (
+              <div className="text-[10px] font-mono text-white/30 mt-2">
+                地点 {item.location_id || '—'} · {item.kind}
+                {(item.items || []).length > 0 && ` · 携带 ${item.items.length} 件物品`}
+                {item.hostile ? ' · 敌对' : ''}
+              </div>
+            )}
             {kind === 'quest' && (
               <div className="text-[10px] font-mono text-white/30 mt-2">
                 前置 {(item.prerequisites || []).length} · 接受条件 {(item.accept_requires || []).length} ·
@@ -1827,6 +1883,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-bold text-white">{location.name}</span>
                       <Badge>{location.id}</Badge>
+                      {location.region && <Badge>{location.region}</Badge>}
+                      {typeof location.x === 'number' && typeof location.y === 'number' && (
+                        <Badge tone="muted">({location.x}, {location.y})</Badge>
+                      )}
                       {location.is_start && <Badge tone="accent">起点</Badge>}
                     </div>
                     <p className="text-xs text-white/40 leading-relaxed">{location.description || '（无描述）'}</p>

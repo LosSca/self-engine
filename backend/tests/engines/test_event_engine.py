@@ -8,6 +8,7 @@ from app.engines.event_engine import (
     apply_effects,
     condition_holds,
     diff_states,
+    entity_item_count,
     run_triggered_events,
     simulate_event,
     validate_event,
@@ -838,3 +839,64 @@ def test_simulation_reports_the_matching_branch():
     sim = simulate_event(world, state, "reaction")
     assert sim["branch"] == "angry"
     assert {item["target"] for item in sim["effects_applied"]} == {"base", "angry"}
+
+
+# ---------------------------------------------------- entity inventory
+def test_entity_inventory_seeds_and_moves_both_directions():
+    world, state = _setup()
+    world.entities.append(
+        EntityDef(
+            id="chest", name="Chest", location_id="village_square",
+            kind="object", items=["iron_key"],
+        )
+    )
+    assert entity_item_count(state, world, "chest", "iron_key") == 1
+    condition = Condition(kind="entity_item_count", target="chest", value="iron_key", op="gte", count=1)
+    assert condition_holds(state, world, condition) is True
+
+    taken = apply_effect(
+        state, world,
+        Effect(kind="take_entity", target="chest", value="iron_key", amount=1),
+    )
+    assert taken.ok and taken.facts[0].kind == "item_gained"
+    assert state.inventory["iron_key"] == 1
+    assert entity_item_count(state, world, "chest", "iron_key") == 0
+    assert condition_holds(state, world, condition) is False
+
+    returned = apply_effect(
+        state, world,
+        Effect(kind="give_entity", target="chest", value="iron_key", amount=1),
+    )
+    assert returned.ok
+    assert "iron_key" not in state.inventory
+    assert entity_item_count(state, world, "chest", "iron_key") == 1
+
+
+def test_entity_inventory_effects_fail_closed():
+    world, state = _setup()
+    world.entities.append(
+        EntityDef(id="chest", name="Chest", location_id="village_square", kind="object")
+    )
+    empty = apply_effect(
+        state, world, Effect(kind="take_entity", target="chest", value="iron_key")
+    )
+    assert empty.ok is False and "holds 0" in empty.error
+    state.item_locations.pop("iron_key", None)
+    no_source = apply_effect(
+        state, world, Effect(kind="give_entity", target="chest", value="iron_key")
+    )
+    assert no_source.ok is False and "not held" in no_source.error
+
+
+def test_entity_item_count_requires_a_known_item():
+    world, state = _setup()
+    world.entities.append(
+        EntityDef(id="chest", name="Chest", location_id="village_square", kind="object")
+    )
+    event = _event(
+        id="loot_check",
+        conditions=[Condition(kind="entity_item_count", target="chest", value="ghost_item")],
+    )
+    world.events = [event]
+    errors = validate_event(world, event)
+    assert any("ghost_item" in error for error in errors)

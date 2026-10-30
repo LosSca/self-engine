@@ -99,12 +99,16 @@ def entity_state_for(
         return default
 
     max_hp = max(1, int(_number("max_hp", _number("hp", 10))))
+    inventory: Dict[str, int] = {}
+    for item_id in entity.items:
+        inventory[item_id] = inventory.get(item_id, 0) + 1
     record = EntityState(
         entity_id=entity.id,
         location_id=entity.location_id,
         hp=max_hp,
         max_hp=max_hp,
         alive=True,
+        inventory=inventory,
     )
     state.entities[entity.id] = record
     return record
@@ -120,11 +124,25 @@ def _entity_alive(state: GameState, world: WorldDefinition, entity_id: str) -> b
     return True
 
 
+def entity_item_count(
+    state: GameState, world: WorldDefinition, entity_id: str, item_id: str
+) -> int:
+    """How many of an item an entity currently holds, authored seed included."""
+    entity = next((e for e in world.entities if e.id == entity_id), None)
+    if entity is None or not item_id:
+        return 0
+    record = state.entities.get(entity_id)
+    if record is not None:
+        return record.inventory.get(item_id, 0)
+    return entity.items.count(item_id)
+
+
+
 def condition_holds(
     state: GameState, world: WorldDefinition, condition: Condition
 ) -> bool:
     kind = condition.kind
-    if kind in ("entity_at", "entity_alive", "combatant_hp", "combatant_alive"):
+    if kind in ("entity_at", "entity_alive", "entity_item_count", "combatant_hp", "combatant_alive"):
         if not any(entity.id == condition.target for entity in world.entities):
             return False
     if kind == "flag":
@@ -158,6 +176,10 @@ def condition_holds(
         alive = bool(combatant and combatant.alive)
         expected = True if condition.value is None else bool(condition.value)
         return _compare(alive, expected, condition.op)
+    if kind == "entity_item_count":
+        item_id = condition.value if isinstance(condition.value, str) else ""
+        held = entity_item_count(state, world, condition.target, item_id)
+        return _compare(held, condition.count, condition.op)
     if kind == "entity_at":
         here = entity_location(state, world, condition.target)
         return (
@@ -401,6 +423,66 @@ def apply_effect(
         entity_state_for(state, world, entity)
         return AppliedEffect(
             effect, True, facts=[Fact("entity_seeded", entity.id, entity.location_id)]
+        )
+
+    if kind == "give_entity":
+        entity = next((e for e in world.entities if e.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        item_id = effect.value if isinstance(effect.value, str) else ""
+        if item_id not in {item.id for item in world.items}:
+            return AppliedEffect(effect, False, f"unknown item '{item_id}'")
+        amount = max(1, int(effect.amount or 1))
+        held = state.inventory.get(item_id, 0)
+        if held >= amount:
+            remaining = held - amount
+            if remaining:
+                state.inventory[item_id] = remaining
+            else:
+                state.inventory.pop(item_id, None)
+        elif state.item_locations.get(item_id) == state.location_id and amount == 1:
+            state.item_locations.pop(item_id, None)
+        else:
+            return AppliedEffect(
+                effect,
+                False,
+                f"cannot give {amount} x '{item_id}': not held and not on the ground here",
+            )
+        record = entity_state_for(state, world, entity)
+        record.inventory[item_id] = record.inventory.get(item_id, 0) + amount
+        return AppliedEffect(
+            effect, True, facts=[Fact("entity_item_gained", entity.id, item_id)]
+        )
+
+    if kind == "take_entity":
+        entity = next((e for e in world.entities if e.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        item_id = effect.value if isinstance(effect.value, str) else ""
+        if item_id not in {item.id for item in world.items}:
+            return AppliedEffect(effect, False, f"unknown item '{item_id}'")
+        amount = max(1, int(effect.amount or 1))
+        record = entity_state_for(state, world, entity)
+        held = record.inventory.get(item_id, 0)
+        if held < amount:
+            return AppliedEffect(
+                effect,
+                False,
+                f"entity '{entity.id}' holds {held} x '{item_id}', cannot take {amount}",
+            )
+        remaining = held - amount
+        if remaining:
+            record.inventory[item_id] = remaining
+        else:
+            record.inventory.pop(item_id, None)
+        state.inventory[item_id] = state.inventory.get(item_id, 0) + amount
+        return AppliedEffect(
+            effect,
+            True,
+            facts=[
+                Fact("item_gained", item_id, amount),
+                Fact("entity_item_removed", entity.id, item_id),
+            ],
         )
 
     if kind == "emit":

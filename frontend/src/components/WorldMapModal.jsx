@@ -365,6 +365,7 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
             <div className="flex flex-wrap items-center gap-2 text-xs text-white/70">
               <span className="text-white/40">当前位置</span>
               <span className="font-bold text-white">{currentLocation ? currentLocation.name : engineState.location_id}</span>
+              {currentLocation?.region && <span className="text-white/40 text-[10px] font-mono">{currentLocation.region}</span>}
               {currentLocation?.description && <span className="text-white/40 truncate max-w-lg">{currentLocation.description}</span>}
             </div>
             {error && <p role="alert" className="text-rose-300 text-xs">{error}</p>}
@@ -379,7 +380,7 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
                   onClick={() => runAction('move', location.id, `前往 ${location.name}`)}
                   className="px-2.5 py-1 rounded-lg text-[11px] text-emerald-200 bg-emerald-500/15 border border-emerald-400/30 hover:bg-emerald-500/25 disabled:opacity-40"
                 >
-                  前往 {location.name}{exitDef.door_id ? '（有门）' : ''}
+                  前往 {location.name}{location.region ? `（${location.region}）` : ''}{exitDef.door_id ? '（有门）' : ''}
                 </button>
               ))}
             </div>
