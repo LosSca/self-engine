@@ -156,6 +156,8 @@ class PlayConfig(BaseModel):
     storyline: Storyline = Field(default_factory=Storyline)
     #: Knowledge depth chain cutoff (0 = only core knowledge).
     max_depth: int = Field(9, ge=0, le=9)
+    #: Maximum injected title+content size for one narration (0 = no limit).
+    context_budget_chars: int = Field(0, ge=0, le=200000)
     model_preset_id: str = ""
     updated_at: str = ""
 
@@ -166,6 +168,7 @@ class PlayConfigUpdate(BaseModel):
     mode: PlayMode
     storyline: Optional[Storyline] = None
     max_depth: Optional[int] = Field(None, ge=0, le=9)
+    context_budget_chars: Optional[int] = Field(None, ge=0, le=200000)
     model_preset_id: Optional[str] = None
 
 
@@ -253,6 +256,7 @@ class ScenarioPlayContext(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     scenario_id: str = ""
+    language: str = ""
     config: PlayConfig = Field(default_factory=PlayConfig)
     entries: List[KnowledgeEntry] = Field(default_factory=list)
     preset: Optional[ModelPreset] = None

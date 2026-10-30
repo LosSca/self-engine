@@ -123,11 +123,21 @@ def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
         from app.models.knowledge import LAYER_LABELS
         from app.services.knowledge_service import build_context
 
+        focus: list[str] = []
+        try:
+            with GameStateStore(_game_state_db_path()) as game_store:
+                bound_state = game_store.get_state(campaign_id)
+            if bound_state is not None and bound_state.location_id:
+                focus.append(bound_state.location_id)
+        except Exception:  # noqa: BLE001 - focus is advisory
+            focus = []
         context = build_context(
             entries,
             mode=config.mode,
             max_depth=config.max_depth,
             scenario_id=scenario_id,
+            focus=focus or None,
+            budget_chars=config.context_budget_chars,
         )
         blocks = context.prompt_blocks()
         if not blocks:
@@ -382,57 +392,11 @@ def _unified_narrator(language: str, max_tokens: int):
 
 
 def _knowledge_provider_for(scenario_store: ScenarioStore, campaign_id: str):
-    """Authored context for the rules lane, including tone and the opening.
-
-    The opening and the tone are configuration the player already saw; they are
-    injected as background knowledge so the narrator stays in the same voice.
-    They can never become game facts.
-    """
-    from app.models.knowledge import KnowledgeEntry, ScenarioPlayContext
+    """Read campaign-aware authored context without changing narration authority."""
+    from app.services.narrative_service import scenario_play_context
 
     def provider(scenario_id: str):
-        scenario = scenario_store.get_scenario(scenario_id)
-        if scenario is None:
-            return None
-        campaign = scenario_store.get_campaign(campaign_id)
-        answers = campaign.setup_answers if campaign else {}
-        config = scenario_store.get_play_config(scenario_id)
-        entries = list(scenario_store.list_knowledge(scenario_id))
-        opening = ""
-        if campaign is not None and campaign.generated_opening:
-            opening = campaign.generated_opening
-        elif scenario.opening_narrative:
-            opening = scenario.opening_narrative
-        if opening:
-            opening = interpolate(opening, answers, context=f"campaign:{campaign_id}:opening")
-            entries.insert(0, KnowledgeEntry(
-                id="__opening__", scenario_id=scenario_id, layer="scene",
-                title="开场（已经发生）", content=opening, tags=["opening"],
-                depth=0, always_on=True, mode_scope="both", enabled=True,
-                sort_order=-100,
-            ))
-        tone = interpolate(
-            scenario.tone_instructions or "", answers,
-            context=f"campaign:{campaign_id}:tone",
-        )
-        if tone.strip():
-            entries.insert(0, KnowledgeEntry(
-                id="__tone__", scenario_id=scenario_id, layer="global",
-                title="叙事基调", content=tone, tags=["tone"],
-                depth=0, always_on=True, mode_scope="both", enabled=True,
-                sort_order=-200,
-            ))
-        preset = (
-            scenario_store.get_model_preset(config.model_preset_id)
-            if config.model_preset_id
-            else None
-        )
-        return ScenarioPlayContext(
-            scenario_id=scenario_id,
-            config=config,
-            entries=entries,
-            preset=preset,
-        )
+        return scenario_play_context(scenario_store, scenario_id, campaign_id)
 
     return provider
 
@@ -911,7 +875,16 @@ async def regenerate_opening(campaign_id: str):
 
 @router.get("/{campaign_id}/history")
 async def get_history(campaign_id: str):
-    """Return PLAYER_ACTION and NARRATOR_RESPONSE events to rebuild chat UI."""
+    """Rebuild bound campaigns from engine records, never their legacy mirrors."""
+    with GameStateStore(_game_state_db_path()) as store:
+        if store.get_state(campaign_id) is not None:
+            return {"messages": [
+                {
+                    "role": "user" if event["event_type"] == "PLAYER_ACTION" else "assistant",
+                    "content": event["payload"]["text"],
+                }
+                for event in store.narrative_history(campaign_id)
+            ]}
     events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
              _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
     events.sort(key=lambda e: e.created_at)
@@ -943,7 +916,17 @@ async def delete_traces(campaign_id: str):
 
 @router.post("/{campaign_id}/rewind")
 async def rewind(campaign_id: str):
-    """Delete the last player action + AI response and return updated history."""
+    """Legacy rewind must not diverge a bound campaign's chat from engine state."""
+    with GameStateStore(_game_state_db_path()) as store:
+        if store.get_state(campaign_id) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Engine campaigns cannot use legacy rewind. Use the authorized "
+                    "debug rollback endpoint /api/v1/campaigns/"
+                    f"{campaign_id}/rollback (requires ENGINE_DEBUG_TOOLS)."
+                ),
+            )
     deleted = _event_store.delete_last_pair(campaign_id)
     if deleted == 0:
         raise HTTPException(status_code=404, detail="No actions to rewind")
@@ -1180,6 +1163,25 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
 
 @router.get("/{campaign_id}/inventory")
 async def get_inventory(campaign_id: str):
+    with GameStateStore(_game_state_db_path()) as store:
+        state = store.get_state(campaign_id)
+        if state is not None:
+            world = store.get_world(state.world_id)
+            if world is None:
+                raise HTTPException(status_code=404, detail="Bound world not found")
+            definitions = {item.id: item for item in world.items}
+            return [
+                {
+                    "id": item_id,
+                    "name": definitions[item_id].name if item_id in definitions else item_id,
+                    "category": "misc",
+                    "source": definitions[item_id].description if item_id in definitions else "",
+                    "status": "carried",
+                    "quantity": quantity,
+                }
+                for item_id, quantity in state.inventory.items()
+                if quantity > 0
+            ]
     _ensure_session(campaign_id)
     items = _inventory.get_inventory(campaign_id)
     return [{"name": i.name, "category": i.category, "source": i.source, "status": i.status} for i in items]
@@ -1187,6 +1189,12 @@ async def get_inventory(campaign_id: str):
 
 @router.post("/{campaign_id}/inventory")
 async def update_inventory(campaign_id: str, req: InventoryActionRequest):
+    with GameStateStore(_game_state_db_path()) as store:
+        if store.get_state(campaign_id) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Bound campaigns must use the rules action endpoint to change inventory",
+            )
     if req.action == "use":
         _inventory.use_item(campaign_id, req.name)
     elif req.action == "discard":

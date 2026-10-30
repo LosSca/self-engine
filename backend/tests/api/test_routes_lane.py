@@ -123,8 +123,8 @@ def test_engine_lane_is_idempotent_and_rejects_rule_violations(client, campaign)
         json={"text": "take the stone", "request_id": "lane-r2", "narrate": False},
     ).json()
     assert again_envelope["status"] == "duplicate"
-    # The replay carries the stored outcome of the original turn.
-    assert again_envelope["result"]["status"] == "applied"
+    # Replays report "duplicate" at both levels, like the structured endpoint.
+    assert again_envelope["result"]["status"] == "duplicate"
     assert again_envelope["result"]["state_version"] == 1
     state = client.get(f"/api/v1/campaigns/{campaign_id}/state").json()
     assert state["inventory"]["stone"] == 1

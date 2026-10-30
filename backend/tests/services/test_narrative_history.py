@@ -198,3 +198,61 @@ def bound_world_light():
     world = village_world()
     state = fresh_state(world, "camp-1")
     return world, state
+
+
+def test_recap_reads_real_namedtuples_and_sorts_chronologically(tmp_path):
+    from app.db.event_store import EventStore, EventType
+
+    legacy = EventStore(str(tmp_path / "legacy.db"))
+    try:
+        first = legacy.append("camp-1", EventType.PLAYER_ACTION, {"text": "看看村庄"}, 0, "", [])
+        second = legacy.append("camp-1", EventType.NARRATOR_RESPONSE, {"text": "街道安静。"}, 0, "", [])
+        assert render_history_note([second, first]).splitlines() == [
+            "player: 看看村庄", "narrator: 街道安静。",
+        ]
+    finally:
+        legacy.close()
+
+
+def test_recap_handles_engine_dicts_and_malformed_payloads():
+    events = [None, 42, _event("PLAYER_ACTION", "[]"), _event("PLAYER_ACTION", "bad json")]
+    events += [
+        _event("action.applied", {"action": "look", "params": {"text": "look around"}}),
+        _event("narrator.response", '{"text": "Quiet."}'),
+        _event("NARRATOR_RESPONSE", {"text": {"invalid": "value"}}),
+    ]
+    assert render_history_note(events) == "player: look around\nnarrator: Quiet."
+    assert render_history_note(events, limit=0) == ""
+
+
+async def test_engine_recap_uses_committed_requests_not_legacy_mirrors(store, monkeypatch):
+    from app.api import routes_engine
+
+    bound_world(store)
+    monkeypatch.setenv("GAME_STATE_DB_PATH", store.db_path)
+    monkeypatch.setenv("EVENT_DB_PATH", store.db_path + ".legacy")
+    narrator = RecordingNarrator()
+    service = ActionService(store, narrator=narrator, history_provider=routes_engine._history_provider())
+    await service.execute(_request("past", "look"))
+    await service.execute(_request("refused", "open", "warehouse_door"))
+    await service.execute(_request("current", "look"))
+    history = narrator.seen[-1][0]["content"]
+    assert history.splitlines() == ["player: look", "narrator: ok", "player: open warehouse_door", "narrator: ok"]
+    assert store.get_state("camp-1").version == 2
+
+
+def test_unbound_recap_falls_back_to_legacy_only(store, tmp_path, monkeypatch):
+    from app.api import routes_engine
+    from app.db.event_store import EventStore, EventType
+
+    path = str(tmp_path / "legacy.db")
+    monkeypatch.setenv("GAME_STATE_DB_PATH", store.db_path)
+    monkeypatch.setenv("EVENT_DB_PATH", path)
+    legacy = EventStore(path)
+    try:
+        legacy.append("old", EventType.PLAYER_ACTION, {"text": "old turn"}, 0, "", [])
+        legacy.append("other", EventType.PLAYER_ACTION, {"text": "private"}, 0, "", [])
+    finally:
+        legacy.close()
+    history = routes_engine._history_provider()("old", None)
+    assert history[0]["content"] == "player: old turn"

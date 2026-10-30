@@ -629,12 +629,13 @@ export async function validateKnowledge(scenarioId) {
   return jsonOrThrow(r, '校验知识库失败')
 }
 
-export async function previewKnowledgeContext(scenarioId, { mode, maxDepth, storyNode, storyNodes } = {}) {
+export async function previewKnowledgeContext(scenarioId, { mode, maxDepth, storyNode, storyNodes, focus } = {}) {
   const params = new URLSearchParams()
   if (mode) params.set('mode', mode)
   if (maxDepth !== undefined && maxDepth !== null) params.set('max_depth', String(maxDepth))
   if (storyNodes !== undefined) params.set('story_nodes', storyNodes.join(','))
   else if (storyNode) params.set('story_node', storyNode)
+  if (focus && focus.length > 0) params.set('focus', focus.join(','))
   const query = params.toString()
   const r = await fetch(`${V1}/scenarios/${scenarioId}/context/preview${query ? `?${query}` : ''}`)
   return jsonOrThrow(r, '预览知识上下文失败')
@@ -743,7 +744,8 @@ export async function submitTextAction(campaignId, text, { requestId, narrate = 
     const detail = await r.text().catch(() => '')
     throw new Error(`${r.status} ${detail.slice(0, 300)}`)
   }
-  return r.json()
+  const response = await r.json()
+  return response.result
 }
 
 /** Structured action (used by UI affordances that already know the target). */

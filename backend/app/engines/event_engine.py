@@ -23,8 +23,6 @@ from app.models.game import (
     WorldDefinition,
 )
 
-MAX_CASCADE_PASSES = 2
-
 
 @dataclass(frozen=True)
 class Fact:
@@ -126,6 +124,9 @@ def condition_holds(
     state: GameState, world: WorldDefinition, condition: Condition
 ) -> bool:
     kind = condition.kind
+    if kind in ("entity_at", "entity_alive", "combatant_hp", "combatant_alive"):
+        if not any(entity.id == condition.target for entity in world.entities):
+            return False
     if kind == "flag":
         return _compare(state.flags.get(condition.target), condition.value, condition.op)
     if kind == "has_item":
@@ -140,9 +141,10 @@ def condition_holds(
         )
     if kind == "door_open":
         expected = True if condition.value is None else bool(condition.value)
-        return _door_is_open(state, world, condition.target) == expected
+        return _compare(_door_is_open(state, world, condition.target), expected, condition.op)
     if kind == "at_location":
-        return state.location_id == condition.target
+        expected = True if condition.value is None else condition.value
+        return _compare(state.location_id == condition.target, expected, condition.op)
     if kind == "quest_status":
         progress = state.quests.get(condition.target)
         status = progress.status if progress else "inactive"
@@ -158,7 +160,11 @@ def condition_holds(
         return _compare(alive, expected, condition.op)
     if kind == "entity_at":
         here = entity_location(state, world, condition.target)
-        return here is not None and here == str(condition.value)
+        return (
+            here is not None
+            and isinstance(condition.value, str)
+            and _compare(here, condition.value, condition.op)
+        )
     if kind == "entity_alive":
         expected = True if condition.value is None else bool(condition.value)
         return _compare(
@@ -244,11 +250,16 @@ def apply_effect(
                 False,
                 f"quest '{quest.id}' has no objective '{objective_id}'",
             )
-        progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
+        if not quest.enabled:
+            return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
+        progress = state.quests.get(quest.id)
+        if progress is None or progress.status != "active":
+            return AppliedEffect(effect, False, f"quest '{quest.id}' is not active")
         current = progress.objectives.get(objective.id, 0)
-        progress.objectives[objective.id] = min(
-            objective.required_count, current + max(1, int(effect.amount or 1))
-        )
+        updated = min(objective.required_count, current + max(1, int(effect.amount or 1)))
+        if updated == current:
+            return AppliedEffect(effect, True)
+        progress.objectives[objective.id] = updated
         state.quests[quest.id] = progress
         return AppliedEffect(
             effect,
@@ -257,29 +268,34 @@ def apply_effect(
         )
 
     if kind == "quest_complete":
-        quest = next((q for q in world.quests if q.id == effect.target), None)
-        if quest is None:
-            return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
-        progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
-        if progress.status == "failed":
-            return AppliedEffect(effect, False, f"quest '{quest.id}' has already failed")
-        progress.status = "completed"
-        state.quests[quest.id] = progress
-        return AppliedEffect(effect, True, facts=[Fact("quest_completed", quest.id)])
+        from app.engines.quest_engine import complete_quest
+
+        return complete_quest(state, world, effect)
 
     if kind == "quest_accept":
+        from app.engines.quest_engine import accept_conditions_met, prerequisites_met
+
         quest = next((q for q in world.quests if q.id == effect.target), None)
         if quest is None:
             return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
-        progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
-        if progress.status == "completed":
+        if not quest.enabled:
+            return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
+        progress = state.quests.get(quest.id) or QuestProgress(
+            quest_id=quest.id, status="inactive"
+        )
+        if progress.status in ("completed", "failed"):
             return AppliedEffect(
-                effect, False, f"quest '{quest.id}' is already completed"
+                effect, False, f"quest '{quest.id}' is already {progress.status}"
             )
+        if not prerequisites_met(state, quest):
+            return AppliedEffect(effect, False, f"quest '{quest.id}' prerequisites are unmet")
+        if not accept_conditions_met(state, world, quest):
+            return AppliedEffect(effect, False, f"quest '{quest.id}' accept conditions are unmet")
+        if progress.status == "active":
+            return AppliedEffect(effect, True)
         for objective in quest.objectives:
             progress.objectives.setdefault(objective.id, 0)
-        if progress.status == "inactive":
-            progress.status = "active"
+        progress.status = "active"
         state.quests[quest.id] = progress
         return AppliedEffect(effect, True, facts=[Fact("quest_accepted", quest.id)])
 
@@ -287,11 +303,15 @@ def apply_effect(
         quest = next((q for q in world.quests if q.id == effect.target), None)
         if quest is None:
             return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
+        if not quest.enabled:
+            return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
         progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
         if progress.status == "completed":
             return AppliedEffect(
                 effect, False, f"quest '{quest.id}' is already completed"
             )
+        if progress.status == "failed":
+            return AppliedEffect(effect, True)
         progress.status = "failed"
         state.quests[quest.id] = progress
         return AppliedEffect(effect, True, facts=[Fact("quest_failed", quest.id)])
@@ -300,6 +320,12 @@ def apply_effect(
         entity = next((entry for entry in world.entities if entry.id == effect.target), None)
         if entity is None:
             return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        try:
+            hp = 0 if effect.value is None else int(effect.value)
+        except (TypeError, ValueError, OverflowError):
+            return AppliedEffect(
+                effect, False, "combat_hp requires a numeric value convertible to an integer"
+            )
         combatant = state.combatants.get(entity.id)
         if combatant is None:
             # Seed the same way the rules engine does, so authored attributes
@@ -318,7 +344,6 @@ def apply_effect(
                 defense=max(0, int(_number("defense", 1))),
                 flee_chance=min(1.0, max(0.0, _number("flee_chance", 0.5))),
             )
-        hp = 0 if effect.value is None else int(effect.value)
         combatant.hp = max(0, min(hp, combatant.max_hp))
         was_alive = combatant.alive
         combatant.alive = combatant.hp > 0
@@ -351,7 +376,9 @@ def apply_effect(
         entity = next((e for e in world.entities if e.id == effect.target), None)
         if entity is None:
             return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        destination = str(effect.value or "")
+        if not isinstance(effect.value, str):
+            return AppliedEffect(effect, False, "move_entity requires value = location id (string)")
+        destination = effect.value
         location = next((l for l in world.locations if l.id == destination), None)
         if location is None:
             return AppliedEffect(effect, False, f"unknown location '{destination}'")
@@ -404,66 +431,116 @@ def event_matches(event: GameEventDef, action: str, target_id: Optional[str]) ->
     return True
 
 
+def _repeat_reason(event: GameEventDef, state: GameState) -> str:
+    """Why this event may not fire again right now (empty means it may)."""
+    if event.repeat == "once" and event.id in state.fired_events:
+        return "already fired (repeat=once)"
+    count = state.event_counts.get(event.id, 0)
+    if event.max_fires is not None and count >= event.max_fires:
+        return f"max_fires reached ({count}/{event.max_fires})"
+    if event.cooldown_turns:
+        last = state.event_last_turn.get(event.id)
+        if last is not None and state.turn - last < event.cooldown_turns:
+            remaining = event.cooldown_turns - (state.turn - last)
+            return f"cooldown: {remaining} more turn(s)"
+    return ""
+
+
 def run_triggered_events(
     world: WorldDefinition,
     state: GameState,
     action: str,
     target_id: Optional[str],
     facts: List[Fact],
+    *,
+    processed: Optional[set[str]] = None,
+    forced: Optional[set[str]] = None,
 ) -> Tuple[GameState, List[EventExecution], List[Fact]]:
-    """Fire every matching event once, in priority order.
+    """Settle matching events in priority order, attempting each once per action.
 
     Each event is applied atomically: effects go onto a scratch copy of the
     state, and a failing effect discards that copy and records a failure with a
-    readable reason. Returns (new_state, executions, new_facts).
+    readable reason. Follow-up event ids (success or failure) join `forced`, so
+    they may run in this same settlement even when their own trigger does not
+    match; their conditions still decide. Returns (new_state, executions, facts).
     """
     state = state.model_copy(deep=True)
+    processed = processed if processed is not None else set()
+    forced = forced if forced is not None else set()
     executions: List[EventExecution] = []
     new_facts: List[Fact] = []
     ordered = sorted(world.events, key=lambda e: (-e.priority, e.id))
+    known = {event.id for event in ordered}
 
-    for event in ordered:
-        if not event_matches(event, action, target_id):
-            continue
-        if event.repeat == "once" and event.id in state.fired_events:
-            executions.append(
-                EventExecution(
-                    event_id=event.id,
-                    name=event.name,
-                    status="skipped",
-                    reason="already fired (repeat=once)",
+    for _ in range(len(ordered)):
+        fired = False
+        for event in ordered:
+            if event.id in processed:
+                continue
+            if event.id not in forced and not event_matches(event, action, target_id):
+                continue
+            if not event.enabled:
+                continue
+            if event.repeat == "once" and event.id in state.fired_events:
+                processed.add(event.id)
+                executions.append(
+                    EventExecution(
+                        event_id=event.id,
+                        name=event.name,
+                        status="skipped",
+                        reason="already fired (repeat=once)",
+                    )
                 )
-            )
-            continue
-        if not all(condition_holds(state, world, c) for c in event.conditions):
-            continue
-        scratch = state.model_copy(deep=True)
-        applied = apply_effects(scratch, world, event.effects)
-        failed = [a for a in applied if not a.ok]
-        if failed:
+                continue
+            if not all(condition_holds(state, world, c) for c in event.conditions):
+                continue
+            blocked = _repeat_reason(event, state)
+            if blocked:
+                processed.add(event.id)
+                executions.append(
+                    EventExecution(
+                        event_id=event.id,
+                        name=event.name,
+                        status="skipped",
+                        reason=blocked,
+                    )
+                )
+                continue
+            processed.add(event.id)
+            scratch = state.model_copy(deep=True)
+            applied = apply_effects(scratch, world, event.effects)
+            failed = [a for a in applied if not a.ok]
+            if failed:
+                executions.append(
+                    EventExecution(
+                        event_id=event.id,
+                        name=event.name,
+                        status="failed",
+                        reason=failed[0].error,
+                        effects=event.effects,
+                    )
+                )
+                forced.update(fid for fid in event.failure_events if fid in known)
+                continue
+            state = scratch
+            fired = True
+            if event.id not in state.fired_events:
+                state.fired_events.append(event.id)
+            state.event_counts[event.id] = state.event_counts.get(event.id, 0) + 1
+            state.event_last_turn[event.id] = state.turn
+            for item in applied:
+                new_facts.extend(item.facts)
+            forced.update(fid for fid in event.followup_events if fid in known)
             executions.append(
                 EventExecution(
                     event_id=event.id,
                     name=event.name,
-                    status="failed",
-                    reason=failed[0].error,
+                    status="fired",
                     effects=event.effects,
                 )
             )
-            continue
-        state = scratch
-        if event.repeat == "once" and event.id not in state.fired_events:
-            state.fired_events.append(event.id)
-        for item in applied:
-            new_facts.extend(item.facts)
-        executions.append(
-            EventExecution(
-                event_id=event.id,
-                name=event.name,
-                status="fired",
-                effects=event.effects,
-            )
-        )
+        if not fired:
+            break
     return state, executions, new_facts
 
 
@@ -489,6 +566,12 @@ def validate_event(world: WorldDefinition, event: GameEventDef) -> List[str]:
         )
     if event.trigger == "action" and not event.trigger_action:
         errors.append("trigger 'action' requires trigger_action")
+    known_events = {candidate.id for candidate in world.events}
+    for followup_id in event.followup_events + event.failure_events:
+        if followup_id == event.id:
+            errors.append("an event cannot name itself as a follow-up")
+        elif followup_id not in known_events:
+            errors.append(f"unknown follow-up event '{followup_id}'")
     return errors
 
 
@@ -500,7 +583,8 @@ def simulate_event(
     if event is None:
         return {"status": "not_found", "error": f"unknown event '{event_id}'"}
     errors = validate_event(world, event)
-    conditions_met = all(condition_holds(state, world, c) for c in event.conditions)
+    conditions_met = False
+    reason = ""
     scratch = state
     applied: List[AppliedEffect] = []
     failed: List[AppliedEffect] = []
@@ -508,22 +592,38 @@ def simulate_event(
         status = "invalid"
     elif not event.enabled:
         status = "disabled"
-    elif not conditions_met:
-        status = "not_applicable"
     else:
-        scratch = state.model_copy(deep=True)
-        applied = apply_effects(scratch, world, event.effects)
-        failed = [item for item in applied if not item.ok]
-        status = "failed" if failed else "would_fire"
-        if failed:
-            # Effects commit per event, atomically: a failure means nothing lands.
-            scratch = state
+        blocked = _repeat_reason(event, state)
+        if blocked:
+            status = "skipped"
+            reason = blocked
+        else:
+            conditions_met = all(condition_holds(state, world, c) for c in event.conditions)
+            if not conditions_met:
+                status = "not_applicable"
+            else:
+                scratch = state.model_copy(deep=True)
+                applied = apply_effects(scratch, world, event.effects)
+                failed = [item for item in applied if not item.ok]
+                status = "failed" if failed else "would_fire"
+                if failed:
+                    scratch = state
+                else:
+                    if event.id not in scratch.fired_events:
+                        scratch.fired_events.append(event.id)
+                    scratch.event_counts[event.id] = scratch.event_counts.get(event.id, 0) + 1
+                    scratch.event_last_turn[event.id] = scratch.event_last_turn.get(
+                        event.id, scratch.turn
+                    )
     return {
         "status": status,
+        "reason": reason,
         "event_id": event.id,
         "name": event.name,
         "errors": errors,
         "conditions_met": conditions_met,
+        "followup_events": list(event.followup_events),
+        "failure_events": list(event.failure_events),
         "effects_applied": [item.effect.model_dump() for item in applied if item.ok],
         "errors_effect": [item.error for item in failed],
         "state_before": state.model_dump(),
@@ -543,6 +643,8 @@ def diff_states(before: GameState, after: GameState) -> Dict[str, Any]:
         "item_locations",
         "quests",
         "fired_events",
+        "event_counts",
+        "event_last_turn",
         "story_nodes",
         "turn",
         "version",

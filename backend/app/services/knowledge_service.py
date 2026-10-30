@@ -49,14 +49,25 @@ def build_context(
     storyline: Optional[Storyline] = None,
     scenario_id: str = "",
     story_nodes: Optional[Sequence[str]] = None,
+    focus: Optional[Sequence[str]] = None,
+    budget_chars: int = 0,
 ) -> KnowledgeContext:
     """Select and order the knowledge entries visible for one turn.
 
     "story_nodes" is every node the campaign has actually entered; their
     knowledge is boosted together. "story_node" stays supported for callers that
     only know the active trunk node, and is used when "story_nodes" is omitted.
+
+    "focus" names the current place, target or NPC; entries tagged with those
+    names are ranked ahead of unrelated ones. "budget_chars" (>0) caps the
+    injected title+content size, and every entry that no longer fits is reported
+    in `stats.excluded` with the reason, so a large encyclopedia is never sent
+    whole.
     """
     max_depth = max(0, min(9, int(max_depth)))
+    focus_tokens = {
+        str(item).strip().casefold() for item in (focus or []) if str(item).strip()
+    }
     candidates: List[str] = []
     # Saved story history can outlive a switch to free mode. It must not
     # influence ranking, including for direct callers and context previews.
@@ -110,12 +121,43 @@ def build_context(
             )
         )
 
+    def _focus_hits(entry: KnowledgeEntry) -> int:
+        if not focus_tokens:
+            return 0
+        return len({tag.strip().casefold() for tag in entry.tags} & focus_tokens)
+
     def _sort_key(block: KnowledgeBlock):
         entry = next(e for e in entries if e.id == block.entry_id)
         boosted = 0 if block.entry_id in boost_ids else 1
-        return (boosted, _layer_rank(block.layer), entry.depth, entry.sort_order, block.title)
+        return (
+            boosted,
+            -_focus_hits(entry),
+            _layer_rank(block.layer),
+            entry.depth,
+            entry.sort_order,
+            block.title,
+        )
 
     blocks.sort(key=_sort_key)
+
+    if budget_chars and budget_chars > 0:
+        kept: List[KnowledgeBlock] = []
+        used = 0
+        for block in blocks:
+            cost = len(block.title) + len(block.content)
+            if used + cost > budget_chars:
+                excluded.append(
+                    ExcludedEntry(
+                        entry_id=block.entry_id,
+                        title=block.title,
+                        reason=f"超出上下文预算（{budget_chars} 字符）",
+                    )
+                )
+                continue
+            kept.append(block)
+            used += cost
+        blocks = kept
+
     counts: Dict[str, int] = {layer: 0 for layer in LAYER_ORDER}
     for block in blocks:
         counts[block.layer] = counts.get(block.layer, 0) + 1

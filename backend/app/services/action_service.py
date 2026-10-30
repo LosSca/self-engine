@@ -114,7 +114,9 @@ class ActionService:
         )
 
     # -------------------------------------------------------------- context
-    def _load_play_context(self, world: WorldDefinition) -> Optional[ScenarioPlayContext]:
+    def _load_play_context(
+        self, world: WorldDefinition, campaign_id: str = ""
+    ) -> Optional[ScenarioPlayContext]:
         """Authored context for this world, or None when unavailable.
 
         Authored configuration must never be able to break a turn: a missing or
@@ -126,6 +128,11 @@ class ActionService:
         if not scenario_id:
             return None
         try:
+            if campaign_id:
+                try:
+                    return self.context_provider(scenario_id, campaign_id)
+                except TypeError:
+                    pass
             return self.context_provider(scenario_id)
         except Exception:  # noqa: BLE001 - degrade instead of failing the action
             return None
@@ -136,6 +143,7 @@ class ActionService:
         story_node: Optional[str],
         state: Optional[GameState] = None,
         story_nodes: Optional[List[str]] = None,
+        focus: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
         provider = self.history_provider
         blocks: List[Dict[str, Any]] = []
@@ -165,6 +173,8 @@ class ActionService:
                     storyline=play.config.storyline,
                     scenario_id=play.scenario_id,
                     story_nodes=story_nodes,
+                    focus=focus,
+                    budget_chars=play.config.context_budget_chars,
                 )
                 blocks = [dict(block, kind="canon") for block in context.prompt_blocks()]
             except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
@@ -185,6 +195,13 @@ class ActionService:
                 "temperature": play.preset.temperature,
                 "max_tokens": play.preset.max_tokens,
             }
+            if play.preset.role in ("narrator", "any"):
+                if play.preset.provider:
+                    options["provider"] = play.preset.provider
+                if play.preset.model:
+                    options["model"] = play.preset.model
+        if play is not None and play.language:
+            options = {**(options or {}), "language": play.language}
         if not blocks:
             # Sampling settings are authored too: they apply even when the
             # scenario has no knowledge entries to hand over.
@@ -405,7 +422,8 @@ class ActionService:
         if request.narrate:
             try:
                 blocks, context_entries, options = self._knowledge(
-                    self._load_play_context(world), None, state
+                    self._load_play_context(world, state.campaign_id), None, state,
+                    focus=[state.location_id, request.target_id or ""],
                 )
                 knowledge = blocks
                 narrative = await self.narrator.narrate(
@@ -430,14 +448,20 @@ class ActionService:
             narrative=narrative,
             state=state,
         )
-        self.store.record_request(
-            campaign_id=request.campaign_id,
-            request_id=request.request_id,
-            request_payload=payload,
-            status="rejected",
-            result_payload=result.model_dump(mode="json"),
-            state_version=state.version,
-        )
+        try:
+            self.store.record_request(
+                campaign_id=request.campaign_id,
+                request_id=request.request_id,
+                request_payload=payload,
+                status="rejected",
+                result_payload=result.model_dump(mode="json"),
+                state_version=state.version,
+            )
+        except sqlite3.IntegrityError:
+            raced = self._replay(request, payload)
+            if raced is None:
+                raise
+            return raced
         return result
 
     @staticmethod
@@ -499,7 +523,10 @@ class ActionService:
         options: Optional[Dict[str, Any]] = None
         try:
             blocks, context_entries, options = self._knowledge(
-                play, active_node, new_state
+                play,
+                active_node,
+                new_state,
+                focus=[new_state.location_id, request.target_id or ""],
             )
         except Exception as exc:  # noqa: BLE001 - context is advisory only
             return (
@@ -550,25 +577,50 @@ class ActionService:
                 state=state,
             )
             if record_rejection:
-                self.store.record_request(
-                    campaign_id=request.campaign_id,
-                    request_id=request.request_id,
-                    request_payload=payload,
-                    status="rejected",
-                    result_payload=result.model_dump(mode="json"),
-                    state_version=state.version,
-                )
+                try:
+                    self.store.record_request(
+                        campaign_id=request.campaign_id,
+                        request_id=request.request_id,
+                        request_payload=payload,
+                        status="rejected",
+                        result_payload=result.model_dump(mode="json"),
+                        state_version=state.version,
+                    )
+                except sqlite3.IntegrityError:
+                    raced = self._replay(request, payload)
+                    if raced is None:
+                        raise
+                    return raced, state, []
             return result, state, []
 
         facts = [fact for item in applied for fact in item.facts]
         combat_round = self._combat_round(request, state, new_state, applied)
+        processed: set[str] = set()
+        forced: set[str] = set()
+        attempted_quests: set[str] = set()
         new_state, executions, event_facts = run_triggered_events(
-            world, new_state, request.action, request.target_id, facts
+            world, new_state, request.action, request.target_id, facts,
+            processed=processed, forced=forced,
         )
-        new_state, quest_updates, _reward_facts = advance_quests(
-            world, new_state, facts + event_facts
+        new_state, quest_updates, reward_facts = advance_quests(
+            world, new_state, facts + event_facts, attempted=attempted_quests
         )
-        play = self._load_play_context(world)
+        for _ in range(len(world.events) + len(world.quests) + 1):
+            if not reward_facts:
+                break
+            new_state, more_executions, event_facts = run_triggered_events(
+                world, new_state, request.action, request.target_id,
+                reward_facts, processed=processed, forced=forced,
+            )
+            executions.extend(more_executions)
+            if not event_facts:
+                break
+            # Reward facts were consumed inside advance_quests; only events are new.
+            new_state, more_updates, reward_facts = advance_quests(
+                world, new_state, event_facts, attempted=attempted_quests
+            )
+            quest_updates.extend(more_updates)
+        play = self._load_play_context(world, state.campaign_id)
         story_status: Optional[StoryStatus] = None
         story_entered: List[str] = []
         active_node: Optional[str] = None
@@ -633,14 +685,28 @@ class ActionService:
                 }
             )
         for update in quest_updates:
-            quest_type = "quest.completed" if update.status == "completed" else "quest.progressed"
+            if update.error:
+                quest_type = "quest.reward_failed"
+            elif update.status == "completed":
+                quest_type = "quest.completed"
+            elif update.status == "failed":
+                quest_type = "quest.failed"
+            else:
+                quest_type = "quest.progressed"
+            quest_payload = {
+                "quest_id": update.quest_id,
+                "objectives": update.objectives,
+            }
+            if update.error:
+                quest_payload["error"] = update.error
+            if update.rewards_applied:
+                quest_payload["rewards"] = [
+                    effect.model_dump(mode="json") for effect in update.rewards_applied
+                ]
             events.append(
                 {
                     "event_type": quest_type,
-                    "payload": {
-                        "quest_id": update.quest_id,
-                        "objectives": update.objectives,
-                    },
+                    "payload": quest_payload,
                     "state_version": new_state.version,
                 }
             )

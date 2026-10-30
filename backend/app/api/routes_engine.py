@@ -91,29 +91,12 @@ def _get_scenario_store() -> ScenarioStore:
     return ScenarioStore(db_path)
 
 
-def _make_context_provider(store: ScenarioStore):
-    """Resolve a world's scenario into authored knowledge + play mode + preset.
+def _make_context_provider(store: ScenarioStore, campaign_id: str = ""):
+    """Resolve advisory scenario context, including its authored voice and language."""
+    from app.services.narrative_service import scenario_play_context
 
-    Everything is read-only here; a missing scenario simply means "no authored
-    context", never a failed action.
-    """
-
-    def provider(scenario_id: str):
-        scenario = store.get_scenario(scenario_id)
-        if scenario is None:
-            return None
-        config = store.get_play_config(scenario_id)
-        preset = (
-            store.get_model_preset(config.model_preset_id)
-            if config.model_preset_id
-            else None
-        )
-        return ScenarioPlayContext(
-            scenario_id=scenario_id,
-            config=config,
-            entries=store.list_knowledge(scenario_id),
-            preset=preset,
-        )
+    def provider(scenario_id: str, campaign_id: str = ""):
+        return scenario_play_context(store, scenario_id, campaign_id)
 
     return provider
 
@@ -125,28 +108,25 @@ def _history_provider():
     feeds back into the rules, and any failure degrades to no recap at all
     rather than failing the turn.
     """
-    from app.config import settings
     from app.db.event_store import EventStore
     from app.services.narrative_service import HISTORY_TURNS, render_history_note
 
-    db_path = os.environ.get("EVENT_DB_PATH", "") or os.environ.get(
-        "GAME_STATE_DB_PATH", ""
-    )
-
     def provider(campaign_id: str, state) -> List[dict]:
-        if not db_path:
-            return []
-        store = EventStore(db_path)
         try:
-            events = store.get_recent(campaign_id, limit=HISTORY_TURNS * 2)
+            with _get_store() as store:
+                bound = store.get_state(campaign_id) is not None
+                events = store.narrative_history(campaign_id, limit=HISTORY_TURNS) if bound else []
+            if not bound:
+                db_path = os.environ.get("EVENT_DB_PATH", os.path.join(_BACKEND_DIR, "events.db"))
+                legacy = EventStore(db_path)
+                try:
+                    events = legacy.get_recent(campaign_id, limit=HISTORY_TURNS * 2)
+                finally:
+                    legacy.close()
+            note = render_history_note(events, limit=HISTORY_TURNS)
         except Exception as exc:  # noqa: BLE001 - recap is optional
             logger.warning("history recap unavailable for %s: %s", campaign_id, exc)
             return []
-        finally:
-            close = getattr(store, "close", None)
-            if callable(close):
-                close()
-        note = render_history_note(events or [], limit=HISTORY_TURNS)
         if not note:
             return []
         return [
@@ -249,7 +229,7 @@ def _build_advisor():
     if not intent_advisor.enabled():
         return None
     try:
-        router, _provider = narrator_factory.build_router()
+        router = narrator_factory.build_router()
     except Exception as exc:  # noqa: BLE001 - advice is optional
         logger.info("intent advisor could not build a router: %s", exc)
         return None

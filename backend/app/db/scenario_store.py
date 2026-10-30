@@ -98,7 +98,7 @@ class ScenarioCharacter:
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     _MIGRATIONS = {
         1: [
@@ -166,6 +166,9 @@ class ScenarioStore:
         ],
         6: [
             "ALTER TABLE scenarios ADD COLUMN world_type TEXT NOT NULL DEFAULT ''",
+        ],
+        8: [
+            "ALTER TABLE scenario_play_config ADD COLUMN context_budget_chars INTEGER NOT NULL DEFAULT 0",
         ],
         7: [
             """CREATE TABLE IF NOT EXISTS scenario_knowledge (
@@ -782,7 +785,8 @@ class ScenarioStore:
     def get_play_config(self, scenario_id: str) -> PlayConfig:
         row = self._conn.execute(
             "SELECT scenario_id, mode, storyline_json, max_depth, "
-            "model_preset_id, updated_at FROM scenario_play_config WHERE scenario_id=?",
+            "context_budget_chars, model_preset_id, updated_at "
+            "FROM scenario_play_config WHERE scenario_id=?",
             (scenario_id,),
         ).fetchone()
         if not row:
@@ -796,8 +800,9 @@ class ScenarioStore:
             mode=row[1],
             storyline=storyline,
             max_depth=row[3] if row[3] is not None else 9,
-            model_preset_id=row[4] or "",
-            updated_at=row[5] or "",
+            context_budget_chars=row[4] if row[4] is not None else 0,
+            model_preset_id=row[5] or "",
+            updated_at=row[6] or "",
         )
 
     def set_play_config(self, scenario_id: str, config: PlayConfig) -> PlayConfig:
@@ -806,10 +811,12 @@ class ScenarioStore:
             self._conn.execute(
                 "INSERT INTO scenario_play_config "
                 "(scenario_id, mode, storyline_json, max_depth, "
-                "model_preset_id, updated_at) VALUES (?,?,?,?,?,?) "
+                "context_budget_chars, model_preset_id, updated_at) "
+                "VALUES (?,?,?,?,?,?,?) "
                 "ON CONFLICT(scenario_id) DO UPDATE SET mode=excluded.mode, "
                 "storyline_json=excluded.storyline_json, "
                 "max_depth=excluded.max_depth, "
+                "context_budget_chars=excluded.context_budget_chars, "
                 "model_preset_id=excluded.model_preset_id, "
                 "updated_at=excluded.updated_at",
                 (
@@ -817,6 +824,7 @@ class ScenarioStore:
                     config.mode,
                     config.storyline.model_dump_json(),
                     config.max_depth,
+                    config.context_budget_chars,
                     config.model_preset_id,
                     now,
                 ),

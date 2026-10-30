@@ -122,6 +122,131 @@ def session(mock_narrator, mock_memory, mock_world_reactor, mock_journal, mock_e
     )
 
 
+def test_track_task_registers_before_done_callback(session):
+    task = MagicMock()
+    task.cancelled.return_value = True
+
+    def add_done_callback(callback):
+        assert task in session._pending_tasks
+        callback(task)
+
+    task.add_done_callback.side_effect = add_done_callback
+    with mock.patch("app.services.game_session.asyncio.create_task", return_value=task):
+        assert session._track_task(mock.sentinel.coroutine) is task
+    assert not session._pending_tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_waits_for_same_loop_tracked_task(session):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    completed = []
+
+    async def work():
+        started.set()
+        await release.wait()
+        completed.append("finished")
+
+    task = session._track_task(work())
+    assert task in session._pending_tasks
+    drain = asyncio.create_task(session.drain_pending_tasks())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert not drain.done()
+    release.set()
+    await asyncio.wait_for(drain, timeout=1)
+    assert completed == ["finished"]
+    assert not session._pending_tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_waits_for_tasks_spawned_by_tracked_tasks(session):
+    child_started = asyncio.Event()
+    release_child = asyncio.Event()
+    children = []
+
+    async def child():
+        child_started.set()
+        await release_child.wait()
+
+    async def parent():
+        children.append(session._track_task(child()))
+
+    session._track_task(parent())
+    drain = asyncio.create_task(session.drain_pending_tasks())
+    await asyncio.wait_for(child_started.wait(), timeout=1)
+    assert not drain.done()
+    release_child.set()
+    await asyncio.wait_for(drain, timeout=1)
+    assert children[0].done()
+    assert not session._pending_tasks
+
+
+@pytest.mark.asyncio
+async def test_tracked_task_failure_is_retrieved_without_drain(session, caplog):
+    import gc
+
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    unhandled = []
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+    finished = asyncio.Event()
+
+    async def fail():
+        raise RuntimeError("tracked failure")
+
+    try:
+        task = session._track_task(fail())
+        task.add_done_callback(lambda _task: finished.set())
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        assert not session._pending_tasks
+        assert "tracked failure" in caplog.text
+        caplog.clear()
+        del task
+        gc.collect()
+        assert not unhandled
+    finally:
+        loop.set_exception_handler(original_handler)
+
+
+@pytest.mark.asyncio
+async def test_drain_handles_failed_and_cancelled_tasks(session, caplog):
+    async def fail():
+        raise RuntimeError("drained failure")
+
+    async def cancelled():
+        raise asyncio.CancelledError()
+
+    failed = session._track_task(fail())
+    cancelled_task = session._track_task(cancelled())
+    await asyncio.wait_for(session.drain_pending_tasks(), timeout=1)
+    assert failed.done()
+    assert cancelled_task.cancelled()
+    assert not session._pending_tasks
+    assert "drained failure" in caplog.text
+
+
+def test_drain_retains_foreign_loop_tasks_until_they_finish(session):
+    foreign_loop = asyncio.new_event_loop()
+    release = foreign_loop.create_future()
+
+    async def work():
+        await release
+
+    async def register():
+        return session._track_task(work())
+
+    try:
+        task = foreign_loop.run_until_complete(register())
+        asyncio.run(session.drain_pending_tasks())
+        assert task in session._pending_tasks
+        assert not task.done()
+        release.set_result(None)
+        foreign_loop.run_until_complete(task)
+        assert not session._pending_tasks
+    finally:
+        foreign_loop.close()
+
+
 @pytest.mark.asyncio
 async def test_narrative_action_streams_chunks(session):
     chunks = []
@@ -379,12 +504,10 @@ async def test_process_action_triggers_auto_plot_generation_npc():
     async for chunk in session.process_action("I inspect the hallway"):
         chunks.append(chunk)
 
-    # Fire-and-forget tick + auto-plot may land on another loop here, so the
-    # plot pass is driven explicitly through the same path.
+    # The tick is fire-and-forget after the turn; draining it is what tests
+    # (and the deterministic lane) use to observe the buffered frames.
     await session.drain_pending_tasks()
-    tick_chunks = []
-    async for tick_chunk in session._world_tick_stream(600):
-        tick_chunks.append(tick_chunk)
+    tick_chunks = session._drain_auto_plot_chunks()
 
     auto_chunks = [chunk for chunk in tick_chunks if chunk.startswith("[PLOT_AUTO]")]
     assert len(auto_chunks) == 1
@@ -465,9 +588,7 @@ async def test_auto_plot_respects_cooldown_between_actions():
         pass
 
     await session.drain_pending_tasks()
-    first_tick = []
-    async for tick_chunk in session._world_tick_stream(600):
-        first_tick.append(tick_chunk)
+    first_tick = session._drain_auto_plot_chunks()
     assert [c for c in first_tick if c.startswith("[PLOT_AUTO]")]
     assert plot_generator.generate_npc.await_count == 1
 
@@ -475,9 +596,7 @@ async def test_auto_plot_respects_cooldown_between_actions():
         pass
 
     await session.drain_pending_tasks()
-    second_tick = []
-    async for tick_chunk in session._world_tick_stream(600):
-        second_tick.append(tick_chunk)
+    second_tick = session._drain_auto_plot_chunks()
 
     # Cooldown: the second pass may not mint another NPC.
     assert [c for c in second_tick if c.startswith("[PLOT_AUTO]")] == []

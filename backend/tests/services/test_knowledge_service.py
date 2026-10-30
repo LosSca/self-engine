@@ -239,3 +239,26 @@ def test_load_play_context_reads_config_and_entries(store, scenario):
 
     assert knowledge_service.load_play_context(store, "nope") is None
     assert knowledge_service.load_play_context(store, "") is None
+
+def test_focus_tags_rank_related_entries_first():
+    entries = [
+        _entry("elsewhere", layer="scene", depth=2, tags=["harbor"]),
+        _entry("here", layer="scene", depth=2, tags=["tavern", "npc"]),
+    ]
+    plain = knowledge_service.build_context(entries, mode="free")
+    focused = knowledge_service.build_context(entries, mode="free", focus=["Tavern"])
+    assert [b.entry_id for b in plain.blocks] == ["elsewhere", "here"]
+    assert [b.entry_id for b in focused.blocks] == ["here", "elsewhere"]
+
+
+def test_budget_truncates_and_reports_the_overflow():
+    entries = [
+        _entry("first", layer="global", depth=1, title="A", content="x" * 10),
+        _entry("second", layer="global", depth=2, title="B", content="y" * 30),
+    ]
+    context = knowledge_service.build_context(entries, mode="free", budget_chars=15)
+    assert [b.entry_id for b in context.blocks] == ["first"]
+    assert context.stats.excluded[0].entry_id == "second"
+    assert "预算" in context.stats.excluded[0].reason
+    unlimited = knowledge_service.build_context(entries, mode="free", budget_chars=0)
+    assert [b.entry_id for b in unlimited.blocks] == ["first", "second"]

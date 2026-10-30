@@ -98,3 +98,53 @@ def test_a_recognised_utterance_never_reaches_the_advisor(service, monkeypatch):
     out = asyncio.run(service.execute("camp-1", "look around", request_id="r5"))
     assert out["status"] == "applied"
     assert advisor.calls == []
+
+
+def test_unsupported_sentence_with_a_known_noun_reaches_optional_advisor(service, monkeypatch):
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    advisor = _FakeAdvisor(action="open", fragment="warehouse door")
+    service.advisor = advisor
+    text = "sneak past elder_mara"
+    out = asyncio.run(service.execute("camp-1", text, request_id="stealth"))
+    assert advisor.calls == [text]
+    assert out["status"] == "rejected"
+    assert out["result"]["code"] == "door_locked"
+    assert service.game_store.get_state("camp-1").version == 0
+
+
+def test_advisor_cannot_substitute_a_different_action_for_an_explicit_verb(service, monkeypatch):
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    advisor = _FakeAdvisor(action="take", fragment="iron_key")
+    service.advisor = advisor
+    out = asyncio.run(service.execute("camp-1", "open iron_key", request_id="wrong-verb"))
+    assert advisor.calls == []
+    assert out["parsed"]["action"] == "open"
+    assert out["status"] == "rejected"
+    assert service.game_store.get_state("camp-1").version == 0
+
+
+@pytest.mark.parametrize("text", ["[SAY] take iron_key", "[THINK] take iron_key", "[META] take iron_key", "[CONTINUE]"])
+def test_advisor_must_not_turn_non_action_ui_modes_into_physical_actions(service, monkeypatch, text):
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    service.advisor = _FakeAdvisor(action="take", fragment="iron_key")
+    out = asyncio.run(service.execute("camp-1", text, request_id="envelope"))
+    assert out["status"] == "rejected"
+    assert service.game_store.get_state("camp-1").version == 0
+
+
+def test_advisor_can_propose_a_supported_talk_for_speech(service, monkeypatch):
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    service.advisor = _FakeAdvisor(action="talk", fragment="elder_mara")
+    out = asyncio.run(service.execute("camp-1", "[SAY] Hello elder_mara", request_id="speech"))
+    assert out["status"] == "applied"
+    assert out["parsed"]["action"] == "talk"
+    assert out["parsed"]["target_id"] == "elder_mara"
+
+
+def test_advisor_missing_talk_target_stays_a_rejection(service, monkeypatch):
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    service.advisor = _FakeAdvisor(action="talk", fragment="nonexistent")
+    out = asyncio.run(service.execute("camp-1", UNPARSED, request_id="bad-target"))
+    assert out["status"] == "rejected"
+    assert out["result"]["code"] == "missing_target"
+    assert service.game_store.get_state("camp-1").version == 0

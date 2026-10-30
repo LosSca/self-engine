@@ -18,9 +18,13 @@ def _clean_env(monkeypatch):
         "LOCAL_LLM_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
-    # The settings defaults point at a local server with an empty key, so the
-    # "nothing configured" case is the ambient one.
     monkeypatch.setattr(narrator_factory.settings, "local_llm_api_key", "", raising=False)
+    for provider in ("deepseek", "openai", "anthropic"):
+        for suffix in ("api_key", "proxy_url", "proxy_key"):
+            name = f"{provider}_{suffix}"
+            monkeypatch.delenv(name.upper(), raising=False)
+            if hasattr(narrator_factory.settings, name):
+                monkeypatch.setattr(narrator_factory.settings, name, "")
     yield
 
 
@@ -86,6 +90,7 @@ def test_explicit_llm_without_any_key_still_returns_a_model(monkeypatch):
 def test_explicit_provider_overrides_the_local_default(monkeypatch):
     _configure_local(monkeypatch)
     monkeypatch.setenv("ENGINE_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     assert narrator_factory.prefer_local() is False
     narrator, provider = narrator_factory.build_narrator()
     assert isinstance(narrator, LLMNarrator)
@@ -174,3 +179,68 @@ def test_engine_route_caches_one_narrator_per_choice(monkeypatch):
     assert first is second
     assert isinstance(first, LLMNarrator)
     routes_engine._narrator_cache.clear()
+
+
+@pytest.mark.parametrize("name,model", [
+    ("openai", "gpt-5.6-sol"),
+    ("anthropic", "claude-sonnet-5"),
+    ("deepseek", "deepseek-v4-flash"),
+    ("local", "qwen3.8-27b"),
+])
+def test_explicit_provider_selects_matching_model(monkeypatch, name, model):
+    _configure_local(monkeypatch)
+    monkeypatch.setenv("ENGINE_LLM_PROVIDER", name)
+    router = narrator_factory.build_router()
+    assert router.config.primary_provider.value == name
+    assert router.config.primary_model == model
+    monkeypatch.setenv("ENGINE_LLM_PROVIDER", "local")
+    assert narrator_factory.build_router(name.upper()).config.primary_provider.value == name
+
+
+@pytest.mark.parametrize("name", ["openai", "anthropic", "deepseek"])
+@pytest.mark.parametrize("source", ["environment", "settings"])
+def test_auto_uses_configured_cloud_credentials(monkeypatch, name, source):
+    _configure_local(monkeypatch, reachable=False)
+    if source == "environment":
+        monkeypatch.setenv(f"{name.upper()}_API_KEY", "test-key")
+    else:
+        monkeypatch.setattr(narrator_factory.settings, f"{name}_api_key", "test-key")
+    narrator, provider = narrator_factory.build_narrator()
+    assert isinstance(narrator, LLMNarrator)
+    assert provider == name
+    assert narrator.router.config.primary_provider.value == name
+
+
+def test_auto_does_not_use_another_providers_key(monkeypatch):
+    _configure_local(monkeypatch)
+    monkeypatch.setenv("ENGINE_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    assert narrator_factory.narrator_choice() == "template"
+
+
+@pytest.mark.parametrize("name", ["openai", "anthropic"])
+def test_auto_accepts_configured_supported_proxy(monkeypatch, name):
+    monkeypatch.setenv(f"{name.upper()}_PROXY_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv(f"{name.upper()}_PROXY_KEY", "test-key")
+    assert narrator_factory.narrator_choice() == "llm"
+    assert narrator_factory.build_router().config.primary_provider.value == name
+
+
+def test_unknown_provider_is_not_silently_deepseek(monkeypatch):
+    monkeypatch.setenv("ENGINE_LLM_PROVIDER", "typo")
+    with pytest.raises(ValueError):
+        narrator_factory.build_router()
+    assert narrator_factory.narrator_choice() == "template"
+    monkeypatch.setenv("ENGINE_NARRATOR", "llm")
+    narrator, provider = narrator_factory.build_narrator()
+    assert isinstance(narrator, TemplateNarrator)
+    assert provider == "template"
+
+
+def test_enabled_advisor_receives_the_router_directly(monkeypatch):
+    from app.api import routes_engine
+
+    router = object()
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    monkeypatch.setattr(narrator_factory, "build_router", lambda: router)
+    assert routes_engine._build_advisor().router is router

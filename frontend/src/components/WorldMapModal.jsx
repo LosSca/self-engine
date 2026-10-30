@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { Map, X, RefreshCw, Search } from 'lucide-react'
-import { fetchWorldGraph, searchWorldGraph } from '../api'
+import { fetchWorld, fetchWorldGraph, searchWorldGraph } from '../api'
 
 const NODE_COLORS = {
   NPC: '#a78bfa',
@@ -35,9 +35,12 @@ const TYPE_POSITIONS = {
   EVENT: { x: -60, y: 80 },
 }
 
-export default function WorldMapModal({ open, onClose, campaignId }) {
+export default function WorldMapModal({ open, onClose, campaignId, engineState, onEngineAction, busy = false }) {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] })
+  const [world, setWorld] = useState(null)
+  const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [pending, setPending] = useState(false)
   const [hoverNode, setHoverNode] = useState(null)
   const [hoverLink, setHoverLink] = useState(null)
   const [selectedNode, setSelectedNode] = useState(null)
@@ -68,6 +71,43 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
       setSearchHighlightSet(null)
     }
   }, [open, campaignId])
+
+  useEffect(() => {
+    if (!open || !engineState?.world_id) {
+      setWorld(null)
+      return undefined
+    }
+    let cancelled = false
+    setError('')
+    fetchWorld(engineState.world_id)
+      .then((definition) => { if (!cancelled) setWorld(definition) })
+      .catch((err) => { if (!cancelled) setError(err.message || '世界定义读取失败') })
+    return () => { cancelled = true }
+  }, [open, engineState?.world_id])
+
+  const currentLocation = world?.locations?.find((item) => item.id === engineState?.location_id) || null
+  const exits = (currentLocation?.exits || [])
+    .map((exitDef) => ({ exit: exitDef, location: world?.locations?.find((item) => item.id === exitDef.target_id) }))
+    .filter((entry) => entry.location)
+  const presentEntities = (world?.entities || []).filter((entity) => {
+    const runtime = engineState?.entities?.[entity.id]
+    const locationId = runtime?.location_id || entity.location_id
+    return locationId === engineState?.location_id && runtime?.alive !== false
+  })
+
+  const runAction = async (action, targetId, label) => {
+    if (!onEngineAction || busy || pending) return
+    setPending(true)
+    setError('')
+    try {
+      const result = await onEngineAction({ action, targetId, label })
+      if (result && !result.ok) setError(result.message || '行动被规则拒绝。')
+    } catch (err) {
+      setError(err.message || '行动请求失败')
+    } finally {
+      setPending(false)
+    }
+  }
 
   // Clustering forces — apply after graph mounts / data changes
   useEffect(() => {
@@ -318,6 +358,49 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
             </div>
           ))}
         </div>
+
+        {/* Rules-world navigator: the same action pipeline as typed text */}
+        {engineState && (
+          <div className="px-6 py-3 border-b border-white/5 flex-none flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-white/70">
+              <span className="text-white/40">当前位置</span>
+              <span className="font-bold text-white">{currentLocation ? currentLocation.name : engineState.location_id}</span>
+              {currentLocation?.description && <span className="text-white/40 truncate max-w-lg">{currentLocation.description}</span>}
+            </div>
+            {error && <p role="alert" className="text-rose-300 text-xs">{error}</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-white/40 text-xs">前往</span>
+              {exits.length === 0 && <span className="text-white/30 text-xs">这里没有可通行的出口</span>}
+              {exits.map(({ exit: exitDef, location }) => (
+                <button
+                  key={location.id}
+                  type="button"
+                  disabled={busy || pending}
+                  onClick={() => runAction('move', location.id, `前往 ${location.name}`)}
+                  className="px-2.5 py-1 rounded-lg text-[11px] text-emerald-200 bg-emerald-500/15 border border-emerald-400/30 hover:bg-emerald-500/25 disabled:opacity-40"
+                >
+                  前往 {location.name}{exitDef.door_id ? '（有门）' : ''}
+                </button>
+              ))}
+            </div>
+            {presentEntities.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-white/40 text-xs">在场</span>
+                {presentEntities.map((entity) => (
+                  <button
+                    key={entity.id}
+                    type="button"
+                    disabled={busy || pending || entity.kind === 'object'}
+                    onClick={() => runAction('talk', entity.id, `交谈 ${entity.name}`)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] text-violet-200 bg-violet-500/15 border border-violet-400/30 hover:bg-violet-500/25 disabled:opacity-40"
+                  >
+                    {entity.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Search */}
         <div className="px-6 py-2 border-b border-white/5 flex-none">

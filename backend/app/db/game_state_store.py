@@ -574,6 +574,61 @@ class GameStateStore:
                     ),
                 )
 
+    def narrative_history(
+        self, campaign_id: str, limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Project durable requests and prose once per turn, oldest first.
+
+        `limit` counts recent requests, including rejections, not domain events.
+        This view never reads legacy mirrors or changes stored records.
+        """
+        rows = self._conn.execute(
+            "SELECT r.request_id, r.request_json, r.result_json, r.created_at,"
+            " (SELECT e.payload_json FROM domain_events e"
+            "  WHERE e.campaign_id = r.campaign_id AND e.request_id = r.request_id"
+            "  AND e.event_type = 'narrator.response' ORDER BY e.rowid DESC LIMIT 1) AS prose"
+            " FROM action_requests r WHERE r.campaign_id = ?"
+            " AND r.status IN ('applied', 'rejected') ORDER BY r.rowid DESC LIMIT ?",
+            (campaign_id, -1 if limit is None else max(0, limit)),
+        ).fetchall()
+
+        def object_payload(raw):
+            try:
+                value = json.loads(raw or "{}")
+            except (TypeError, ValueError):
+                return {}
+            return value if isinstance(value, dict) else {}
+
+        def text_value(value):
+            return value if isinstance(value, str) and value.strip() else ""
+
+        records: List[Dict[str, Any]] = []
+        for row in reversed(rows):
+            request = object_payload(row["request_json"])
+            result = object_payload(row["result_json"])
+            params = request.get("params")
+            params = params if isinstance(params, dict) else {}
+            player = text_value(params.get("text")) or text_value(request.get("text"))
+            if not player:
+                player = " ".join(filter(None, (
+                    text_value(request.get("action")),
+                    text_value(request.get("target_id")) or text_value(params.get("action_id")),
+                )))
+            narrative = result.get("narrative")
+            narrative = narrative if isinstance(narrative, dict) else {}
+            prose = text_value(object_payload(row["prose"]).get("text"))
+            if not prose and narrative.get("status") == "ok":
+                prose = text_value(narrative.get("text"))
+            prose = prose or text_value(result.get("message"))
+            for kind, text in (("PLAYER_ACTION", player), ("NARRATOR_RESPONSE", prose)):
+                if text:
+                    records.append({
+                        "campaign_id": campaign_id, "request_id": row["request_id"],
+                        "event_type": kind, "payload": {"text": text},
+                        "created_at": row["created_at"],
+                    })
+        return records
+
     # ---------------------------------------------------------------- events
     def list_events(
         self, campaign_id: str, limit: int = 50, after_version: int = 0

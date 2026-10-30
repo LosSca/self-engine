@@ -103,37 +103,72 @@ def local_llm_reachable(timeout: float = PROBE_TIMEOUT) -> bool:
     return alive
 
 
+def _cloud_configured(name: str) -> bool:
+    if name not in ("deepseek", "openai", "anthropic"):
+        return False
+    if _env(f"{name.upper()}_API_KEY", getattr(settings, f"{name}_api_key", "")):
+        return True
+    if name in ("openai", "anthropic"):
+        return bool(
+            _env(f"{name.upper()}_PROXY_URL", getattr(settings, f"{name}_proxy_url", ""))
+            and _env(f"{name.upper()}_PROXY_KEY", getattr(settings, f"{name}_proxy_key", ""))
+        )
+    return False
+
+
+def _provider_name() -> str:
+    from app.engines.llm_router import LLMConfig, LLMProvider
+
+    explicit = _env("ENGINE_LLM_PROVIDER").lower()
+    if explicit:
+        return explicit
+    if local_llm_reachable():
+        return "local"
+    default = LLMConfig().primary_provider.value
+    for name in dict.fromkeys([default, *(p.value for p in LLMProvider)]):
+        if _cloud_configured(name):
+            return name
+    return "default"
+
+
 def narrator_choice(env_var: str = "ENGINE_NARRATOR") -> str:
     """`"llm"` or `"template"` for this lane."""
+    from app.engines.llm_router import LLMConfig
+
     raw = _env(env_var, "auto").lower()
     if raw in TEMPLATE_CHOICES:
         return "template"
     if raw == "llm":
         return "llm"
-    return "llm" if local_llm_reachable() else "template"
+    name = _provider_name()
+    if name == "default":
+        name = LLMConfig().primary_provider.value
+    configured = local_llm_reachable() if name == "local" else _cloud_configured(name)
+    return "llm" if configured else "template"
 
 
 def prefer_local() -> bool:
     """True when this process should talk to the local server."""
-    explicit = _env("ENGINE_LLM_PROVIDER").lower()
-    if explicit:
-        return explicit == "local"
-    return local_llm_reachable()
+    return _provider_name() == "local"
 
 
 def build_router(provider: Optional[str] = None):
-    """A router for the chosen provider (local by default when configured)."""
+    """Build a supported provider's router; unknown names are configuration errors."""
     from app.engines.llm_router import LLMConfig, LLMProvider, LLMRouter
 
-    name = (provider or ("local" if prefer_local() else "")).lower()
-    if name == "local":
-        return LLMRouter(
-            LLMConfig(
-                primary_provider=LLMProvider.LOCAL,
-                primary_model=local_llm_model(),
-            )
-        )
-    return LLMRouter(LLMConfig())
+    name = (provider or _provider_name()).strip().lower()
+    config = LLMConfig()
+    if name != "default":
+        selected = LLMProvider(name)
+        models = {
+            LLMProvider.DEEPSEEK: LLMConfig().primary_model,
+            LLMProvider.OPENAI: "gpt-5.6-sol",
+            LLMProvider.ANTHROPIC: "claude-sonnet-5",
+            LLMProvider.LOCAL: local_llm_model(),
+        }
+        config.primary_provider = selected
+        config.primary_model = models[selected]
+    return LLMRouter(config)
 
 
 def build_narrator(
@@ -151,7 +186,7 @@ def build_narrator(
     """
     if narrator_choice(env_var) == "template":
         return TemplateNarrator(), "template"
-    provider = "local" if prefer_local() else _env("ENGINE_LLM_PROVIDER") or "default"
+    provider = _provider_name()
     try:
         router = build_router(provider)
     except Exception:  # noqa: BLE001 - narrator setup must never block play
@@ -173,7 +208,7 @@ def describe() -> dict:
     choice = narrator_choice()
     return {
         "choice": choice,
-        "provider": "local" if prefer_local() else _env("ENGINE_LLM_PROVIDER") or "default",
+        "provider": _provider_name(),
         "local_configured": local_llm_configured(),
         "local_reachable": local_llm_reachable() if local_llm_configured() else False,
         "local_base_url": local_llm_base_url(),

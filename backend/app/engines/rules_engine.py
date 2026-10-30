@@ -54,8 +54,8 @@ class RulesEngine:
         if outcome.ok:
             changed = [
                 entity
-                for entity in self._entities_present(world, state.location_id)
-                if entity.id not in state.entities and entity.kind != "object"
+                for entity in self._entities_present(world, state)
+                if entity.id not in state.entities
             ]
             if changed:
                 # The world says where entities *start*; the campaign state says
@@ -188,19 +188,18 @@ class RulesEngine:
     def _locations(world: WorldDefinition) -> Dict[str, LocationDef]:
         return {loc.id: loc for loc in world.locations}
 
-    @staticmethod
-    def _entities_present(world: WorldDefinition, location_id: str) -> List[EntityDef]:
-        """People and creatures at a location; scenery objects have no record."""
+    @classmethod
+    def _entities_present(cls, world: WorldDefinition, state: GameState) -> List[EntityDef]:
+        """Living people and creatures at their current runtime location."""
         return [
             entity
             for entity in world.entities
-            if entity.location_id == location_id and entity.kind != "object"
+            if cls._entity_here(state, world, entity) and entity.kind != "object"
+            and cls._entity_alive(state, world, entity.id)
         ]
 
     @staticmethod
     def _entity_here(state: GameState, world: WorldDefinition, entity: EntityDef) -> bool:
-        from app.engines.event_engine import entity_location
-
         return entity_location(state, world, entity.id) == state.location_id
 
     @staticmethod
@@ -224,6 +223,12 @@ class RulesEngine:
         target_id: Optional[str] = None,
         params: Optional[Dict] = None,
     ) -> RuleOutcome:
+        if target_id:
+            return RuleOutcome(
+                ok=False,
+                code="unsupported_target",
+                message="look describes the current location; inspecting a target is not supported.",
+            )
         locations = self._locations(world)
         items = self._items(world)
         doors = self._doors(world)
@@ -249,11 +254,7 @@ class RulesEngine:
             for exit_def in loc.exits
             if exit_def.target_id in locations
         ]
-        people = [
-            entity.name
-            for entity in world.entities
-            if self._entity_here(state, world, entity) and entity.kind != "object"
-        ]
+        people = [entity.name for entity in self._entities_present(world, state)]
         parts = [loc.description or loc.name]
         if here:
             parts.append("You can see: " + ", ".join(here) + ".")
@@ -276,6 +277,12 @@ class RulesEngine:
         target_id: Optional[str] = None,
         params: Optional[Dict] = None,
     ) -> RuleOutcome:
+        if state.combat.get("active") or state.flags.get("combat_active"):
+            return RuleOutcome(
+                ok=False,
+                code="combat_active",
+                message="You cannot move during combat; use flee to escape first.",
+            )
         if not target_id:
             return RuleOutcome(
                 ok=False,
@@ -599,14 +606,20 @@ class RulesEngine:
                     code="unknown_target",
                     message=f"There is no creature called '{target_id}' here.",
                 )
-        if entity.location_id != state.location_id:
+        if entity.kind == "object":
+            return None, None, RuleOutcome(
+                ok=False,
+                code="unsupported_target_kind",
+                message=f"{entity.name} is not a combatant.",
+            )
+        if not self._entity_here(state, world, entity):
             return None, None, RuleOutcome(
                 ok=False,
                 code="entity_not_here",
                 message=f"{entity.name} is not here.",
             )
         combatant = self.combatant_for(entity, state)
-        if not combatant.alive:
+        if not self._entity_alive(state, world, entity.id):
             return entity, combatant, RuleOutcome(
                 ok=False,
                 code="target_defeated",
@@ -631,12 +644,6 @@ class RulesEngine:
         if error is not None:
             return error
         assert entity is not None and combatant is not None
-        if not self._entity_here(state, world, entity):
-            return RuleOutcome(
-                ok=False,
-                code="entity_not_here",
-                message=f"{entity.name} is not here.",
-            )
         rng = random.Random(self._seed(state, "attack", entity.id))
         player_attack, _player_defense = self._player_stats(state)
         # A hit needs more than a lucky swing: compare the attacker's power to
@@ -696,22 +703,16 @@ class RulesEngine:
                 code="player_defeated",
                 message="You are in no shape to fight any more.",
             )
-        target = target_id or state.combat.get("target_id")
-        entities = {entity.id: entity for entity in world.entities}
-        entity = entities.get(target) if target else None
-        if entity is None or entity.location_id != state.location_id:
-            return RuleOutcome(
-                ok=False,
-                code="not_in_combat",
-                message="There is nothing to defend against here.",
-            )
-        combatant = self.combatant_for(entity, state)
-        if not combatant.alive:
-            return RuleOutcome(
-                ok=False,
-                code="target_defeated",
-                message=f"{entity.name} is already defeated.",
-            )
+        entity, combatant, error = self._enemy(world, state, target_id)
+        if error is not None:
+            if error.code in ("missing_target", "unknown_target", "entity_not_here"):
+                return RuleOutcome(
+                    ok=False,
+                    code="not_in_combat",
+                    message="There is nothing to defend against here.",
+                )
+            return error
+        assert entity is not None and combatant is not None
         rng = random.Random(self._seed(state, "defend", entity.id))
         _attack, player_defense = self._player_stats(state)
         guard = 2 + player_defense
@@ -749,16 +750,17 @@ class RulesEngine:
                 code="player_defeated",
                 message="You are in no shape to run any more.",
             )
-        target = state.flags.get("combat_target") or state.combat.get("target_id")
-        entities = {entity.id: entity for entity in world.entities}
-        entity = entities.get(target) if target else None
-        if entity is None or entity.location_id != state.location_id:
-            return RuleOutcome(
-                ok=False,
-                code="not_in_combat",
-                message="You are not in combat with anyone here.",
-            )
-        combatant = self.combatant_for(entity, state)
+        target = state.combat.get("target_id") or state.flags.get("combat_target")
+        entity, combatant, error = self._enemy(world, state, target)
+        if error is not None:
+            if error.code in ("missing_target", "unknown_target", "entity_not_here"):
+                return RuleOutcome(
+                    ok=False,
+                    code="not_in_combat",
+                    message="You are not in combat with anyone here.",
+                )
+            return error
+        assert entity is not None and combatant is not None
         rng = random.Random(self._seed(state, "flee", entity.id))
         if rng.random() < combatant.flee_chance:
             return RuleOutcome(
@@ -797,7 +799,7 @@ class RulesEngine:
                 message=f"The current location '{state.location_id}' is not defined.",
             )
         entities = {entity.id: entity for entity in world.entities}
-        present = [e for e in world.entities if self._entity_here(state, world, e)]
+        present = self._entities_present(world, state)
         legacy_names = [npc for npc in loc.npc_ids if npc not in entities]
         if target_id:
             entity = entities.get(target_id)
@@ -818,6 +820,12 @@ class RulesEngine:
                     ok=False,
                     code="entity_not_here",
                     message=f"{entity.name} is not here.",
+                )
+            if entity.kind == "object":
+                return RuleOutcome(
+                    ok=False,
+                    code="unsupported_target_kind",
+                    message=f"{entity.name} cannot talk.",
                 )
             if not self._entity_alive(state, world, entity.id):
                 return RuleOutcome(

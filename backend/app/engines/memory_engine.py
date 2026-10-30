@@ -87,10 +87,20 @@ class MemoryCrystal:
     consumed: bool = False  # True when consolidated into a higher tier
     source_start_created_at: str | None = None
     source_end_created_at: str | None = None
-    # Camada 3 — perspective filter. Union of NPC names that witnessed any of
-    # the source events / source crystals. MEMORY tier ignores this list
-    # (canonical world facts are accessible to every NPC).
+    # Every source must be witnessed; an empty audience is narrator/player-only.
     witnessed_by: list[str] = field(default_factory=list)
+    audience_resolved: bool = field(default=False, repr=False, compare=False)
+
+
+def _normalized_witnesses(names) -> set[str]:
+    if not isinstance(names, (list, tuple, set)):
+        return set()
+    return {name.strip().casefold() for name in names if isinstance(name, str) and name.strip()}
+
+
+def _common_witnesses(sources) -> list[str]:
+    audiences = [_normalized_witnesses(source.witnessed_by) for source in sources]
+    return sorted(set.intersection(*audiences)) if audiences else []
 
 
 # ── Compression prompts per tier ────────────────────────────────────
@@ -206,6 +216,8 @@ _CRYSTAL_PROMPTS = {
 class MemoryEngine:
     AUTO_CRYSTALLIZE_THRESHOLD = 4  # events before creating a SHORT crystal
     MAX_CRYSTALLIZE_EVENTS = 200
+    NPC_RAW_EVENT_LIMIT = 20
+    AUDIENCE_POLICY = "source-intersection-v1"
     CONSOLIDATION_COUNT = 4  # N crystals of tier X → 1 crystal of tier X+1
     CRYSTALLIZE_EVENT_TYPES = (
         EventType.PLAYER_ACTION,
@@ -287,18 +299,7 @@ class MemoryEngine:
         if not player_summary:
             player_summary = self._fallback_player_summary(events)
 
-        # Union of every NPC that witnessed any source event. Order doesn't
-        # matter — readers will treat this as a set. Player presence is
-        # implicit and never recorded.
-        witnessed_by_union: list[str] = []
-        seen_witnesses: set[str] = set()
-        for ev in events:
-            for name in (ev.witnessed_by or []):
-                key = name.strip().lower()
-                if key and key not in seen_witnesses:
-                    seen_witnesses.add(key)
-                    witnessed_by_union.append(name.strip())
-
+        witnessed_by = _common_witnesses(events)
         crystal = MemoryCrystal(
             campaign_id=campaign_id,
             tier=CrystalTier.SHORT,
@@ -307,7 +308,8 @@ class MemoryEngine:
             event_count=len(events),
             source_start_created_at=events[0].created_at,
             source_end_created_at=events[-1].created_at,
-            witnessed_by=witnessed_by_union,
+            witnessed_by=witnessed_by,
+            audience_resolved=True,
         )
         self._crystals.setdefault(campaign_id, []).append(crystal)
         self._persist_crystal(campaign_id, crystal)
@@ -315,7 +317,7 @@ class MemoryEngine:
         logger.info(
             "SHORT crystal created: %d events → %d chars ai_content "
             "(campaign %s, witnesses=%s)",
-            len(events), len(ai_content), campaign_id, witnessed_by_union,
+            len(events), len(ai_content), campaign_id, witnessed_by,
         )
         return crystal
 
@@ -360,20 +362,7 @@ class MemoryEngine:
             player_summary = " ".join(c.content for c in to_merge)
 
         total_events = sum(c.event_count for c in to_merge)
-
-        # Union of witnesses from source crystals — broader scope at higher
-        # tiers (more NPCs will have witnessed the union of all those scenes),
-        # but the perspective filter is still useful: a tier-LONG arc summary
-        # of the player's solo journey through a forest legitimately has 0
-        # witnesses, and no NPC should learn its contents.
-        witnessed_by_union: list[str] = []
-        seen_witnesses: set[str] = set()
-        for c in to_merge:
-            for name in (c.witnessed_by or []):
-                key = name.strip().lower()
-                if key and key not in seen_witnesses:
-                    seen_witnesses.add(key)
-                    witnessed_by_union.append(name.strip())
+        self._resolve_crystal_audiences(campaign_id)
 
         crystal = MemoryCrystal(
             campaign_id=campaign_id,
@@ -383,7 +372,8 @@ class MemoryEngine:
             event_count=total_events,
             source_start_created_at=to_merge[0].source_start_created_at,
             source_end_created_at=to_merge[-1].source_end_created_at,
-            witnessed_by=witnessed_by_union,
+            witnessed_by=_common_witnesses(to_merge),
+            audience_resolved=True,
         )
         self._crystals.setdefault(campaign_id, []).append(crystal)
         self._persist_crystal(campaign_id, crystal)
@@ -850,41 +840,82 @@ class MemoryEngine:
 
     # ── NPC perspective filter (Camada 3) ──────────────────────────
 
+    def _resolve_crystal_audiences(self, campaign_id: str) -> None:
+        """Restore trusted policy metadata or verify legacy raw provenance, failing closed."""
+        unresolved = [c for c in self._crystals.get(campaign_id, []) if not c.audience_resolved]
+        if not unresolved:
+            return
+        for crystal in unresolved:
+            crystal.witnessed_by = []
+        try:
+            persisted = self._store.get_by_type(campaign_id, EventType.MEMORY_CRYSTAL, limit=-1)
+            trusted: dict[tuple, set[str]] = {}
+            for event in persisted:
+                payload = event.payload
+                if payload.get("audience_policy") != self.AUDIENCE_POLICY:
+                    continue
+                key = (
+                    payload.get("tier"), payload.get("summary"), payload.get("ai_content"),
+                    payload.get("event_count"), payload.get("source_start_created_at"),
+                    payload.get("source_end_created_at") or event.created_at,
+                )
+                audience = _normalized_witnesses(payload.get("witnessed_by"))
+                trusted[key] = trusted[key] & audience if key in trusted else audience
+
+            legacy = []
+            for crystal in unresolved:
+                key = (
+                    crystal.tier.value, crystal.content, crystal.ai_content,
+                    crystal.event_count, crystal.source_start_created_at, crystal.source_end_created_at,
+                )
+                if key in trusted:
+                    crystal.witnessed_by = sorted(trusted[key])
+                    crystal.audience_resolved = True
+                else:
+                    legacy.append(crystal)
+
+            with_spans = [
+                c for c in legacy
+                if isinstance(c.source_start_created_at, str) and c.source_start_created_at
+                and isinstance(c.source_end_created_at, str) and c.source_end_created_at
+                and isinstance(c.event_count, int) and c.event_count > 0
+                and c.source_start_created_at <= c.source_end_created_at
+            ]
+            if with_spans:
+                raw_events = self._store.get_after(
+                    campaign_id, limit=-1, event_types=list(self.CRYSTALLIZE_EVENT_TYPES),
+                )
+                for crystal in with_spans:
+                    sources = [
+                        event for event in raw_events
+                        if crystal.source_start_created_at <= event.created_at <= crystal.source_end_created_at
+                    ]
+                    if (
+                        len(sources) == crystal.event_count
+                        and sources[0].created_at == crystal.source_start_created_at
+                        and sources[-1].created_at == crystal.source_end_created_at
+                    ):
+                        crystal.witnessed_by = _common_witnesses(sources)
+            for crystal in legacy:
+                crystal.audience_resolved = True
+        except Exception:
+            logger.warning("Could not verify crystal audiences for campaign %s", campaign_id, exc_info=True)
+
     def build_npc_knowledge_window(
         self,
         campaign_id: str,
         npc_name: str,
     ) -> str:
-        """Return the subset of WORLD MEMORY this NPC could plausibly know.
-
-        Rules:
-        - MEMORY tier crystals are ALWAYS included (canonical world facts —
-          public lore that everyone in the world treats as true).
-        - LONG / MEDIUM / SHORT crystals are included only if `npc_name`
-          appears in their `witnessed_by` list.
-        - Raw uncrystallized events are included only if the NPC is in the
-          event's `witnessed_by` list.
-
-        Empty string when nothing is accessible. Used by the narrator-prompt
-        NPC KNOWLEDGE BOUNDARIES block and by `update_npc_thoughts` so that
-        each NPC's reasoning stays consistent with what they could have seen.
-        """
-        if not npc_name:
+        """Return only verified witnessed summaries and a bounded, witnessed recent raw tail."""
+        name_key = npc_name.strip().casefold() if npc_name else ""
+        if not name_key:
             return ""
-        name_key = npc_name.strip().lower()
+        self._resolve_crystal_audiences(campaign_id)
         crystals = self._crystals.get(campaign_id, [])
-
         parts: list[str] = []
 
-        # MEMORY tier — always canon, never filtered.
-        memory_crystals = [c for c in crystals if c.tier == CrystalTier.MEMORY]
-        if memory_crystals:
-            parts.append("=== PRMNT_MEM (canon — known to everyone) ===")
-            for c in memory_crystals:
-                parts.append(c.ai_content)
-
-        # LONG/MEDIUM/SHORT — only those this NPC witnessed.
         for tier, header in (
+            (CrystalTier.MEMORY, "=== PRMNT_MEM (witnessed) ==="),
             (CrystalTier.LONG, "=== ARC_MEM (witnessed) ==="),
             (CrystalTier.MEDIUM, "=== MID_MEM (witnessed) ==="),
             (CrystalTier.SHORT, "=== RCNT_MEM (witnessed) ==="),
@@ -892,20 +923,20 @@ class MemoryEngine:
             tier_crystals = [
                 c for c in crystals
                 if c.tier == tier
-                and not c.consumed
-                and any(w.strip().lower() == name_key for w in (c.witnessed_by or []))
+                and (tier == CrystalTier.MEMORY or not c.consumed)
+                and name_key in _normalized_witnesses(c.witnessed_by)
             ]
             if tier_crystals:
                 parts.append(header)
                 for c in tier_crystals:
                     parts.append(c.ai_content)
 
-        # Raw uncrystallized events — only those this NPC witnessed.
-        raw_tail = self._get_uncrystallized_events(campaign_id, limit=20)
-        witnessed_raw = [
-            ev for ev in raw_tail
-            if any(w.strip().lower() == name_key for w in (ev.witnessed_by or []))
-        ]
+        # Keep witnessed raw recall even when a mixed-audience summary cannot be shared.
+        raw_tail = [
+            event for event in self._store.get_recent(campaign_id, limit=self.MAX_CRYSTALLIZE_EVENTS)
+            if event.event_type in self.CRYSTALLIZE_EVENT_TYPES
+        ][-self.NPC_RAW_EVENT_LIMIT:]
+        witnessed_raw = [ev for ev in raw_tail if name_key in _normalized_witnesses(ev.witnessed_by)]
         if witnessed_raw:
             parts.append("=== DELTA (witnessed) ===")
             for event in witnessed_raw:
@@ -929,6 +960,7 @@ class MemoryEngine:
                     "event_count": crystal.event_count,
                     "consumed": crystal.consumed,
                     "witnessed_by": list(crystal.witnessed_by or []),
+                    "audience_policy": self.AUDIENCE_POLICY if crystal.audience_resolved else None,
                     # Real raw-event span, so rebuild restores the true crystal
                     # cursor instead of jumping to this event's persist time.
                     "source_start_created_at": crystal.source_start_created_at,

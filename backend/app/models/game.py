@@ -234,7 +234,13 @@ class QuestDef(_ConfigModel):
 
 
 class GameEventDef(_ConfigModel):
-    """A configurable event: validated conditions plus validated effects."""
+    """A configurable event: validated conditions plus validated effects.
+
+    Besides firing itself, an event can name follow-up events that run in the
+    same settlement even when their own trigger does not match: `followup_events`
+    on success and `failure_events` when its effects cannot be applied. That is
+    how one authored beat calls into another storyline without a script engine.
+    """
 
     id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=200)
@@ -247,6 +253,15 @@ class GameEventDef(_ConfigModel):
     effects: List[Effect] = Field(default_factory=list)
     priority: int = 0
     repeat: Literal["once", "always"] = "once"
+    #: Event ids forced to run after this event succeeds.
+    followup_events: List[str] = Field(default_factory=list)
+    #: Event ids forced to run when this event's effects fail (the parent still
+    #: changes nothing).
+    failure_events: List[str] = Field(default_factory=list)
+    #: Minimum turns between two successful fires. 0 means no cooldown.
+    cooldown_turns: int = Field(0, ge=0)
+    #: Hard cap on successful fires. None means unlimited (subject to repeat).
+    max_fires: Optional[int] = Field(None, ge=1)
 
 
 class WorldDefinition(BaseModel):
@@ -281,6 +296,7 @@ class WorldDefinition(BaseModel):
         door_ids = {door.id for door in self.doors}
         quest_ids = {quest.id for quest in self.quests}
         entity_ids = {entity.id for entity in self.entities}
+        event_ids = {event.id for event in self.events}
 
         for name, ids in (
             ("location", [loc.id for loc in self.locations]),
@@ -471,6 +487,15 @@ class WorldDefinition(BaseModel):
                         f"event '{event.id}' trigger_target '{event.trigger_target}' "
                         f"is unknown for action '{event.trigger_action}'"
                     )
+            for followup_id in event.followup_events + event.failure_events:
+                if followup_id == event.id:
+                    errors.append(
+                        f"event '{event.id}' cannot name itself as a follow-up"
+                    )
+                elif followup_id not in event_ids:
+                    errors.append(
+                        f"event '{event.id}' follow-up '{followup_id}' is unknown"
+                    )
         errors.extend(
             self._validate_custom_actions(item_ids, door_ids, location_ids, quest_ids, entity_ids)
         )
@@ -604,7 +629,9 @@ class WorldDefinition(BaseModel):
             known_entities = entity_ids if entity_ids is not None else set()
             if condition.target not in known_entities:
                 errors.append(f"unknown entity '{condition.target}'")
-            if condition.value not in location_ids:
+            if not isinstance(condition.value, str):
+                errors.append("entity_at requires value = location id (string)")
+            elif condition.value not in location_ids:
                 errors.append(f"unknown location '{condition.value}'")
         return errors
 
@@ -637,6 +664,11 @@ class WorldDefinition(BaseModel):
             known = entity_ids if entity_ids is not None else set()
             if effect.target not in known:
                 errors.append(f"unknown entity '{effect.target}'")
+            try:
+                if effect.value is not None:
+                    int(effect.value)
+            except (TypeError, ValueError, OverflowError):
+                errors.append("combat_hp requires a numeric value convertible to an integer")
         if effect.kind == "player_damage":
             if int(effect.amount or 0) <= 0:
                 errors.append("player_damage requires a positive amount")
@@ -648,7 +680,9 @@ class WorldDefinition(BaseModel):
             known = entity_ids if entity_ids is not None else set()
             if effect.target not in known:
                 errors.append(f"unknown entity '{effect.target}'")
-            if effect.value not in (location_ids or set()):
+            if not isinstance(effect.value, str):
+                errors.append("move_entity requires value = location id (string)")
+            elif effect.value not in (location_ids or set()):
                 errors.append(f"unknown location '{effect.value}'")
         return errors
 
@@ -714,6 +748,10 @@ class GameState(BaseModel):
     item_locations: Dict[str, str] = Field(default_factory=dict)
     quests: Dict[str, QuestProgress] = Field(default_factory=dict)
     fired_events: List[str] = Field(default_factory=list)
+    #: Successful fire counts and the turn of the last success, used for
+    #: `max_fires` and `cooldown_turns` (old saves default to empty).
+    event_counts: Dict[str, int] = Field(default_factory=dict)
+    event_last_turn: Dict[str, int] = Field(default_factory=dict)
     #: Storyline nodes entered so far (append-only; empty in free mode and for
     #: campaigns created before storyline support).
     story_nodes: List[str] = Field(default_factory=list)

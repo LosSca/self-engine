@@ -7,6 +7,7 @@ import {
   fetchEngineAvailability,
   fetchEngineState,
   submitTextAction,
+  submitAction,
   fetchJournal,
   fetchHistory,
   fetchInventory as fetchInventoryApi,
@@ -414,12 +415,36 @@ export default function GameCanvas() {
     }
     if (parts.length === 0) parts.push('（无叙事输出）')
     appendMessage({ role: 'assistant', content: parts.join('\n\n') })
-    if (result?.version != null) {
-      setEngineLane((prev) => ({ ...prev, checked: true, bound: true, version: result.version }))
+    if (result?.state_version != null) {
+      setEngineLane((prev) => ({ ...prev, checked: true, bound: true, version: result.state_version }))
     }
     if (result?.state) {
-      // The engine state is authoritative: mirror it into the本地 panels.
-      try { setEngineLane((prev) => ({ ...prev, checked: true, bound: true, state: result.state })) } catch {}
+      setEngineLane((prev) => ({ ...prev, checked: true, bound: true, state: result.state }))
+      setCombatMode(Boolean(result.state.combat?.active))
+      fetchInventoryApi(activeCampaignId).then(setInventory).catch((err) => console.warn('Inventory refresh failed:', err))
+    }
+    if (result?.events_fired?.length) {
+      pushTrace([{
+        label: '规则事件',
+        entries: result.events_fired.map((event) => `${event.event_id} ${event.status}${event.reason ? ` (${event.reason})` : ''}`),
+      }])
+    }
+  }
+
+  const handleStructuredAction = async ({ action, targetId, label }) => {
+    if (isStreaming) return null
+    setSuggestions([])
+    appendMessage({ role: 'user', content: label || `${action} ${targetId || ''}`.trim() })
+    setStreaming(true)
+    try {
+      const result = await submitAction(activeCampaignId, { action, targetId })
+      applyEngineResult(result)
+      return result
+    } catch (err) {
+      appendMessage({ role: 'assistant', content: `（行动请求未成功返回：${err.message}。请刷新确认当前状态，避免重复提交。）` })
+      return null
+    } finally {
+      setStreaming(false)
     }
   }
 
@@ -430,17 +455,10 @@ export default function GameCanvas() {
     try {
       const result = await submitTextAction(activeCampaignId, action)
       applyEngineResult(result)
-      const triggered = Array.isArray(result?.events_fired) ? result.events_fired.length : 0
-      if (triggered > 0) {
-        pushTrace([{
-          label: '规则事件',
-          entries: result.events_fired.map((e) => `${e.event_id} ${e.status}${e.reason ? ` (${e.reason})` : ''}`),
-        }])
-      }
     } catch (err) {
       appendMessage({
         role: 'assistant',
-        content: `（规则引擎请求失败：${err.message || err}。没有产生任何状态变化。）`,
+        content: `（规则引擎请求未成功返回：${err.message || err}。请刷新确认当前状态，避免重复提交。）`,
       })
     } finally {
       setStreaming(false)
@@ -497,7 +515,7 @@ export default function GameCanvas() {
   }
 
   const handleRewind = async () => {
-    if (!activeCampaignId || isStreaming || rewinding || messages.length === 0) return
+    if (!activeCampaignId || engineLane.bound || isStreaming || rewinding || messages.length === 0) return
     if (!window.confirm('撤销上一步行动？此操作不可恢复。')) return
     setRewinding(true)
     try {
@@ -524,16 +542,9 @@ export default function GameCanvas() {
 
         {/* Combat Overlay */}
         <CombatOverlay
-          active={combatMode}
+          active={engineLane.bound && combatMode}
           campaignId={activeCampaignId}
-          onNarrate={(text) => appendMessage({ role: 'assistant', content: text })}
-          onResolved={(result) => {
-            const round = result?.combat_round
-            if (!round) return
-            if (round.target_alive === false) {
-              setCombatMode(false)
-            }
-          }}
+          onResolved={applyEngineResult}
         />
 
         {/* Header */}
@@ -803,8 +814,8 @@ export default function GameCanvas() {
             <div className="pb-4 pr-4 md:pr-6">
               <button
                 onClick={handleRewind}
-                disabled={isStreaming || rewinding || messages.length === 0}
-                title="撤销上一步"
+                disabled={engineLane.bound || isStreaming || rewinding || messages.length === 0}
+                title={engineLane.bound ? '规则模式请在世界编辑器的调试面板回滚状态版本' : '撤销上一步'}
                 aria-label="撤销上一步"
                 className="p-3 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-rose-400 hover:border-rose-400/30 hover:bg-rose-400/10 transition-all disabled:opacity-20 disabled:cursor-not-allowed disabled:hover:text-white/40 disabled:hover:border-white/10 disabled:hover:bg-white/5"
               >
@@ -827,11 +838,11 @@ export default function GameCanvas() {
       <NpcInspector open={npcOpen} onClose={() => setNpcOpen(false)} campaignId={activeCampaignId} />
       <MemoryInspector open={memoryOpen} onClose={() => setMemoryOpen(false)} campaignId={activeCampaignId} />
       {mapOpen && (
-  <Suspense fallback={null}>
-    <WorldMapModal open onClose={() => setMapOpen(false)} campaignId={activeCampaignId} />
-  </Suspense>
-)}
-      <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} />
+        <Suspense fallback={null}>
+          <WorldMapModal open onClose={() => setMapOpen(false)} campaignId={activeCampaignId} engineState={engineLane.state} onEngineAction={handleStructuredAction} busy={isStreaming} />
+        </Suspense>
+      )}
+      <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} engineBound={engineLane.bound} onEngineAction={handleStructuredAction} busy={isStreaming} />
       <JournalPanel open={journalOpen} onClose={() => setJournalOpen(false)} entries={journal} onRefresh={refreshJournal} />
       <WorldStudio
         open={worldStudioOpen}

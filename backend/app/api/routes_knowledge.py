@@ -142,6 +142,11 @@ def put_play_config(scenario_id: str, body: PlayConfigUpdate):
             mode=body.mode,
             storyline=body.storyline if body.storyline is not None else current.storyline,
             max_depth=body.max_depth if body.max_depth is not None else current.max_depth,
+            context_budget_chars=(
+                body.context_budget_chars
+                if body.context_budget_chars is not None
+                else current.context_budget_chars
+            ),
             model_preset_id=(
                 body.model_preset_id
                 if body.model_preset_id is not None
@@ -190,6 +195,9 @@ def preview_context(
     story_nodes: Optional[str] = Query(
         None, description="逗号分隔的已进入节点 id；提供时按它们的并集提升知识"
     ),
+    focus: Optional[str] = Query(
+        None, description="逗号分隔的聚焦词（当前位置、目标、NPC），命中的标签优先"
+    ),
 ):
     store = _store()
     try:
@@ -197,6 +205,7 @@ def preview_context(
         config = store.get_play_config(scenario_id)
         entries = store.list_knowledge(scenario_id)
         entered = [part.strip() for part in (story_nodes or "").split(",") if part.strip()]
+        focused = [part.strip() for part in (focus or "").split(",") if part.strip()]
         return knowledge_service.build_context(
             entries,
             mode=mode or config.mode,
@@ -205,6 +214,8 @@ def preview_context(
             storyline=config.storyline,
             scenario_id=scenario_id,
             story_nodes=entered or None,
+            focus=focused or None,
+            budget_chars=config.context_budget_chars,
         )
     finally:
         store.close()

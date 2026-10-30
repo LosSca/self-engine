@@ -273,36 +273,47 @@ def _make_witnessed_crystal(
         ai_content=ai_content,
         event_count=1,
         witnessed_by=witnessed_by or [],
+        audience_resolved=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_short_crystal_inherits_witnesses_from_source_events(event_store, mock_llm):
-    """SHORT crystals collect the union of witnesses across all source events."""
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_short_crystal_intersects_private_event_audiences(event_store, mock_llm, fallback):
     engine = MemoryEngine(event_store=event_store, llm=mock_llm)
     cid = "c-witness"
-
+    mock_llm.complete.return_value = "{}" if fallback else json.dumps({
+        "ai": "RIN_SECRET and YUMI_SECRET", "summary": "Both private scenes.",
+    })
     event_store.append(
-        cid, EventType.PLAYER_ACTION, {"text": "scene 1"}, 60, "loc", [],
+        cid, EventType.PLAYER_ACTION, {"text": "RIN_SECRET"}, 60, "loc", [],
         witnessed_by=["Rin"],
     )
     event_store.append(
-        cid, EventType.NARRATOR_RESPONSE, {"text": "scene 1 result"}, 0, "loc", [],
+        cid, EventType.NARRATOR_RESPONSE, {"text": "Rin's reply"}, 0, "loc", [],
         witnessed_by=["Rin", "Kai"],
     )
     event_store.append(
-        cid, EventType.PLAYER_ACTION, {"text": "scene 2"}, 60, "loc", [],
+        cid, EventType.PLAYER_ACTION, {"text": "YUMI_SECRET"}, 60, "loc", [],
         witnessed_by=["Yumi"],
     )
     event_store.append(
-        cid, EventType.NARRATOR_RESPONSE, {"text": "scene 2 result"}, 0, "loc", [],
+        cid, EventType.NARRATOR_RESPONSE, {"text": "Yumi's reply"}, 0, "loc", [],
         witnessed_by=["Yumi"],
     )
 
     crystal = await engine.crystallize_short(cid)
     assert crystal is not None
-    # Order can vary — compare as a set.
-    assert set(crystal.witnessed_by) == {"Rin", "Kai", "Yumi"}
+    assert crystal.witnessed_by == []
+    for npc, own, other in [("Rin", "RIN_SECRET", "YUMI_SECRET"), ("Yumi", "YUMI_SECRET", "RIN_SECRET")]:
+        view = engine.build_npc_knowledge_window(cid, npc)
+        assert own in view
+        assert other not in view
+        assert "RCNT_MEM" not in view
+    assert engine.build_npc_knowledge_window(cid, "Stranger") == ""
+    narrator = engine.build_context_window(cid)
+    assert "RIN_SECRET" in narrator and "YUMI_SECRET" in narrator
+    assert engine.get_crystals(cid)[0].content == crystal.content
 
 
 def test_npc_knowledge_window_includes_only_witnessed_crystals(memory_engine):
@@ -324,25 +335,24 @@ def test_npc_knowledge_window_includes_only_witnessed_crystals(memory_engine):
     assert "another city" not in rin_view
 
 
-def test_npc_knowledge_window_includes_canon_memory_tier(memory_engine):
-    """MEMORY tier crystals are world canon — every NPC sees them."""
-    cid = "c-canon"
-    canon = _make_witnessed_crystal(
-        cid, CrystalTier.MEMORY,
-        "WORLD_CANON_PERMANENT",
-        witnessed_by=[],  # canon ignores witnesses
+def test_npc_knowledge_window_filters_permanent_memories(memory_engine):
+    cid = "c-permanent"
+    witnessed = _make_witnessed_crystal(
+        cid, CrystalTier.MEMORY, "RIN_PERMANENT_SECRET", witnessed_by=["Rin"],
     )
     private = _make_witnessed_crystal(
-        cid, CrystalTier.SHORT,
-        "Player solo journey through the woods.",
-        witnessed_by=[],
+        cid, CrystalTier.MEMORY, "PLAYER_ONLY_PERMANENT", witnessed_by=[],
     )
-    memory_engine._crystals[cid] = [canon, private]
+    memory_engine._crystals[cid] = [witnessed, private]
 
-    view = memory_engine.build_npc_knowledge_window(cid, "Anyone")
-    assert "WORLD_CANON_PERMANENT" in view
-    # SHORT crystal with no witnesses must NOT leak to NPCs.
-    assert "Player solo journey" not in view
+    assert memory_engine.build_npc_knowledge_window(cid, "Stranger") == ""
+    rin_view = memory_engine.build_npc_knowledge_window(cid, "Rin")
+    assert "RIN_PERMANENT_SECRET" in rin_view
+    assert "PLAYER_ONLY_PERMANENT" not in rin_view
+    assert "known to everyone" not in rin_view
+    for narrator in [memory_engine.build_context_window(cid), memory_engine.render_permanent_context(cid)]:
+        assert "RIN_PERMANENT_SECRET" in narrator
+        assert "PLAYER_ONLY_PERMANENT" in narrator
 
 
 def test_npc_knowledge_window_empty_for_unwitnessed_scenes(memory_engine):
@@ -373,3 +383,166 @@ def test_npc_knowledge_window_filters_raw_delta_events(event_store, mock_llm):
     rin_view = engine.build_npc_knowledge_window(cid, "Rin")
     assert "Rin saw the duel" in rin_view
     assert "Yumi was elsewhere" not in rin_view
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_witnesses, expected", [
+    ([" rIN ", "Rin", " ", None], ["rin"]),
+    ([], []),
+    ([" "], []),
+    (["Yumi"], []),
+])
+async def test_short_audience_normalizes_case_and_empty_sources(event_store, mock_llm, last_witnesses, expected):
+    engine = MemoryEngine(event_store, mock_llm)
+    event_store.append("c1", EventType.PLAYER_ACTION, {"text": "first"}, 0, "", [], witnessed_by=["RIN", "Kai"])
+    event_store.append("c1", EventType.NARRATOR_RESPONSE, {"text": "last"}, 0, "", [], witnessed_by=last_witnesses)
+    crystal = await engine.crystallize_short("c1")
+    assert crystal.witnessed_by == expected
+    view = engine.build_npc_knowledge_window("c1", " rIn ")
+    assert (crystal.ai_content in view) == bool(expected)
+    assert engine.build_npc_knowledge_window("c1", "  ") == ""
+    assert engine.build_npc_knowledge_window("c1", "") == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [CrystalTier.MEDIUM, CrystalTier.LONG, CrystalTier.MEMORY])
+@pytest.mark.parametrize("empty_source", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_consolidation_intersects_every_source_audience(memory_engine, mock_llm, tier, empty_source, fallback):
+    audiences = [["Rin", "Kai"], ["Yumi", " KAI "], ["Rin", "Yumi", "kai"], [] if empty_source else ["Kai"]]
+    sources = [
+        _make_witnessed_crystal("c1", tier.previous_tier, f"private-source-{i}", audience)
+        for i, audience in enumerate(audiences)
+    ]
+    memory_engine._crystals["c1"] = sources[:]
+    mock_llm.complete.return_value = "{}" if fallback else json.dumps({"ai": "ALL_PRIVATE_SOURCES", "summary": "All scenes"})
+    crystal = await memory_engine._consolidate_tier("c1", tier)
+    assert crystal.witnessed_by == ([] if empty_source else ["kai"])
+    assert all(source.consumed for source in sources)
+    for npc in ["Rin", "Yumi", "Stranger"]:
+        assert memory_engine.build_npc_knowledge_window("c1", npc) == ""
+    assert (crystal.ai_content in memory_engine.build_npc_knowledge_window("c1", " KAI ")) == (not empty_source)
+    assert crystal.ai_content in memory_engine.build_context_window("c1")
+
+
+def _rebuild_memory(event_store, mock_llm, campaign_id="c1"):
+    from app.services.game_session import GameSession
+
+    engine = MemoryEngine(event_store, mock_llm)
+    session = GameSession.__new__(GameSession)
+    session.campaign_id = campaign_id
+    session._event_store = event_store
+    session._memory = engine
+    session._rebuild_memory_crystals()
+    return engine
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", list(CrystalTier))
+async def test_policy_metadata_survives_rebuild_without_raw_sources(event_store, mock_llm, tier):
+    engine = MemoryEngine(event_store, mock_llm)
+    for content, audience in [("RIN_PRIVATE_SUMMARY", [" RIN "]), ("PLAYER_ONLY_SUMMARY", [])]:
+        crystal = _make_witnessed_crystal("c1", tier, content, audience)
+        engine._persist_crystal("c1", crystal)
+    rows = event_store.get_by_type("c1", EventType.MEMORY_CRYSTAL)
+    assert all(row.payload["audience_policy"] == engine.AUDIENCE_POLICY for row in rows)
+    rebuilt = _rebuild_memory(event_store, mock_llm)
+    rin_view = rebuilt.build_npc_knowledge_window("c1", "rin")
+    assert "RIN_PRIVATE_SUMMARY" in rin_view
+    assert "PLAYER_ONLY_SUMMARY" not in rin_view
+    assert rebuilt.build_npc_knowledge_window("c1", "Yumi") == ""
+    for narrator in [rebuilt.build_context_window("c1"), await rebuilt.build_context_window_async("c1")]:
+        assert "RIN_PRIVATE_SUMMARY" in narrator and "PLAYER_ONLY_SUMMARY" in narrator
+    assert len(rebuilt.get_crystals("c1")) == 2
+
+
+def _append_timed_raw(store, text, witnesses, index):
+    event = store.append("c1", EventType.NARRATOR_RESPONSE, {"text": text}, 0, "", [], witnessed_by=witnesses)
+    created_at = f"2026-01-01T00:{index // 60:02d}:{index % 60:02d}.000000"
+    store._conn.execute("UPDATE events SET created_at=? WHERE id=?", (created_at, event.id))
+    store._conn.commit()
+    return event._replace(created_at=created_at)
+
+
+@pytest.mark.parametrize("tier", list(CrystalTier))
+@pytest.mark.parametrize("provenance", ["complete", "missing_start", "missing_end", "wrong_count", "missing_raw", "empty_witnesses"])
+def test_legacy_union_rebuild_requires_complete_source_provenance(event_store, mock_llm, tier, provenance):
+    first = _append_timed_raw(event_store, "RIN_RAW_SECRET", ["Rin", "Kai"], 1)
+    second = _append_timed_raw(event_store, "YUMI_RAW_SECRET", [] if provenance == "empty_witnesses" else ["Yumi", " KAI "], 2)
+    payload = {
+        "tier": tier.value,
+        "summary": "Old union summary",
+        "ai_content": "UNSAFE_UNION_SUMMARY",
+        "event_count": 2,
+        "consumed": False,
+        "witnessed_by": ["Rin", "Yumi", "Kai"],
+        "source_start_created_at": first.created_at,
+        "source_end_created_at": second.created_at,
+    }
+    if provenance == "missing_start":
+        payload.pop("source_start_created_at")
+    elif provenance == "missing_end":
+        payload.pop("source_end_created_at")
+    elif provenance == "wrong_count":
+        payload["event_count"] = 3
+    elif provenance == "missing_raw":
+        event_store._conn.execute("DELETE FROM events WHERE id=?", (first.id,))
+        event_store._conn.commit()
+    event_store.append("c1", EventType.MEMORY_CRYSTAL, payload, 0, "memory", [])
+    rebuilt = _rebuild_memory(event_store, mock_llm)
+
+    for npc, forbidden in [("Rin", "YUMI_RAW_SECRET"), ("Yumi", "RIN_RAW_SECRET"), ("Stranger", "RIN_RAW_SECRET")]:
+        view = rebuilt.build_npc_knowledge_window("c1", npc)
+        assert "UNSAFE_UNION_SUMMARY" not in view
+        assert forbidden not in view
+    assert ("UNSAFE_UNION_SUMMARY" in rebuilt.build_npc_knowledge_window("c1", "kAi")) == (provenance == "complete")
+    assert "UNSAFE_UNION_SUMMARY" in rebuilt.build_context_window("c1")
+    assert rebuilt.get_crystals("c1")[0].content == "Old union summary"
+    if provenance != "missing_raw":
+        assert "RIN_RAW_SECRET" in rebuilt.build_npc_knowledge_window("c1", "Rin")
+
+
+@pytest.mark.asyncio
+async def test_unverified_legacy_summaries_cannot_gain_audience_through_consolidation(event_store, mock_llm):
+    for i in range(4):
+        event_store.append("c1", EventType.MEMORY_CRYSTAL, {
+            "tier": "SHORT", "summary": "old", "ai_content": f"legacy-private-{i}",
+            "event_count": 1, "witnessed_by": ["Rin", "Yumi"],
+        }, 0, "memory", [])
+    engine = _rebuild_memory(event_store, mock_llm)
+    crystal = await engine._consolidate_tier("c1", CrystalTier.MEDIUM)
+    assert crystal.witnessed_by == []
+    rebuilt = _rebuild_memory(event_store, mock_llm)
+    assert rebuilt.build_npc_knowledge_window("c1", "Rin") == ""
+    assert rebuilt.build_npc_knowledge_window("c1", "Yumi") == ""
+    assert crystal.ai_content in rebuilt.build_context_window("c1")
+
+
+def test_unverified_audience_fails_closed_when_provenance_store_fails(memory_engine, monkeypatch):
+    crystal = MemoryCrystal("c1", CrystalTier.MEMORY, "private", "PRIVATE_SUMMARY", 1, witnessed_by=["Rin"])
+    memory_engine._crystals["c1"] = [crystal]
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("offline store")
+
+    monkeypatch.setattr(memory_engine._store, "get_by_type", unavailable)
+    assert memory_engine.build_npc_knowledge_window("c1", "Rin") == ""
+    assert "PRIVATE_SUMMARY" in memory_engine.build_context_window("c1")
+
+
+@pytest.mark.asyncio
+async def test_recent_witnessed_raw_recall_is_bounded_after_compression(event_store, mock_llm):
+    engine = MemoryEngine(event_store, mock_llm)
+    for i in range(25):
+        _append_timed_raw(event_store, f"rin-raw-{i:02d}", [" RIN "], i + 1)
+    _append_timed_raw(event_store, "YUMI_PRIVATE", ["Yumi"], 26)
+    event_store.append("c1", EventType.NPC_THOUGHT, {"text": "NOT_RAW_MEMORY"}, 0, "", [], witnessed_by=["Rin"])
+    await engine.crystallize_short("c1")
+    rebuilt = _rebuild_memory(event_store, mock_llm)
+    view = rebuilt.build_npc_knowledge_window("c1", "rin")
+    assert "rin-raw-24" in view
+    assert "rin-raw-06" in view
+    assert "rin-raw-05" not in view
+    assert "YUMI_PRIVATE" not in view
+    assert "NOT_RAW_MEMORY" not in view
+    assert "AI::compressed::memory" not in view

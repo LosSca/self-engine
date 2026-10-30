@@ -250,6 +250,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState(null)
   const [previewNodes, setPreviewNodes] = useState([])
+  const [previewFocus, setPreviewFocus] = useState('')
   const [presetDraft, setPresetDraft] = useState(EMPTY_PRESET)
   const [editingPresetId, setEditingPresetId] = useState(null)
   const [savingPreset, setSavingPreset] = useState(false)
@@ -277,6 +278,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     setTab(initialTab)
     setPreview(null)
     setPreviewNodes([])
+    setPreviewFocus('')
     setNotice('')
     setCreating(false)
     setEditingId(null)
@@ -344,6 +346,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
         mode: next.mode,
         storyline: next.storyline,
         max_depth: next.max_depth,
+        context_budget_chars: next.context_budget_chars ?? 0,
         model_preset_id: next.model_preset_id,
       })
       setConfig(saved)
@@ -377,6 +380,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
         mode: config.mode,
         maxDepth: config.max_depth,
         storyNodes: config.mode === 'storyline' ? previewNodes : [],
+        focus: splitList(previewFocus),
       })
       setPreview(context)
     } catch (err) {
@@ -712,7 +716,17 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                     onChange={(e) => setConfig({ ...config, max_depth: Number(e.target.value) })}
                   />
                 </label>
-                <label className="sm:col-span-2">
+                <label>
+                  <FieldLabel>上下文预算（字符，0 = 不限）</FieldLabel>
+                  <input
+                    type="number"
+                    min="0"
+                    className={inputClass}
+                    value={config.context_budget_chars ?? 0}
+                    onChange={(e) => setConfig({ ...config, context_budget_chars: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
                   <FieldLabel>模型预设（叙事采样参数）</FieldLabel>
                   <select
                     className={inputClass}
@@ -1036,7 +1050,16 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="flex-1 min-w-[240px]">
+                  <FieldLabel>预览聚焦词（逗号分隔，如当前位置/人物 id）</FieldLabel>
+                  <input
+                    className={inputClass}
+                    value={previewFocus}
+                    onChange={(e) => setPreviewFocus(e.target.value)}
+                    placeholder="tavern, guard"
+                  />
+                </label>
                 <button
                   onClick={() => saveConfig({})}
                   disabled={savingConfig}

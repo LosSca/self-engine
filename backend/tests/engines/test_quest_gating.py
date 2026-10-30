@@ -296,3 +296,198 @@ async def test_a_gated_quest_runs_once_ungated(store):
     after = store.get_state("camp-1")
     assert after.quests["follow_up"].status == "completed"
     assert after.inventory["blessing_token"] == 3
+
+
+@pytest.mark.parametrize("value, expected", [(True, 1), ("ready", 1), (False, 0), (None, 0), (0, 0)])
+def test_flag_objectives_count_only_truthy_facts(value, expected):
+    world = _world_with(_quest(objectives=[
+        ObjectiveDef(id="flag", kind="flag", target="ready", required_count=2)
+    ]))
+    state, _, _ = advance_quests(world, _state_for(world), [Fact("flag", "ready", value)])
+    assert state.quests["follow_up"].objectives["flag"] == expected
+
+
+@pytest.mark.parametrize("amount, expected", [(3, 3), (None, 1), (0, 0), (-2, 0)])
+def test_item_objectives_use_fact_quantities(amount, expected):
+    world = _world_with(_quest(objectives=[
+        ObjectiveDef(id="items", kind="obtain_item", target="iron_key", required_count=5)
+    ]))
+    state, _, _ = advance_quests(
+        world, _state_for(world), [Fact("item_gained", "iron_key", amount)]
+    )
+    assert state.quests["follow_up"].objectives["items"] == expected
+
+
+def test_failed_rewards_preserve_objectives_and_retry_atomically_without_new_facts():
+    world = _world_with(_quest(rewards=[
+        Effect(kind="give_item", target="blessing_token", amount=2),
+        Effect(kind="set_flag", target="reward_granted", value=True),
+        Effect(kind="remove_item", target="iron_key", amount=2),
+    ]))
+    original = _state_for(world)
+    state, updates, facts = advance_quests(
+        world, original, [Fact("reach_location", "forest_edge")]
+    )
+    assert original.quests["follow_up"].objectives["reach_forest"] == 0
+    assert state.quests["follow_up"].status == "active"
+    assert state.quests["follow_up"].objectives["reach_forest"] == 1
+    assert state.inventory == {}
+    assert state.flags == {}
+    assert facts == []
+    assert len(updates) == 1
+    assert "reward failed" in updates[0].error
+    assert updates[0].rewards_applied == []
+
+    state.inventory["iron_key"] = 2
+    state, updates, facts = advance_quests(world, state, [])
+    assert state.quests["follow_up"].status == "completed"
+    assert state.inventory == {"blessing_token": 2}
+    assert state.flags["reward_granted"] is True
+    assert updates[0].rewards_applied == world.quests[-1].rewards
+    assert updates[0].error == ""
+    assert Fact("item_gained", "blessing_token", 2) in facts
+    assert Fact("quest_completed", "follow_up") in facts
+    replayed, updates, facts = advance_quests(world, state, [])
+    assert replayed == state
+    assert updates == []
+    assert facts == []
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_explicit_completion_handles_cyclic_rewards_once_and_rolls_back_nested_failure(fails):
+    first = _quest(rewards=[
+        Effect(kind="give_item", target="blessing_token"),
+        Effect(kind="quest_complete", target="second"),
+    ])
+    second = _quest(id="second", rewards=[
+        Effect(kind="give_item", target="blessing_token", amount=2),
+        Effect(kind="quest_complete", target="follow_up"),
+    ])
+    if fails:
+        first.rewards.append(Effect(kind="remove_item", target="iron_key"))
+    world = _world_with(first, second)
+    state = _state_for(world)
+    before = state.model_copy(deep=True)
+    effect = Effect(kind="quest_complete", target="follow_up")
+    result = apply_effects(state, world, [effect])[0]
+    if fails:
+        assert not result.ok
+        assert "reward failed" in result.error
+        assert result.facts == []
+        assert state == before
+    else:
+        assert result.ok
+        assert state.inventory["blessing_token"] == 3
+        assert state.quests["follow_up"].status == "completed"
+        assert state.quests["second"].status == "completed"
+        assert result.facts.count(Fact("quest_completed", "follow_up")) == 1
+        assert result.facts.count(Fact("quest_completed", "second")) == 1
+        state, updates, _ = advance_quests(world, state, result.facts)
+        assert {u.quest_id for u in updates if u.status == "completed"} == {"follow_up", "second"}
+        again = apply_effects(state, world, [effect])[0]
+        assert again.ok and again.facts == []
+        assert state.inventory["blessing_token"] == 3
+
+
+@pytest.mark.parametrize("blocked_by", ["disabled", "prerequisite", "condition", "failed", "completed"])
+def test_manual_acceptance_cannot_bypass_gates_or_terminal_status(blocked_by):
+    quest = _quest(auto_accept=False)
+    if blocked_by == "disabled":
+        quest.enabled = False
+    elif blocked_by == "prerequisite":
+        quest.prerequisites = ["open_the_warehouse"]
+    elif blocked_by == "condition":
+        quest.accept_requires = [Condition(kind="has_item", target="iron_key")]
+    world = _world_with(quest)
+    state = _state_for(world)
+    if blocked_by in ("failed", "completed"):
+        state.quests[quest.id].status = blocked_by
+    before = state.model_copy(deep=True)
+    result = apply_effects(state, world, [Effect(kind="quest_accept", target=quest.id)])[0]
+    assert not result.ok
+    assert result.error
+    assert result.facts == []
+    assert state == before
+
+
+def test_manual_acceptance_succeeds_after_all_gates_hold_and_is_idempotent():
+    world = _world_with(_quest(
+        auto_accept=False,
+        prerequisites=["open_the_warehouse"],
+        accept_requires=[Condition(kind="has_item", target="iron_key")],
+    ))
+    state = _state_for(world)
+    state.quests["open_the_warehouse"].status = "completed"
+    state.inventory["iron_key"] = 1
+    effect = Effect(kind="quest_accept", target="follow_up")
+    accepted = apply_effects(state, world, [effect])[0]
+    assert accepted.ok
+    assert accepted.facts == [Fact("quest_accepted", "follow_up")]
+    assert state.quests["follow_up"].status == "active"
+    again = apply_effects(state, world, [effect])[0]
+    assert again.ok and again.facts == []
+
+
+@pytest.mark.parametrize("status", ["inactive", "failed", "completed"])
+def test_explicit_progress_does_not_mutate_nonactive_quests(status):
+    world = _world_with(_quest())
+    state = _state_for(world)
+    state.quests["follow_up"].status = status
+    before = state.model_copy(deep=True)
+    result = apply_effects(state, world, [Effect(
+        kind="quest_progress", target="follow_up", value="reach_forest"
+    )])[0]
+    assert not result.ok
+    assert result.facts == []
+    assert state == before
+
+
+def test_direct_progress_completion_grants_rewards_without_objective_facts():
+    world = _world_with(_quest())
+    state = _state_for(world)
+    applied = apply_effects(state, world, [Effect(
+        kind="quest_progress", target="follow_up", value="reach_forest"
+    )])[0]
+    state, updates, facts = advance_quests(world, state, applied.facts)
+    assert state.quests["follow_up"].status == "completed"
+    assert state.inventory["blessing_token"] == 2
+    assert updates[0].status == "completed"
+    assert Fact("item_gained", "blessing_token", 2) in facts
+
+
+def test_quest_reward_chains_are_not_limited_to_three_passes():
+    quests = [
+        _quest(
+            id=f"chain_{index}",
+            objectives=[ObjectiveDef(id="ready", kind="flag", target=f"step_{index}")],
+            rewards=[Effect(kind="set_flag", target=f"step_{index + 1}", value=True)],
+        )
+        for index in reversed(range(6))
+    ]
+    world = _world_with(*quests)
+    state, updates, facts = advance_quests(
+        world, _state_for(world), [Fact("flag", "step_0", True)]
+    )
+    assert all(state.quests[quest.id].status == "completed" for quest in quests)
+    assert len(updates) == 6
+    assert Fact("flag", "step_6", True) in facts
+    assert len([fact for fact in facts if fact.kind == "flag"]) == 6
+
+
+def test_progress_from_rewards_does_not_mask_another_quests_reward_failure():
+    world = _world_with(
+        _quest(id="source", rewards=[Effect(
+            kind="quest_progress", target="follow_up", value="reach_forest"
+        )]),
+        _quest(rewards=[Effect(kind="remove_item", target="iron_key")]),
+    )
+    world.quests = [quest for quest in world.quests if quest.id != "open_the_warehouse"]
+    world.quests.sort(key=lambda quest: quest.id != "source")
+    state, updates, _ = advance_quests(
+        world, _state_for(world), [Fact("reach_location", "forest_edge")]
+    )
+    failed_updates = [update for update in updates if update.quest_id == "follow_up"]
+    assert state.quests["follow_up"].status == "active"
+    assert len(failed_updates) == 1
+    assert failed_updates[0].error
+    assert failed_updates[0].rewards_applied == []

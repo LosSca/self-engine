@@ -1349,23 +1349,30 @@ class GameSession:
     def _track_task(self, coro) -> "asyncio.Task":
         """Spawn a fire-and-forget coroutine, keeping a strong reference to it."""
         task = asyncio.create_task(coro)
-        task.add_done_callback(self._pending_tasks.discard)
+        self._pending_tasks.add(task)
+
+        def _on_done(done: asyncio.Task) -> None:
+            self._pending_tasks.discard(done)
+            if not done.cancelled():
+                error = done.exception()
+                if error is not None:
+                    logger.error("Background task failed", exc_info=(type(error), error, error.__traceback__))
+
+        task.add_done_callback(_on_done)
         return task
 
     async def drain_pending_tasks(self) -> None:
-        """Await fire-and-forget side-effect tasks still pending on this loop.
-
-        Tasks spawned inside ``process_action`` may belong to another event loop
-        (tests drive the async generator step by step), so this is
-        best-effort: it awaits what is pending here and drops what is not.
-        """
+        """Await same-loop side effects, including tasks they spawn; retain foreign-loop tasks."""
         loop = asyncio.get_running_loop()
-        pending = [t for t in self._pending_tasks if not t.done() and t.get_loop() is loop]
-        if pending:
+        current = asyncio.current_task()
+        while True:
+            pending = [t for t in self._pending_tasks if t is not current and t.get_loop() is loop]
+            if not pending:
+                return
             await asyncio.gather(*pending, return_exceptions=True)
-        for task in list(self._pending_tasks):
-            if task.done() or task.get_loop() is not loop:
-                self._pending_tasks.discard(task)
+            for task in pending:
+                if task.done():
+                    self._pending_tasks.discard(task)
 
     def _resolve_canonical_name(self, short_name: str, all_names: list[str]) -> str:
         """Resolve a potentially short name to its full canonical form.

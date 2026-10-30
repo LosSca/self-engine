@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.models.game import ActionRequest, NarrativeResult, RuleOutcome
+from app.models.game import ActionRequest, GameState, NarrativeResult, RuleOutcome, WorldDefinition
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services.world_service import build_initial_state
 from tests.support import village_world
@@ -120,3 +120,77 @@ async def test_template_narrator_reports_refusals_verbatim():
     result = await TemplateNarrator().narrate(request, refusal, state, world)
     assert result.status == "ok"
     assert result.text == "The door is locked."
+
+
+async def test_language_is_per_call_not_shared_narrator_state():
+    world, state, request, outcome = _setup()
+    router = StubRouter()
+    narrator = LLMNarrator(router, language="en")
+    await narrator.narrate(request, outcome, state, world, options={"language": "zh"})
+    await narrator.narrate(request, outcome, state, world)
+    assert "Reply in zh " in router.calls[0]["messages"][0]["content"]
+    assert "Reply in en " in router.calls[1]["messages"][0]["content"]
+    assert narrator.language == "en"
+
+
+@pytest.mark.parametrize("status", ["fired", "failed", "skipped"])
+async def test_event_description_is_advisory_and_success_only(status):
+    from app.models.game import EventExecution, GameEventDef
+
+    world, state, request, outcome = _setup()
+    description = "守门人的脚步声在雾里回响。"
+    world.events = [GameEventDef(id="voice", name="Footsteps", description=description)]
+    execution = EventExecution(event_id="voice", name="Footsteps", status=status)
+    before = state.model_dump_json()
+    template = await TemplateNarrator().narrate(request, outcome, state, world, [execution])
+    router = StubRouter()
+    await LLMNarrator(router).narrate(request, outcome, state, world, [execution])
+    prompt = router.calls[0]["messages"][1]["content"]
+    assert (description in template.text) == (status == "fired")
+    assert (description in prompt) == (status == "fired")
+    if status == "fired":
+        facts = json.loads(prompt.split("Settled game facts (JSON):\n", 1)[1].split("\n\nAuthored", 1)[0])
+        assert description not in json.dumps(facts, ensure_ascii=False)
+        assert "background only" in prompt
+        assert "never overrides the settled facts" in prompt
+    assert state.model_dump_json() == before
+
+
+def test_preset_router_builds_the_authored_provider_and_model():
+    from app.services.narrative_service import preset_router
+    from app.engines.llm_router import LLMProvider
+
+    router = preset_router({"provider": "openai", "model": "gpt-test"})
+    assert router is not None
+    assert router.config.primary_provider == LLMProvider.OPENAI
+    assert router.config.primary_model == "gpt-test"
+    assert preset_router({"provider": "", "model": ""}) is None
+    assert preset_router({"provider": "nope", "model": "x"}) is None
+
+
+@pytest.mark.asyncio
+async def test_narrator_prefers_the_scene_preset_router(monkeypatch):
+    from app.services import narrative_service
+
+    class Stub:
+        def __init__(self):
+            self.calls = []
+
+        async def complete(self, messages, **kwargs):
+            self.calls.append(kwargs)
+            return "preset prose"
+
+    preset = Stub()
+    default = Stub()
+    monkeypatch.setattr(narrative_service, "preset_router", lambda options: preset)
+    narrator = narrative_service.LLMNarrator(default, language="zh")
+    result = await narrator.narrate(
+        ActionRequest(campaign_id="c", request_id="r", action="look"),
+        RuleOutcome(ok=True, message="ok"),
+        GameState(campaign_id="c", world_id="w"),
+        WorldDefinition(world_id="w", name="w", start_location_id="x"),
+        options={"provider": "openai", "model": "gpt-test"},
+    )
+    assert result.status == "ok"
+    assert result.text == "preset prose"
+    assert len(preset.calls) == 1 and not default.calls

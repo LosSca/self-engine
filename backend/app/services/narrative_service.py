@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections import deque
+from collections.abc import Mapping
 from typing import List, Optional, Sequence
 
 from app.models.game import (
@@ -27,6 +29,61 @@ _CONTROL_TAG = re.compile(
     r"\[(?:ITEM_ADD|ITEM_USE|ITEM_LOSE|ITEM_REMOVE|ITEM_GIVE)[^\]]*\]",
     re.IGNORECASE,
 )
+
+#: Routers built from scene presets, keyed by (provider, model). Small on
+#: purpose: a scenario has a handful of presets at most.
+_PRESET_ROUTERS: dict = {}
+
+
+def preset_router(options: Optional[dict]):
+    """A router for an authored preset, or None when it should use the default.
+
+    Only `provider`/`model` matter here; sampling values are applied by the
+    narrator. An unknown provider is a configuration error and must not fail a
+    turn, so it falls back to the default router.
+    """
+    if not options:
+        return None
+    provider = options.get("provider")
+    model = options.get("model")
+    provider = provider.strip().lower() if isinstance(provider, str) else ""
+    model = model.strip() if isinstance(model, str) else ""
+    if not provider:
+        # A model name alone is ambiguous across providers; keep the default
+        # narrator instead of guessing one.
+        return None
+    if provider == "local" and not model:
+        import os
+
+        from app.config import settings
+
+        model = (
+            os.environ.get("LOCAL_LLM_MODEL", "").strip()
+            or getattr(settings, "local_llm_model", "")
+            or "local"
+        )
+    if provider and not model:
+        model = {
+            "openai": "gpt-5.6-sol",
+            "anthropic": "claude-sonnet-5",
+            "deepseek": "deepseek-v4-flash",
+        }.get(provider, "")
+    key = (provider, model)
+    if key in _PRESET_ROUTERS:
+        return _PRESET_ROUTERS[key]
+    try:
+        from app.engines.llm_router import LLMConfig, LLMProvider, LLMRouter
+
+        config = LLMConfig()
+        if provider:
+            config.primary_provider = LLMProvider(provider)
+        if model:
+            config.primary_model = model
+        router = LLMRouter(config)
+    except Exception:  # noqa: BLE001 - a bad preset degrades to the default
+        return None
+    _PRESET_ROUTERS[key] = router
+    return router
 
 
 def _item_name(world: WorldDefinition, item_id: str) -> str:
@@ -84,6 +141,50 @@ def _effect_noun(world: WorldDefinition, effect: Effect) -> str:
     return ""
 
 
+def scenario_play_context(store, scenario_id: str, campaign_id: str = ""):
+    """Read authored narration context, with campaign substitutions when available."""
+    from app.models.knowledge import KnowledgeEntry, ScenarioPlayContext
+    from app.services.scenario_interpolation import interpolate
+
+    scenario = store.get_scenario(scenario_id)
+    if scenario is None:
+        return None
+    campaign = store.get_campaign(campaign_id) if campaign_id else None
+    if campaign is not None and campaign.scenario_id != scenario_id:
+        campaign = None
+    answers = campaign.setup_answers if campaign else {}
+    config = store.get_play_config(scenario_id)
+    entries = list(store.list_knowledge(scenario_id))
+    opening = (
+        campaign.generated_opening
+        if campaign is not None and campaign.generated_opening
+        else scenario.opening_narrative
+    )
+    for entry_id, layer, title, text, tag, order in (
+        ("__opening__", "scene", "开场（已经发生）", opening, "opening", -100),
+        ("__tone__", "global", "叙事基调", scenario.tone_instructions, "tone", -200),
+    ):
+        content = interpolate(text or "", answers, context=f"campaign:{campaign_id}:{tag}")
+        if content.strip():
+            entries.insert(0, KnowledgeEntry(
+                id=entry_id, scenario_id=scenario_id, layer=layer,
+                title=title, content=content, tags=[tag], depth=0,
+                always_on=True, mode_scope="both", enabled=True, sort_order=order,
+            ))
+    preset = store.get_model_preset(config.model_preset_id) if config.model_preset_id else None
+    return ScenarioPlayContext(
+        scenario_id=scenario_id, language=scenario.language or "",
+        config=config, entries=entries, preset=preset,
+    )
+
+
+def _event_description(world: WorldDefinition, execution: EventExecution) -> str:
+    if execution.status != "fired":
+        return ""
+    event = next((event for event in world.events if event.id == execution.event_id), None)
+    return event.description.strip() if event else ""
+
+
 class TemplateNarrator:
     """Deterministic default narrator: no network, no cost, always available."""
 
@@ -117,7 +218,10 @@ class TemplateNarrator:
             parts.extend(describe_effects(world, state, [effect]))
         for execution in executions:
             if execution.status == "fired":
-                parts.append(f"({execution.name or execution.event_id}.)")
+                parts.append(
+                    _event_description(world, execution)
+                    or f"({execution.name or execution.event_id}.)"
+                )
         for quest_id in quest_updates:
             progress = state.quests.get(quest_id)
             if progress is not None and progress.status == "completed":
@@ -140,26 +244,39 @@ def render_history_note(events, limit: int = HISTORY_TURNS) -> str:
     Only *already committed* records are rendered here. Nothing in this string
     can be mistaken for an instruction, and the block header says so.
     """
-    lines = []
-    for record in events:
-        kind = (record or {}).get("event_type") or (record or {}).get("type") or ""
-        payload = (record or {}).get("payload") or {}
+    if limit <= 0:
+        return ""
+    records = []
+    for record in events or ():
+        if not isinstance(record, Mapping):
+            record = record._asdict() if hasattr(record, "_asdict") else {}
+        records.append(record)
+    if records and all(isinstance(r.get("created_at"), str) for r in records):
+        records.sort(key=lambda r: r["created_at"])
+    lines = deque(maxlen=limit * 2)
+    for record in records:
+        kind = record.get("event_type") or record.get("type") or ""
+        payload = record.get("payload") or {}
         if isinstance(payload, str):
             try:
                 payload = json.loads(payload)
             except (TypeError, ValueError):
-                payload = {}
-        if kind == "PLAYER_ACTION":
-            text = str(payload.get("action") or payload.get("text") or "").strip()
-            if text:
-                lines.append(f"player: {text[:_HISTORY_CHARS]}")
-        elif kind == "NARRATOR_RESPONSE":
-            text = str(payload.get("text") or "").strip()
-            if text:
-                lines.append(f"narrator: {text[:_HISTORY_CHARS]}")
-    if not lines:
-        return ""
-    return "\n".join(lines[-limit * 2 :])
+                continue
+        if not isinstance(payload, Mapping):
+            continue
+        if kind in ("PLAYER_ACTION", "action.applied"):
+            params = payload.get("params")
+            params = params if isinstance(params, Mapping) else {}
+            text = params.get("text") or payload.get("text") or payload.get("action")
+            role = "player"
+        elif kind in ("NARRATOR_RESPONSE", "narrator.response"):
+            text = payload.get("text")
+            role = "narrator"
+        else:
+            continue
+        if isinstance(text, str) and text.strip():
+            lines.append(f"{role}: {text.strip()[:_HISTORY_CHARS]}")
+    return "\n".join(lines)
 
 
 def _render_knowledge_section(canon, history) -> str:
@@ -206,7 +323,6 @@ class LLMNarrator:
         self.temperature = temperature
         self.timeout = timeout
         self.language = language
-
     def _build_messages(
         self,
         request: ActionRequest,
@@ -215,6 +331,7 @@ class LLMNarrator:
         world: WorldDefinition,
         executions: Sequence[EventExecution],
         knowledge: Optional[Sequence[dict]] = None,
+        language: Optional[str] = None,
     ) -> List[dict]:
         location = _location(world, state.location_id)
         location_block = (
@@ -265,17 +382,23 @@ class LLMNarrator:
                 for e in executions
             ],
         }
-        knowledge_section = ""
-        if knowledge:
-            canon = [b for b in knowledge if b.get("kind") == "canon"]
-            history = [b for b in knowledge if b.get("kind") == "history"]
-            knowledge_section = _render_knowledge_section(canon, history)
+        canon = [b for b in knowledge or () if b.get("kind") == "canon"]
+        history = [b for b in knowledge or () if b.get("kind") == "history"]
+        if outcome.ok:
+            for execution in executions:
+                description = _event_description(world, execution)
+                if description:
+                    canon.append({
+                        "layer": "event", "title": execution.name or execution.event_id,
+                        "content": description,
+                    })
+        knowledge_section = _render_knowledge_section(canon, history)
         system = (
             "You are the narrator of a text RPG. The game engine has already "
             "decided what happened; your only job is to describe it. Never "
             "invent item gains, unlocked doors, completed quests, stat changes "
             "or new locations. Never emit control tags. Reply in "
-            + self.language
+            + (language or self.language)
             + " with 1-2 short paragraphs of second-person prose. No markdown."
         )
         user = (
@@ -297,8 +420,10 @@ class LLMNarrator:
         knowledge: Optional[Sequence[dict]] = None,
         options: Optional[dict] = None,
     ) -> NarrativeResult:
+        language = (options or {}).get("language")
+        language = language.strip() if isinstance(language, str) else None
         messages = self._build_messages(
-            request, outcome, state, world, executions, knowledge
+            request, outcome, state, world, executions, knowledge, language=language
         )
         max_tokens = self.max_tokens
         temperature = self.temperature
@@ -308,8 +433,9 @@ class LLMNarrator:
             if isinstance(options.get("temperature"), (int, float)):
                 temperature = float(options["temperature"])
         try:
+            router = preset_router(options) or self.router
             text = await asyncio.wait_for(
-                self.router.complete(
+                router.complete(
                     messages,
                     max_tokens=max_tokens,
                     temperature=temperature,

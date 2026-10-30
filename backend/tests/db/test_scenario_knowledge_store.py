@@ -170,7 +170,15 @@ def test_deleting_a_scenario_removes_its_knowledge_and_config(store, scenario):
 def test_schema_version_includes_knowledge_tables(tmp_path):
     with ScenarioStore(str(tmp_path / "migrated.db")) as store:
         version = store._conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
-        assert version == ScenarioStore.SCHEMA_VERSION == 7
+        assert version == ScenarioStore.SCHEMA_VERSION
+        assert ScenarioStore.SCHEMA_VERSION >= 7
+        columns = {
+            row[1]
+            for row in store._conn.execute(
+                "PRAGMA table_info(scenario_play_config)"
+            ).fetchall()
+        }
+        assert "context_budget_chars" in columns
         names = {
             row[0]
             for row in store._conn.execute(

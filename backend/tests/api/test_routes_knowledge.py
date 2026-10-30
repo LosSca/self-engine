@@ -263,3 +263,30 @@ def test_builtin_preset_cannot_be_deleted(client):
     res = client.delete("/api/v1/model-presets/builtin-balanced")
     assert res.status_code == 409
     assert "builtin" in res.json()["detail"]
+
+
+def test_context_preview_uses_budget_and_focus(client, scenario_id):
+    client.post(
+        f"/api/v1/scenarios/{scenario_id}/knowledge",
+        json=_entry(title="Tavern", content="x" * 40, tags=["tavern"]),
+    )
+    client.post(
+        f"/api/v1/scenarios/{scenario_id}/knowledge",
+        json=_entry(title="Distant", content="y" * 40, tags=["harbor"]),
+    )
+    res = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config",
+        json={
+            "mode": "free",
+            "context_budget_chars": 50,
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["context_budget_chars"] == 50
+
+    preview = client.get(
+        f"/api/v1/scenarios/{scenario_id}/context/preview",
+        params={"mode": "free", "focus": "tavern"},
+    ).json()
+    assert [block["title"] for block in preview["blocks"]] == ["Tavern"]
+    assert any("预算" in item["reason"] for item in preview["stats"]["excluded"])

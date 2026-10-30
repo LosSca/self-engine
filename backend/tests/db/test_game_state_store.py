@@ -147,3 +147,34 @@ def test_list_events_respects_version_cursor(store):
     assert len(store.list_events("camp-1")) == 2
     assert store.list_events("camp-1", after_version=1) == []
     assert len(store.list_events("camp-1", limit=1)) == 1
+
+
+async def test_narrative_history_is_read_only_bounded_and_campaign_scoped(store):
+    from app.models.game import ActionRequest
+    from app.services.action_service import ActionService
+
+    bound_world(store)
+    service = ActionService(store)
+    for index in range(8):
+        await service.execute(ActionRequest(
+            campaign_id="camp-1", request_id=f"r{index}", action="look",
+            params={"text": f"  authored turn {index}  "},
+        ))
+    store.record_request(
+        campaign_id="other", request_id="other", request_payload={"text": "private"},
+        status="rejected", result_payload={"message": "secret"}, state_version=0,
+    )
+    store.record_request(
+        campaign_id="camp-1", request_id="rejected", request_payload={"text": "unparsed"},
+        status="rejected", result_payload={"message": "Not understood."}, state_version=8,
+    )
+    before = store._conn.total_changes
+    store._conn.execute("PRAGMA query_only = ON")
+    history = store.narrative_history("camp-1", limit=2)
+    assert [row["request_id"] for row in history] == ["r7", "r7", "rejected", "rejected"]
+    assert history[0]["payload"]["text"] == "  authored turn 7  "
+    assert history[-1]["payload"]["text"] == "Not understood."
+    assert len(store.narrative_history("camp-1")) == 18
+    assert store.narrative_history("camp-1", limit=0) == []
+    assert store.narrative_history("missing") == []
+    assert store._conn.total_changes == before

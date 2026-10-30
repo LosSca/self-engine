@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.engines.action_registry import action_names, verb_table
-from app.models.game import ActionRequest, ActionResult, GameState, WorldDefinition
+from app.engines.event_engine import condition_holds, entity_location
+from app.models.game import ActionRequest, ActionResult, Condition, GameState, WorldDefinition
 import logging
+import sqlite3
 
 from app.services import intent_advisor, world_service
 from app.services.action_service import ActionService
@@ -42,6 +44,8 @@ _VERBS_PRIMARY: Dict[str, str] = {
 
 _TRAILING = ("", "。", "！", "?", "？", ".", "吧", "啊", "呢")
 _LEADING_PARTICLES = ("请", "我想", "我要", "帮我", "试着", "试图", "麻烦")
+_ENVELOPE = re.compile(r"^\[([A-Z]+)\]\s*", re.IGNORECASE)
+_PARSE_FAILURES = {"missing_target", "ambiguous", "no_target"}
 
 
 @dataclass
@@ -70,10 +74,23 @@ class ParsedAction:
 
 def _norm(text: str) -> str:
     value = (text or "").strip()
+    envelope = _ENVELOPE.match(value)
+    if envelope and envelope[1].upper() in ("DO", "SAY"):
+        value = value[envelope.end():].strip()
     for prefix in _LEADING_PARTICLES:
         if value.startswith(prefix):
             value = value[len(prefix):].strip()
     return value
+
+
+def _verb_prefix(text: str, verb: str) -> bool:
+    if not text.startswith(verb):
+        return False
+    rest = text[len(verb):]
+    return not (
+        rest and verb[-1].isascii() and verb[-1].isalnum()
+        and (rest[0].isalnum() or rest[0] == "_")
+    )
 
 
 def _clean_target(text: str) -> str:
@@ -136,6 +153,10 @@ class TextActionParser:
     def parse(
         self, text: str, world: WorldDefinition, state: GameState
     ) -> Optional[ParsedAction]:
+        envelope = _ENVELOPE.match((text or "").strip())
+        mode = envelope[1].upper() if envelope else "DO"
+        if mode not in ("DO", "SAY"):
+            return None
         raw = _norm(text)
         if not raw:
             return None
@@ -144,21 +165,15 @@ class TextActionParser:
             if suffix and lowered.endswith(suffix):
                 lowered = lowered[: -len(suffix)].strip()
         action, fragment = self._split_verb(lowered)
+        if mode == "SAY" and action not in (None, "talk"):
+            return None
         if action is None:
-            custom = self._split_custom_verb(lowered, world)
-            if custom is not None:
-                parsed = self._resolve_custom(custom[0], custom[1], world, state)
-                if parsed is not None:
-                    return parsed
+            if mode == "DO":
+                custom = self._split_custom_verb(lowered, world)
+                if custom is not None:
+                    return self._resolve_custom(custom[0], custom[1], world, state)
             guessed = self._guess_without_verb(lowered, world, state)
-            if guessed is None:
-                return None
-            action = guessed.action
-            fragment = guessed.matched_name
-            parsed = self._resolve(action, fragment, world, state)
-            if parsed is None:
-                return guessed
-            return parsed
+            return guessed if guessed and (mode == "DO" or guessed.action == "talk") else None
         parsed = self._resolve(action, fragment, world, state)
         if parsed is not None:
             return parsed
@@ -171,12 +186,9 @@ class TextActionParser:
     def _split_verb(self, text: str) -> Tuple[Optional[str], str]:
         for action, verbs in _VERBS:
             for verb in verbs:
-                if text == verb:
-                    return action, ""
-                if text.startswith(verb):
+                verb = verb.rstrip()
+                if _verb_prefix(text, verb):
                     return action, _clean_target(text[len(verb):])
-                if verb in ("look", "go", "take") and text.startswith(verb + " "):
-                    return action, text[len(verb):].strip()
         return None, text
 
     # -- world-authored actions --------------------------------------------
@@ -196,9 +208,7 @@ class TextActionParser:
         self, text: str, world: WorldDefinition
     ) -> Optional[Tuple[str, str]]:
         for verb, action_id in self._custom_verbs(world):
-            if text == verb:
-                return action_id, ""
-            if text.startswith(verb):
+            if _verb_prefix(text, verb):
                 return action_id, _clean_target(text[len(verb):])
         return None
 
@@ -254,6 +264,7 @@ class TextActionParser:
             self._move_candidates(world, state)
             + self._item_candidates(world, state)
             + self._door_candidates(world, state)
+            + self._entity_candidates(world, state)
             + self._talk_candidates(world, state)
         ):
             if candidate.id in seen:
@@ -270,24 +281,18 @@ class TextActionParser:
         candidates.extend(("take", c) for c in self._item_candidates(world, state))
         candidates.extend(("talk", c) for c in self._talk_candidates(world, state))
         candidates.extend(("open", c) for c in self._door_candidates(world, state))
-        best: Optional[Tuple[int, str, _Candidate]] = None
-        for action, candidate in candidates:
-            if candidate.match(text) == 1000 + len(text):
-                return ParsedAction(
-                    action=action,
-                    target_id=candidate.id,
-                    matched_name=candidate.names[0] if candidate.names else candidate.id,
-                    confidence="name_only",
-                )
-            score = candidate.match(text)
-            if score and (best is None or score > best[0]):
-                best = (score, action, candidate)
-        if best is None:
+        matches = {
+            (action, candidate.id): candidate
+            for action, candidate in candidates
+            if candidate.match(text) >= 1000
+        }
+        if len(matches) != 1:
             return None
+        (action, _target_id), candidate = next(iter(matches.items()))
         return ParsedAction(
-            action=best[1],
-            target_id=best[2].id,
-            matched_name=best[2].names[0] if best[2].names else best[2].id,
+            action=action,
+            target_id=candidate.id,
+            matched_name=self._display(candidate, world, action),
             confidence="name_only",
         )
 
@@ -295,36 +300,41 @@ class TextActionParser:
         self, action: str, fragment: str, world: WorldDefinition, state: GameState
     ) -> Optional[ParsedAction]:
         if action == "look":
-            return ParsedAction(action="look", confidence="verb_only")
-        if action == "defend":
-            enemies = self._enemy_candidates(world, state)
-            matched = self._best(fragment, enemies) if fragment else None
-            return ParsedAction(
-                action="defend",
-                target_id=matched.id if matched else None,
-                matched_name=self._display(matched, world, "defend") if matched else "",
-                confidence="verb_only" if matched is None else "exact",
-            )
+            if fragment in ("", "around", "周围", "四周"):
+                return ParsedAction(action="look", confidence="verb_only")
+            return ParsedAction(action="look", target_id=fragment)
         if action == "flee":
             return ParsedAction(action="flee", confidence="verb_only")
-        if action == "attack":
+        if action in ("attack", "defend"):
             enemies = self._enemy_candidates(world, state)
-            matched = self._best(fragment, enemies) if fragment else None
-            if matched is None and not enemies:
-                return ParsedAction(
-                    action="attack",
-                    confidence="no_target",
-                    note="没有可以攻击的目标。",
-                )
-            if matched is None:
-                # One hostile present is an unambiguous target.
+            matched = None
+            if fragment:
+                candidates = self._entity_candidates(world, state)
+                matched = self._best(fragment, candidates, exact_only=True)
+                if matched is None and fragment.startswith("the "):
+                    matched = self._best(fragment[4:], candidates, exact_only=True)
+                if matched is None:
+                    return ParsedAction(
+                        action=action,
+                        confidence="missing_target",
+                        note=f"could not resolve an unambiguous target from '{fragment}'",
+                    )
+            elif action == "attack":
                 matched = enemies[0] if len(enemies) == 1 else None
+                if matched is None:
+                    return ParsedAction(
+                        action=action,
+                        confidence="ambiguous" if enemies else "no_target",
+                        note="Name one living enemy here to attack.",
+                    )
             return ParsedAction(
-                action="attack",
+                action=action,
                 target_id=matched.id if matched else None,
-                matched_name=self._display(matched, world, "attack") if matched else "",
-                confidence="exact" if matched else "ambiguous",
+                matched_name=self._display(matched, world, action) if matched else "",
+                confidence="exact" if matched else "verb_only",
             )
+        if action == "talk" and not fragment:
+            return ParsedAction(action="talk", confidence="verb_only")
         if action == "move":
             rules = ("move", self._move_candidates(world, state))
         elif action in ("take", "use"):
@@ -336,22 +346,6 @@ class TextActionParser:
         else:
             return None
         matched = self._best(fragment, rules[1])
-        if matched is None and fragment:
-            # A bare word may be the target's display name without a verb.
-            for other_action, candidates in (
-                ("move", self._move_candidates(world, state)),
-                ("take", self._item_candidates(world, state)),
-                ("open", self._door_candidates(world, state)),
-                ("talk", self._talk_candidates(world, state)),
-            ):
-                exact = self._best(fragment, candidates, exact_only=True)
-                if exact is not None:
-                    return ParsedAction(
-                        action=other_action,
-                        target_id=exact.id,
-                        matched_name=self._display(exact, world, other_action),
-                        confidence="exact",
-                    )
         if matched is None:
             return None
         return ParsedAction(
@@ -430,27 +424,29 @@ class TextActionParser:
         ]
 
     @staticmethod
-    def _enemy_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
-        """Creatures to fight: hostile NPCs, creatures, or an ongoing target."""
-        candidates = []
-        for entity in world.entities:
-            if entity.location_id != state.location_id:
-                continue
-            if entity.kind == "creature" or entity.hostile:
-                candidates.append(_Candidate(entity.id, [entity.name, entity.id], "entity"))
-        target = state.combat.get("target_id")
-        if target and all(candidate.id != target for candidate in candidates):
-            entity = next((e for e in world.entities if e.id == target), None)
-            if entity is not None:
-                candidates.append(_Candidate(entity.id, [entity.name, entity.id], "entity"))
-        return candidates
-
-    @staticmethod
-    def _talk_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
-        candidates = [
-            _Candidate(entity.id, [entity.name, entity.id], "entity")
+    def _entity_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
+        return [
+            _Candidate(entity.id, [entity.name, entity.id], entity.kind)
             for entity in world.entities
-            if entity.location_id == state.location_id
+            if entity_location(state, world, entity.id) == state.location_id
+            and condition_holds(state, world, Condition(kind="entity_alive", target=entity.id))
+        ]
+
+    @classmethod
+    def _enemy_candidates(cls, world: WorldDefinition, state: GameState) -> List[_Candidate]:
+        eligible = {
+            entity.id for entity in world.entities
+            if entity.kind != "object"
+            and (entity.kind == "creature" or entity.hostile
+                 or entity.id == state.combat.get("target_id"))
+        }
+        return [c for c in cls._entity_candidates(world, state) if c.id in eligible]
+
+    @classmethod
+    def _talk_candidates(cls, world: WorldDefinition, state: GameState) -> List[_Candidate]:
+        candidates = [
+            candidate for candidate in cls._entity_candidates(world, state)
+            if candidate.kind != "object"
         ]
         known = {entity.id for entity in world.entities}
         location = next((loc for loc in world.locations if loc.id == state.location_id), None)
@@ -521,12 +517,7 @@ class TextActionService:
         request_id = request_id or f"txt-{uuid.uuid4().hex}"
         replayed = self.game_store.get_request(request_id)
         if replayed is not None:
-            return {
-                "request_id": request_id,
-                "status": "duplicate",
-                "parsed": None,
-                "result": replayed["result"],
-            }
+            return await self._replay_text(campaign_id, text, request_id, narrate, replayed)
         state = self.ensure_state(campaign_id)
         world = world_service.get_world(self.game_store, state.world_id)
         parsed = self.parser.parse(text, world, state)
@@ -535,8 +526,8 @@ class TextActionService:
             advised = await self._advise(text, world, state)
             if advised is not None:
                 parsed = advised
-        if parsed is None or not parsed.action:
-            return self._unparsed(campaign_id, request_id, text, state)
+        if parsed is None or not parsed.action or parsed.confidence in _PARSE_FAILURES:
+            return await self._reject_parse(campaign_id, request_id, text, state, parsed)
         request = ActionRequest(
             campaign_id=campaign_id,
             request_id=request_id,
@@ -553,6 +544,43 @@ class TextActionService:
             "result": json.loads(result.model_dump_json()),
         }
 
+    async def _replay_text(
+        self, campaign_id: str, text: str, request_id: str, narrate: bool, row: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        payload = row["request"]
+        current = self.game_store.get_state(campaign_id)
+        if (
+            row["campaign_id"] != campaign_id
+            or payload.get("campaign_id") != campaign_id
+            or payload.get("actor_id") != "player"
+            or payload.get("params", {}).get("text") != text
+        ):
+            result = ActionResult(
+                request_id=request_id,
+                campaign_id=campaign_id,
+                status="conflict",
+                action="unknown",
+                code="request_id_conflict",
+                message="request_id was already used for a different campaign or payload",
+                state_version=current.version if current is not None else 0,
+                state=current,
+            )
+        elif payload.get("action") == "unknown":
+            result = self.action_service._load_result(row)
+            result.status = "duplicate"
+            result.message = "duplicate request ignored; no side effects were applied"
+            result.state_version = current.version if current is not None else row["state_version"]
+            result.state = current
+        else:
+            request = ActionRequest.model_validate({**payload, "narrate": narrate})
+            result = await self.action_service.execute(request)
+        return {
+            "request_id": request_id,
+            "status": result.status,
+            "parsed": None,
+            "result": json.loads(result.model_dump_json()),
+        }
+
     async def _advise(
         self, text: str, world: WorldDefinition, state: GameState
     ) -> Optional[ParsedAction]:
@@ -562,7 +590,9 @@ class TextActionService:
         only ever steer *which* verb table entry is tried - the resolution of
         the target, the preconditions and the effects stay in code.
         """
-        if not intent_advisor.enabled():
+        envelope = _ENVELOPE.match((text or "").strip())
+        mode = envelope[1].upper() if envelope else "DO"
+        if mode not in ("DO", "SAY") or not intent_advisor.enabled():
             return None
         advisor = self.advisor
         if advisor is None:
@@ -577,7 +607,7 @@ class TextActionService:
         except Exception as exc:  # noqa: BLE001 - advice must never break a turn
             logger.info("intent advisor failed: %s", exc)
             return None
-        if suggestion is None:
+        if suggestion is None or (mode == "SAY" and suggestion.action != "talk"):
             return None
         # The model names an action and the words it thinks name the target.
         # Rebuild a verb+target utterance from exactly those two pieces: the
@@ -599,11 +629,13 @@ class TextActionService:
                 parsed.action,
             )
         parsed.note = (parsed.note + " " if parsed.note else "") + "intent advisor"
-        parsed.confidence = "advised"
+        if parsed.confidence not in _PARSE_FAILURES:
+            parsed.confidence = "advised"
         return parsed
 
-    def _unparsed(
-        self, campaign_id: str, request_id: str, text: str, state: GameState
+    async def _reject_parse(
+        self, campaign_id: str, request_id: str, text: str, state: GameState,
+        parsed: Optional[ParsedAction] = None,
     ) -> Dict[str, Any]:
         from app.models.game import NarrativeResult
 
@@ -615,30 +647,39 @@ class TextActionService:
             request_id=request_id,
             campaign_id=campaign_id,
             status="rejected",
-            action="unknown",
+            action=parsed.action if parsed else "unknown",
             ok=False,
-            code="unparsed_action",
-            message=message,
+            code=parsed.confidence if parsed else "unparsed_action",
+            message=parsed.note if parsed else message,
             state_version=state.version,
+            state=state,
             narrative=NarrativeResult(status="skipped"),
         )
+        request_payload = {
+            "campaign_id": campaign_id,
+            "request_id": request_id,
+            "action": result.action,
+            "actor_id": "player",
+            "params": {**(parsed.params if parsed else {}), "text": text},
+        }
         payload = json.loads(result.model_dump_json())
         try:
             self.game_store.record_request(
                 campaign_id=campaign_id,
                 request_id=request_id,
-                request_payload={"text": text, "source": "text"},
+                request_payload=request_payload,
                 status="rejected",
                 result_payload=payload,
                 state_version=state.version,
             )
-        except Exception:  # noqa: BLE001 - a race with a replay must not fail the turn
+        except sqlite3.IntegrityError:
             stored = self.game_store.get_request(request_id)
-            if stored is not None:
-                payload = stored["result"]
+            if stored is None:
+                raise
+            return await self._replay_text(campaign_id, text, request_id, False, stored)
         return {
             "request_id": request_id,
             "status": "rejected",
-            "parsed": None,
+            "parsed": parsed.as_dict() if parsed else None,
             "result": payload,
         }

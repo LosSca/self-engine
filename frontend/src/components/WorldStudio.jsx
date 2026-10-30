@@ -875,6 +875,49 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               启用
             </label>
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label>
+              <FieldLabel>冷却回合（0 = 无冷却）</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                min="0"
+                value={value.cooldown_turns || 0}
+                onChange={(e) => update({ cooldown_turns: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              <FieldLabel>最多触发次数（留空 = 不限）</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                min="1"
+                value={value.max_fires ?? ''}
+                onChange={(e) => update({ max_fires: e.target.value === '' ? null : Number(e.target.value) })}
+                placeholder="留空"
+              />
+            </label>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label>
+              <FieldLabel>成功后续事件（逗号分隔，无视自身触发条件）</FieldLabel>
+              <input
+                className={inputClass}
+                value={(value.followup_events || []).join(', ')}
+                onChange={(e) => update({ followup_events: splitList(e.target.value) })}
+                placeholder="next_beat, ambush"
+              />
+            </label>
+            <label>
+              <FieldLabel>失败后续事件（效果失败时运行，父事件不落地）</FieldLabel>
+              <input
+                className={inputClass}
+                value={(value.failure_events || []).join(', ')}
+                onChange={(e) => update({ failure_events: splitList(e.target.value) })}
+                placeholder="recovery_beat"
+              />
+            </label>
+          </div>
           <div>
             <FieldLabel>触发条件（全部满足）</FieldLabel>
             <ConditionRows value={value.conditions || []} onChange={(conditions) => update({ conditions })} world={world} />
@@ -1070,6 +1113,10 @@ const EMPTY_FOR = {
     effects: [],
     priority: 0,
     repeat: 'once',
+    followup_events: [],
+    failure_events: [],
+    cooldown_turns: 0,
+    max_fires: null,
   },
   quest: {
     id: '',
@@ -1508,6 +1555,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               <div className="text-[10px] font-mono text-white/30 mt-2">
                 触发 {item.trigger} / {item.trigger_action || '*'} / {item.trigger_target || '*'} · 条件{' '}
                 {(item.conditions || []).length} · 效果 {(item.effects || []).length} · 优先级 {item.priority}
+                {(item.followup_events || []).length > 0 && ' · 成功→' + item.followup_events.join(', ')}
+                {(item.failure_events || []).length > 0 && ' · 失败→' + item.failure_events.join(', ')}
+                {item.cooldown_turns ? ` · 冷却 ${item.cooldown_turns} 回合` : ''}
+                {item.max_fires ? ` · 至多 ${item.max_fires} 次` : ''}
               </div>
             )}
           </div>
