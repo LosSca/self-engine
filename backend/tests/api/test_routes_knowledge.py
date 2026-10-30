@@ -183,6 +183,55 @@ def test_context_preview_applies_depth_and_mode_filters(client, scenario_id):
     assert payload["stats"]["max_depth"] == 3
 
 
+def test_context_preview_supports_all_entered_nodes_and_ignores_them_in_free_mode(client, scenario_id):
+    entries = {}
+    for index, name in enumerate(["global", "main", "branch", "side"]):
+        created = client.post(
+            f"/api/v1/scenarios/{scenario_id}/knowledge",
+            json=_entry(title=name, layer="global" if name == "global" else "character", sort_order=index),
+        )
+        assert created.status_code == 201, created.text
+        entries[name] = created.json()["id"]
+    saved = client.put(f"/api/v1/scenarios/{scenario_id}/play-config", json={
+        "mode": "storyline",
+        "storyline": {"nodes": [
+            {"id": "arrive", "title": "Main", "knowledge_ids": [entries["main"]]},
+            {"id": "branch", "title": "Branch", "kind": "branch", "prereq": ["arrive"],
+             "knowledge_ids": [entries["branch"]]},
+            {"id": "side", "title": "Side", "kind": "side", "requires_event": "keeper_alert",
+             "knowledge_ids": [entries["side"]]},
+        ]},
+    })
+    assert saved.status_code == 200, saved.text
+    url = f"/api/v1/scenarios/{scenario_id}/context/preview"
+    params = {"story_node": "arrive", "story_nodes": " arrive, , branch, side, "}
+    res = client.get(url, params=params)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["scenario_id"] == scenario_id
+    assert body["mode"] == "storyline"
+    assert body["story_node"] == "arrive"
+    assert body["story_nodes"] == ["arrive", "branch", "side"]
+    assert [block["entry_id"] for block in body["blocks"]] == [
+        entries[name] for name in ["main", "branch", "side", "global"]
+    ]
+    assert body["stats"]["included"] == 4
+
+    legacy = client.get(url, params={"story_node": "arrive"}).json()
+    assert legacy["story_nodes"] == ["arrive"]
+    assert [block["entry_id"] for block in legacy["blocks"]] == [
+        entries[name] for name in ["main", "global", "branch", "side"]
+    ]
+    free = client.get(url, params=dict(params, mode="free"))
+    assert free.status_code == 200, free.text
+    assert free.json() == client.get(url, params={"mode": "free"}).json()
+    assert free.json()["story_node"] is None
+    assert free.json()["story_nodes"] == []
+    assert [block["entry_id"] for block in free.json()["blocks"]] == [
+        entries[name] for name in ["global", "main", "branch", "side"]
+    ]
+
+
 # ------------------------------------------------------------- model presets
 def test_model_preset_lifecycle(client):
     res = client.get("/api/v1/model-presets")

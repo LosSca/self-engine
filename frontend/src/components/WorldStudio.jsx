@@ -13,6 +13,7 @@ import {
   fetchCampaignDiagnostics,
   fetchEventExecutions,
   fetchQuestProgress,
+  fetchCampaignStory,
   fetchWorld,
   fetchWorldMap,
   fetchWorlds,
@@ -1123,7 +1124,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [editor, setEditor] = useState(null)
   const [saving, setSaving] = useState(false)
   const [sim, setSim] = useState(null)
-  const [debug, setDebug] = useState({ progress: null, executions: [], diagnostics: null, state: null, snapshots: [] })
+  const [debug, setDebug] = useState({ progress: null, story: null, executions: [], diagnostics: null, state: null, snapshots: [] })
   const [diff, setDiff] = useState(null)
   const [busyVersion, setBusyVersion] = useState(null)
   const [debugBusy, setDebugBusy] = useState(false)
@@ -1202,15 +1203,16 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     ;(async () => {
       setDebugBusy(true)
       try {
-        const [progress, executions, diagnostics, state, snapshots] = await Promise.all([
+        const [progress, story, executions, diagnostics, state, snapshots] = await Promise.all([
           fetchQuestProgress(campaignId).catch(() => null),
+          fetchCampaignStory(campaignId).catch(() => null),
           fetchEventExecutions(campaignId, { limit: 50 }).catch(() => []),
           fetchCampaignDiagnostics(campaignId).catch(() => null),
           fetchCampaignEngineState(campaignId).catch(() => null),
           fetchCampaignSnapshots(campaignId, 30).catch(() => []),
         ])
         if (!cancelled)
-          setDebug({ progress, executions: executions || [], diagnostics, state, snapshots: snapshots || [] })
+          setDebug({ progress, story, executions: executions || [], diagnostics, state, snapshots: snapshots || [] })
       } finally {
         if (!cancelled) setDebugBusy(false)
       }
@@ -1905,6 +1907,53 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                         </li>
                       ))}
                     </ul>
+                  )}
+                </div>
+              )}
+
+              {campaignId && debug.state && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                    <span className="text-sm font-bold text-white">剧情进度与阻塞原因</span>
+                    <button onClick={() => setDebugNonce((value) => value + 1)} disabled={debugBusy} className={ghostButton}>
+                      {debugBusy ? '读取中…' : '刷新进度'}
+                    </button>
+                  </div>
+                  {!debug.story ? (
+                    <p className="text-xs text-amber-300">{debugBusy ? '正在读取剧情进度…' : '剧情进度读取失败，请重试。'}</p>
+                  ) : debug.story.mode === 'free' ? (
+                    <p className="text-xs text-white/40">自由模式不推进剧情节点，已有历史仍保留在存档中。</p>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      <p className="text-xs text-white/40">只有已写入存档的节点显示为「已进入」；条件满足的节点在下一次有效行动时推进。</p>
+                      {(debug.story.storyline.lines || []).map((line) => (
+                        <div key={line.id} className="flex flex-wrap items-center gap-2 text-xs text-white/60">
+                          <span>{line.title}</span>
+                          <Badge>{({ main: '主线', branch: '分支', side: '独立剧情' })[line.kind]}</Badge>
+                          <Badge tone={line.enabled ? 'good' : 'warn'}>{line.enabled ? '启用' : '已停用'}</Badge>
+                          {line.description && <span className="text-white/30">{line.description}</span>}
+                        </div>
+                      ))}
+                      {(debug.story.storyline.nodes || []).map((node) => {
+                        const entered = (debug.state.story_nodes || []).includes(node.id)
+                        const ready = !entered && debug.story.entered.includes(node.id)
+                        const line = (debug.story.storyline.lines || []).find((item) => item.id === node.line)
+                        return (
+                          <div key={node.id} className="rounded-xl border border-white/10 p-3 text-xs">
+                            <div className="flex flex-wrap items-center gap-2 text-white/70">
+                              <span>{node.title}</span>
+                              <span className="text-white/30 font-mono">{node.id}</span>
+                              <Badge>{({ main: '主线', branch: '分支', side: '独立剧情' })[node.kind]}</Badge>
+                              <Badge tone={entered ? 'good' : 'muted'}>{entered ? '已进入' : ready ? '条件已满足' : debug.story.locked.includes(node.id) ? '前置未完成' : '等待触发'}</Badge>
+                              <span className="text-white/40">{line ? line.title : '未分组'}</span>
+                              {line && !line.enabled && <Badge tone="warn">剧情线已停用</Badge>}
+                            </div>
+                            {node.summary && <p className="mt-2 text-white/40">{node.summary}</p>}
+                            {!entered && debug.story.reasons[node.id] && <p className="mt-2 text-amber-300">{debug.story.reasons[node.id]}</p>}
+                          </div>
+                        )
+                      })}
+                    </div>
                   )}
                 </div>
               )}

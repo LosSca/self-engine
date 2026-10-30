@@ -6,8 +6,9 @@ The depth chain decides what the narrator is allowed to know for a given turn:
   ordered by (depth, sort_order, title) and grouped by layer;
 * entries marked always_on bypass the cutoff, which is how small events stay
   present in free mode;
-* storyline mode additionally boosts the knowledge referenced by the node the
-  player has actually entered.
+* storyline mode additionally boosts the knowledge referenced by every node the
+  player has actually entered (trunk, attached branches and independent side
+  lines alike), so a branch cannot silently lose its own knowledge.
 
 The result is a validated KnowledgeContext. Rendering it into a prompt is a
 separate, explicit step, so tests can assert exactly what the model would see.
@@ -47,14 +48,32 @@ def build_context(
     story_node: Optional[str] = None,
     storyline: Optional[Storyline] = None,
     scenario_id: str = "",
+    story_nodes: Optional[Sequence[str]] = None,
 ) -> KnowledgeContext:
-    """Select and order the knowledge entries visible for one turn."""
+    """Select and order the knowledge entries visible for one turn.
+
+    "story_nodes" is every node the campaign has actually entered; their
+    knowledge is boosted together. "story_node" stays supported for callers that
+    only know the active trunk node, and is used when "story_nodes" is omitted.
+    """
     max_depth = max(0, min(9, int(max_depth)))
+    candidates: List[str] = []
+    # Saved story history can outlive a switch to free mode. It must not
+    # influence ranking, including for direct callers and context previews.
+    if mode == "storyline":
+        if story_nodes:
+            candidates = [node_id for node_id in story_nodes if node_id]
+        elif story_node:
+            candidates = [story_node]
+    else:
+        story_node = None
     boost_ids: set = set()
-    if storyline is not None and story_node:
-        node = storyline.node_map().get(story_node)
-        if node is not None:
-            boost_ids = set(node.knowledge_ids)
+    if storyline is not None and candidates:
+        node_map = storyline.node_map()
+        for candidate in candidates:
+            node = node_map.get(candidate)
+            if node is not None:
+                boost_ids.update(node.knowledge_ids)
 
     blocks: List[KnowledgeBlock] = []
     excluded: List[ExcludedEntry] = []
@@ -114,6 +133,7 @@ def build_context(
             max_depth=max_depth,
         ),
         story_node=story_node,
+        story_nodes=list(candidates),
     )
 
 

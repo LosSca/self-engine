@@ -78,6 +78,35 @@ class KnowledgeEntryPatch(_Strict):
     sort_order: Optional[int] = None
 
 
+StoryKind = Literal["main", "branch", "side"]
+
+
+class StoryLineDef(_Strict):
+    """One named line of story nodes.
+
+    The three kinds describe how a line attaches to the rest of the story:
+
+    * main   - the trunk; every scenario has exactly one, entered in order.
+    * branch - hangs off the trunk (or another branch): it can only be entered
+      after its prerequisites, so it belongs to a specific point in the story.
+    * side   - an independent line: it has no prerequisites of its own and
+      starts from its own trigger (conditions or a required event), so it runs
+      beside the trunk instead of hanging off it.
+
+    Grouping is editorial bookkeeping: it never changes progression (the
+    prerequisite graph still decides), it only lets an author see and switch a
+    whole line at once.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    title: str = Field(..., min_length=1, max_length=200)
+    kind: StoryKind = "main"
+    description: str = ""
+    #: A disabled line keeps its nodes configured but the engine never enters
+    #: them. This is an editorial switch, never a hint sent to the model.
+    enabled: bool = True
+
+
 class StoryNode(_Strict):
     """One node of a configured storyline.
 
@@ -88,7 +117,11 @@ class StoryNode(_Strict):
 
     id: str = Field(..., min_length=1, max_length=64)
     title: str = Field(..., min_length=1, max_length=200)
-    kind: Literal["main", "branch"] = "main"
+    kind: StoryKind = "main"
+    #: Optional line this node belongs to (see Storyline.lines). Empty means the
+    #: node is ungrouped, which stays legal for storylines authored before
+    #: lines existed.
+    line: str = ""
     summary: str = ""
     prereq: List[str] = Field(default_factory=list)
     conditions: List[Condition] = Field(default_factory=list)
@@ -102,9 +135,14 @@ class Storyline(_Strict):
     name: str = ""
     description: str = ""
     nodes: List[StoryNode] = Field(default_factory=list)
+    #: Optional named lines the nodes are grouped into.
+    lines: List[StoryLineDef] = Field(default_factory=list)
 
     def node_map(self) -> Dict[str, StoryNode]:
         return {node.id: node for node in self.nodes}
+
+    def line_map(self) -> Dict[str, StoryLineDef]:
+        return {line.id: line for line in self.lines}
 
     def roots(self) -> List[StoryNode]:
         return [node for node in self.nodes if not node.prereq]
@@ -190,7 +228,11 @@ class KnowledgeContext(BaseModel):
     mode: str = "free"
     blocks: List[KnowledgeBlock] = Field(default_factory=list)
     stats: ContextStats = Field(default_factory=ContextStats)
+    #: The active trunk node (the last main node entered), kept for compatibility.
     story_node: Optional[str] = None
+    #: Every node whose knowledge was boosted for this context, so a debugger can
+    #: tell why an entry ranked first.
+    story_nodes: List[str] = Field(default_factory=list)
 
     def prompt_blocks(self) -> List[Dict[str, Any]]:
         """Plain dicts for the narrator prompt (no behaviour attached)."""

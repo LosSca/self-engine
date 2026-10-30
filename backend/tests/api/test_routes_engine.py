@@ -193,6 +193,65 @@ def test_story_endpoint_reports_free_mode_by_default(client):
     assert body["mode"] == "free"
     assert body["entered"] == []
     assert body["active"] is None
+    assert body["storyline"] == {"name": "", "nodes": [], "lines": []}
+
+
+def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
+    created = client.post("/api/scenarios/", json={"title": "Story lines", "language": "zh"})
+    assert created.status_code == 201, created.text
+    scenario_id = created.json()["id"]
+    lines = [
+        {"id": "trunk", "title": "Main line", "kind": "main", "description": "The trunk", "enabled": True},
+        {"id": "detour", "title": "Branch line", "kind": "branch", "description": "A detour", "enabled": True},
+        {"id": "independent", "title": "Side line", "kind": "side", "description": "On hold", "enabled": False},
+    ]
+    nodes = [
+        {"id": "arrive", "title": "Arrival", "kind": "main", "line": "trunk", "summary": "Arrive at the village"},
+        {"id": "branch", "title": "Detour", "kind": "branch", "line": "detour", "summary": "Look around",
+         "prereq": ["arrive"]},
+        {"id": "side", "title": "Independent", "kind": "side", "line": "independent", "summary": "A side story",
+         "conditions": [{"kind": "at_location", "target": "village_square"}]},
+        {"id": "open", "title": "Open warehouse", "kind": "main", "summary": "An ungrouped legacy node",
+         "prereq": ["arrive"], "conditions": [{"kind": "door_open", "target": "warehouse_door"}]},
+    ]
+    config_url = f"{API}/scenarios/{scenario_id}/play-config"
+    saved = client.put(config_url, json={
+        "mode": "storyline", "storyline": {"name": "Warehouse", "lines": lines, "nodes": nodes},
+    })
+    assert saved.status_code == 200, saved.text
+    stored = client.get(config_url).json()["storyline"]
+    assert stored["lines"] == lines
+    assert [node["line"] for node in stored["nodes"]] == ["trunk", "detour", "independent", ""]
+
+    payload = village_world_data()
+    payload["scenario_id"] = scenario_id
+    assert _create_world(client, payload).status_code == 200
+    assert client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"}).status_code == 200
+    before = client.get(f"{API}/campaigns/camp-1/state").json()
+    response = client.get(f"{API}/campaigns/camp-1/story")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["campaign_id"] == "camp-1"
+    assert body["mode"] == "storyline"
+    assert body["entered"] == ["arrive", "branch"]
+    assert body["active"] == "arrive"
+    assert body["pending"] == ["side", "open"]
+    assert body["locked"] == []
+    assert "已停用" in body["reasons"]["side"]
+    assert body["storyline"] == {
+        "name": "Warehouse", "lines": lines,
+        "nodes": [
+            {key: node.get(key, "") for key in ["id", "title", "kind", "line", "summary"]}
+            for node in nodes
+        ],
+    }
+    assert client.get(f"{API}/campaigns/camp-1/state").json() == before
+
+    assert client.put(config_url, json={"mode": "free"}).status_code == 200
+    free = client.get(f"{API}/campaigns/camp-1/story").json()
+    assert free["mode"] == "free"
+    assert free["storyline"] == {"name": "", "nodes": [], "lines": []}
+    assert client.get(config_url).json()["storyline"] == stored
 
 
 def test_story_endpoint_tracks_storyline_progress(client, tmp_path):

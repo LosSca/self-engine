@@ -104,6 +104,74 @@ def test_ordering_boosts_the_active_story_node_then_layers():
     )
     assert [b.entry_id for b in context.blocks] == ["char1", "global1", "scene1"]
     assert context.story_node == "n1"
+    assert context.story_nodes == ["n1"]
+
+
+def test_all_entered_nodes_boost_knowledge_without_boosting_future_nodes():
+    storyline = Storyline(nodes=[
+        StoryNode(id="old", title="Earlier main", knowledge_ids=["old", "shared"]),
+        StoryNode(id="current", title="Current main", prereq=["old"], knowledge_ids=["current"]),
+        StoryNode(id="branch", title="Branch", kind="branch", prereq=["old"],
+                  knowledge_ids=["branch", "shared"]),
+        StoryNode(id="side", title="Side", kind="side", requires_event="keeper_alert",
+                  knowledge_ids=["side", "shared"]),
+        StoryNode(id="future", title="Future", prereq=["current"], knowledge_ids=["future"]),
+    ])
+    entries = [_entry("global", layer="global"), _entry("future", depth=0)] + [
+        _entry(entry_id, sort_order=index)
+        for index, entry_id in enumerate(["old", "current", "branch", "side", "shared"])
+    ]
+    entered = ["old", "current", "branch", "side"]
+    context = knowledge_service.build_context(
+        entries, mode="storyline", storyline=storyline,
+        story_node="current", story_nodes=entered,
+    )
+    assert [b.entry_id for b in context.blocks] == [
+        "old", "current", "branch", "side", "shared", "global", "future",
+    ]
+    assert context.story_node == "current"
+    assert context.story_nodes == entered
+    assert context.stats.included == len(entries)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"depth": 9}, {"enabled": False}, {"mode_scope": "free"},
+])
+def test_node_boost_does_not_bypass_entry_filters(overrides):
+    storyline = Storyline(nodes=[StoryNode(id="n1", title="Main", knowledge_ids=["hidden"])])
+    context = knowledge_service.build_context(
+        [_entry("visible"), _entry("hidden", **overrides)],
+        mode="storyline", max_depth=5, storyline=storyline, story_nodes=["n1"],
+    )
+    assert [b.entry_id for b in context.blocks] == ["visible"]
+    assert [e.entry_id for e in context.stats.excluded] == ["hidden"]
+
+
+@pytest.mark.parametrize("node_args", [
+    {"story_node": "n1"},
+    {"story_nodes": ["n1", "side"]},
+    {"story_node": "n1", "story_nodes": ["n1", "side"]},
+])
+def test_free_mode_ignores_stale_story_nodes_including_legacy_node(node_args):
+    storyline = Storyline(nodes=[
+        StoryNode(id="n1", title="Main", knowledge_ids=["character"]),
+        StoryNode(id="side", title="Side", kind="side", requires_event="keeper_alert",
+                  knowledge_ids=["ambient", "story_only"]),
+    ])
+    entries = [
+        _entry("global", layer="global"),
+        _entry("character", layer="character"),
+        _entry("ambient", layer="event", always_on=True, mode_scope="storyline"),
+        _entry("story_only", layer="story", mode_scope="storyline"),
+    ]
+    baseline = knowledge_service.build_context(entries, mode="free", storyline=storyline)
+    context = knowledge_service.build_context(
+        entries, mode="free", storyline=storyline, **node_args,
+    )
+    assert [b.entry_id for b in context.blocks] == ["global", "character", "ambient"]
+    assert context.model_dump() == baseline.model_dump()
+    assert context.story_node is None
+    assert context.story_nodes == []
 
 
 def test_disabled_entries_are_never_injected():

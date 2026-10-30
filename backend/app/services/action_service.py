@@ -135,6 +135,7 @@ class ActionService:
         play: Optional[ScenarioPlayContext],
         story_node: Optional[str],
         state: Optional[GameState] = None,
+        story_nodes: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
         provider = self.history_provider
         blocks: List[Dict[str, Any]] = []
@@ -145,6 +146,17 @@ class ActionService:
             return [], [], None
         if play is not None:
             try:
+                if play.config.mode == "storyline":
+                    # Both accepted and refused narration use already-entered
+                    # nodes, never a fresh progression evaluation. Branch and
+                    # side knowledge stays relevant alongside the main line.
+                    if story_nodes is None and state is not None:
+                        story_nodes = [
+                            node_id for node_id in (state.story_nodes or []) if node_id
+                        ]
+                else:
+                    story_node = None
+                    story_nodes = None
                 context = build_context(
                     play.entries,
                     mode=play.config.mode,
@@ -152,6 +164,7 @@ class ActionService:
                     story_node=story_node,
                     storyline=play.config.storyline,
                     scenario_id=play.scenario_id,
+                    story_nodes=story_nodes,
                 )
                 blocks = [dict(block, kind="canon") for block in context.prompt_blocks()]
             except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal

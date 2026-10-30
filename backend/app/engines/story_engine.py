@@ -5,6 +5,14 @@ an optional required event. Progression is a pure function of the authoritative
 state - the same state always yields the same entered nodes - so it can be
 replayed, tested and debugged without any model call.
 
+Three node kinds share the same engine:
+
+* main   - the trunk, entered in prerequisite order;
+* branch - hangs off an earlier node, so it belongs to one point of the story;
+* side   - independent of the trunk: no prerequisites, entered when its own
+  trigger holds. A side node therefore needs a condition or a required event,
+  otherwise it would be entered the moment the campaign starts.
+
 Free mode does not use this engine at all: it never enters story nodes, and the
 knowledge context simply omits storyline-only entries.
 """
@@ -47,6 +55,7 @@ def validate_storyline(
         seen.add(node_id)
 
     known = set(ids)
+    line_map = storyline.line_map()
     for node in nodes:
         for prereq in node.prereq:
             if prereq == node.id:
@@ -57,6 +66,22 @@ def validate_storyline(
             errors.append(f"分支节点 '{node.id}' 必须至少有一个前置节点")
         if node.kind == "main" and len(node.prereq) > 1:
             errors.append(f"主线节点 '{node.id}' 只能有一个前置节点")
+        # An independent line must be *triggered*, not merely present: without a
+        # trigger the node would be entered on the very first turn.
+        if node.kind == "side" and not node.prereq and not node.conditions and not node.requires_event:
+            errors.append(
+                f"独立故事线节点 '{node.id}' 没有前置节点，必须至少有一个条件或依赖事件，"
+                "否则开局就会立即进入"
+            )
+        if node.line:
+            line = line_map.get(node.line)
+            if line is None:
+                errors.append(f"故事线节点 '{node.id}' 归属的剧情线 '{node.line}' 不存在")
+            elif line.kind != node.kind:
+                errors.append(
+                    f"故事线节点 '{node.id}' 的类型 '{node.kind}' 与剧情线 '{line.id}' 的类型 "
+                    f"'{line.kind}' 不一致"
+                )
         if knowledge_ids is not None:
             for knowledge_id in node.knowledge_ids:
                 if knowledge_id not in knowledge_ids:
@@ -67,6 +92,12 @@ def validate_storyline(
             errors.append(
                 f"故事线节点 '{node.id}' 依赖的事件 '{node.requires_event}' 不存在"
             )
+
+    seen_lines = set()
+    for line in storyline.lines:
+        if line.id in seen_lines:
+            errors.append(f"剧情线 id 重复：'{line.id}'")
+        seen_lines.add(line.id)
 
     main_roots = [node for node in nodes if node.kind == "main" and not node.prereq]
     if nodes and not main_roots:
@@ -104,6 +135,14 @@ def storyline_status(
 ) -> StoryStatus:
     """Evaluate which nodes are entered / pending / locked for this state."""
     known = {node.id for node in storyline.nodes}
+    #: Switching a line off is editorial: its nodes keep their prerequisites but
+    #: are never entered while the line is disabled.
+    disabled_lines = {line.id for line in storyline.lines if not line.enabled}
+    disabled_nodes = {
+        node.id
+        for node in storyline.nodes
+        if node.line and node.line in disabled_lines
+    }
     entered_list: List[str] = []
     for node_id in entered if entered is not None else state.story_nodes:
         if node_id in known and node_id not in entered_list:
@@ -118,6 +157,9 @@ def storyline_status(
         passes += 1
         for node in storyline.nodes:
             if node.id in entered_set:
+                continue
+            if node.id in disabled_nodes:
+                status.reasons.setdefault(node.id, f"剧情线 '{node.line}' 已停用")
                 continue
             if not all(prereq in entered_set for prereq in node.prereq):
                 continue

@@ -614,7 +614,7 @@ def get_campaign_story(campaign_id: str):
                 "pending": [],
                 "locked": [],
                 "reasons": {},
-                "storyline": {"name": "", "nodes": []},
+                "storyline": {"name": "", "nodes": [], "lines": []},
             }
         status = storyline_status(config.storyline, state, world)
         return {
@@ -632,10 +632,12 @@ def get_campaign_story(campaign_id: str):
                         "id": node.id,
                         "title": node.title,
                         "kind": node.kind,
+                        "line": node.line,
                         "summary": node.summary,
                     }
                     for node in config.storyline.nodes
                 ],
+                "lines": [line.model_dump(mode="json") for line in config.storyline.lines],
             },
         }
     finally:

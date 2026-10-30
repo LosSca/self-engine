@@ -31,12 +31,15 @@ const EMPTY_NODE = {
   id: '',
   title: '',
   kind: 'main',
+  line: '',
   summary: '',
   prereq: [],
   conditions: [],
   requires_event: '',
   knowledge_ids: [],
 }
+
+const STORY_KIND_LABELS = { main: '主线', branch: '分支', side: '独立剧情' }
 
 const EMPTY_PRESET = {
   name: '',
@@ -57,6 +60,9 @@ const CONDITION_KINDS = [
   ['door_open', '门已开启'],
   ['at_location', '位于地点'],
   ['quest_status', '任务状态'],
+  ['entity_at', '实体位于地点'],
+  ['entity_alive', '实体存活'],
+  ['combatant_hp', '实体生命值'],
 ]
 const CONDITION_OPS = [
   ['eq', '等于'],
@@ -243,6 +249,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
   const [errors, setErrors] = useState([])
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState(null)
+  const [previewNodes, setPreviewNodes] = useState([])
   const [presetDraft, setPresetDraft] = useState(EMPTY_PRESET)
   const [editingPresetId, setEditingPresetId] = useState(null)
   const [savingPreset, setSavingPreset] = useState(false)
@@ -269,6 +276,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     if (!open || !scenarioId) return
     setTab(initialTab)
     setPreview(null)
+    setPreviewNodes([])
     setNotice('')
     setCreating(false)
     setEditingId(null)
@@ -339,6 +347,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
         model_preset_id: next.model_preset_id,
       })
       setConfig(saved)
+      setPreview(null)
       setNotice('运行模式已保存')
     } catch (err) {
       reportError(err)
@@ -367,6 +376,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
       const context = await previewKnowledgeContext(scenarioId, {
         mode: config.mode,
         maxDepth: config.max_depth,
+        storyNodes: config.mode === 'storyline' ? previewNodes : [],
       })
       setPreview(context)
     } catch (err) {
@@ -375,7 +385,14 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
   }
 
   const updateNode = (index, patch) => {
-    const nodes = config.storyline.nodes.map((node, i) => (i === index ? { ...node, ...patch } : node))
+    const line = (config.storyline.lines || []).find((item) => item.id === patch.line)
+    const nodes = config.storyline.nodes.map((node, i) => (
+      i === index ? { ...node, ...patch, ...(line ? { kind: line.kind } : {}) } : node
+    ))
+    if (patch.id !== undefined) {
+      const previousId = config.storyline.nodes[index].id
+      setPreviewNodes((ids) => ids.map((id) => id === previousId ? patch.id : id))
+    }
     setConfig({ ...config, storyline: { ...config.storyline, nodes } })
   }
 
@@ -385,8 +402,40 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
   }
 
   const removeNode = (index) => {
+    const removedId = config.storyline.nodes[index].id
     const nodes = config.storyline.nodes.filter((_, i) => i !== index)
+    setPreviewNodes((ids) => ids.filter((id) => id !== removedId))
     setConfig({ ...config, storyline: { ...config.storyline, nodes } })
+  }
+
+  const addLine = () => {
+    const lines = config.storyline.lines || []
+    let ordinal = 1
+    while (lines.some((line) => line.id === `line_${ordinal}`)) ordinal += 1
+    setConfig({
+      ...config,
+      storyline: {
+        ...config.storyline,
+        lines: [...lines, { id: `line_${ordinal}`, title: '新剧情线', kind: 'branch', description: '', enabled: true }],
+      },
+    })
+  }
+
+  const updateLine = (index, patch) => {
+    const previous = config.storyline.lines[index]
+    const lines = config.storyline.lines.map((line, i) => i === index ? { ...line, ...patch } : line)
+    const nodes = config.storyline.nodes.map((node) => (
+      node.line === previous.id && patch.kind ? { ...node, kind: patch.kind } : node
+    ))
+    setConfig({ ...config, storyline: { ...config.storyline, lines, nodes } })
+  }
+
+  const removeLine = (index) => {
+    const removed = config.storyline.lines[index]
+    if (!confirm(`移除剧情线「${removed.title}」？节点将保留并改为未分组。`)) return
+    const lines = config.storyline.lines.filter((_, i) => i !== index)
+    const nodes = config.storyline.nodes.map((node) => node.line === removed.id ? { ...node, line: '' } : node)
+    setConfig({ ...config, storyline: { ...config.storyline, lines, nodes } })
   }
 
   const updateCondition = (nodeIndex, condIndex, patch) => {
@@ -711,6 +760,52 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                     </label>
                   </div>
 
+                  <div className="rounded-2xl border border-white/10 p-4 flex flex-col gap-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h3 className="text-sm font-bold text-white">剧情线分组</h3>
+                      <button onClick={addLine} className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:text-white">
+                        新增剧情线
+                      </button>
+                    </div>
+                    <p className="text-xs text-white/40">
+                      分组用于组织和整线启停；节点仍按前置与条件推进。停用不清除已进入的历史。
+                    </p>
+                    {(config.storyline.lines || []).map((line, lineIndex) => (
+                      <div key={line.id} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <label>
+                            <FieldLabel>剧情线 ID（固定）</FieldLabel>
+                            <input className={inputClass + ' text-white/40'} value={line.id} readOnly />
+                          </label>
+                          <label>
+                            <FieldLabel>剧情线名称</FieldLabel>
+                            <input className={inputClass} value={line.title} onChange={(e) => updateLine(lineIndex, { title: e.target.value })} />
+                          </label>
+                          <label>
+                            <FieldLabel>剧情线类型（同步到所属节点）</FieldLabel>
+                            <select className={inputClass} value={line.kind} onChange={(e) => updateLine(lineIndex, { kind: e.target.value })}>
+                              {Object.entries(STORY_KIND_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <label>
+                          <FieldLabel>剧情线说明</FieldLabel>
+                          <input className={inputClass} value={line.description} onChange={(e) => updateLine(lineIndex, { description: e.target.value })} />
+                        </label>
+                        <div className="flex flex-wrap items-center gap-4 text-xs">
+                          <label className="flex items-center gap-2 text-white/60">
+                            <input type="checkbox" checked={line.enabled} onChange={(e) => updateLine(lineIndex, { enabled: e.target.checked })} />
+                            启用剧情线「{line.title}」
+                          </label>
+                          {!line.enabled && <span className="text-amber-300">已停用：不再进入新节点</span>}
+                          <span className="text-white/30">{config.storyline.nodes.filter((node) => node.line === line.id).length} 个节点</span>
+                          <button onClick={() => removeLine(lineIndex)} className="ml-auto text-white/40 hover:text-rose-400">移除分组</button>
+                        </div>
+                      </div>
+                    ))}
+                    {(config.storyline.lines || []).length === 0 && <p className="text-xs text-white/30">尚无分组；现有节点仍可正常推进。</p>}
+                  </div>
+
                   {config.storyline.nodes.length === 0 && (
                     <div className="rounded-2xl border border-dashed border-white/10 py-8 text-center text-white/30 text-xs">
                       故事线模式至少需要一个节点。第一个节点必须是无前置的主线节点。
@@ -753,15 +848,26 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                         <label>
                           <FieldLabel>类型</FieldLabel>
                           <select
-                            className={inputClass}
+                            className={inputClass + ' disabled:opacity-50'}
                             value={node.kind}
+                            disabled={Boolean(node.line)}
                             onChange={(e) => updateNode(index, { kind: e.target.value })}
                           >
-                            <option value="main">主线</option>
-                            <option value="branch">分支</option>
+                            {Object.entries(STORY_KIND_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
                           </select>
                         </label>
                       </div>
+                      <label>
+                        <FieldLabel>所属剧情线</FieldLabel>
+                        <select className={inputClass} value={node.line || ''} onChange={(e) => updateNode(index, { line: e.target.value })}>
+                          <option value="">未分组</option>
+                          {(config.storyline.lines || []).map((line) => (
+                            <option key={line.id} value={line.id}>{line.title} · {STORY_KIND_LABELS[line.kind]}{line.enabled ? '' : ' · 已停用'}</option>
+                          ))}
+                        </select>
+                        {node.line && <span className="block mt-2 text-xs text-white/40">节点类型随剧情线同步；单独修改类型前，请先设为未分组。</span>}
+                      </label>
+                      {node.kind === 'side' && <p className="text-xs text-white/40">独立剧情的起点需要进入条件或依赖事件；后续节点可用前置关系串联。</p>}
                       <label>
                         <FieldLabel>摘要（叙事参考）</FieldLabel>
                         <input
@@ -911,6 +1017,22 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                   >
                     新增节点
                   </button>
+                  <fieldset className="rounded-2xl border border-white/10 p-4">
+                    <legend className="px-2 text-xs text-white/60">知识预览：模拟已进入节点</legend>
+                    <p className="mb-3 text-xs text-white/40">先保存配置，再选择节点预览联合排序；此操作不会推进存档或触发事件。</p>
+                    <div className="flex flex-wrap gap-3">
+                      {config.storyline.nodes.filter((node) => node.id).map((node, index) => (
+                        <label key={index} className="flex items-center gap-2 text-xs text-white/60">
+                          <input
+                            type="checkbox"
+                            checked={previewNodes.includes(node.id)}
+                            onChange={(e) => setPreviewNodes((ids) => e.target.checked ? [...ids, node.id] : ids.filter((id) => id !== node.id))}
+                          />
+                          {node.title || node.id}（{node.id}）
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
                 </div>
               )}
 
@@ -932,7 +1054,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                   onClick={runPreview}
                   className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white"
                 >
-                  预览本次会载入的知识
+                  预览已保存配置的知识
                 </button>
               </div>
 
@@ -943,6 +1065,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                     {preview.stats.included}/{preview.stats.total} 条 · 深度上限{' '}
                     {preview.stats.max_depth}
                   </div>
+                  <p className="text-xs text-white/40">优先知识来源节点：{(preview.story_nodes || []).join('、') || '无'}</p>
                   <div className="flex flex-col gap-2">
                     {preview.blocks.map((block) => (
                       <div key={block.entry_id} className="text-xs text-white/70">
@@ -955,10 +1078,13 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                       <span className="text-xs text-white/30">没有条目会被载入</span>
                     )}
                   </div>
-                  {preview.stats.excluded > 0 && (
-                    <span className="text-[10px] text-white/30">
-                      另有 {preview.stats.excluded} 条被排除
-                    </span>
+                  {preview.stats.excluded.length > 0 && (
+                    <div className="text-xs text-white/40">
+                      <p>另有 {preview.stats.excluded.length} 条被排除</p>
+                      <ul className="mt-2 list-disc pl-5 space-y-1">
+                        {preview.stats.excluded.map((entry) => <li key={entry.entry_id}>{entry.title}：{entry.reason}</li>)}
+                      </ul>
+                    </div>
                   )}
                 </div>
               )}

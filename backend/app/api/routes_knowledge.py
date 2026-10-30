@@ -187,12 +187,16 @@ def preview_context(
     mode: Optional[str] = Query(None, pattern="^(free|storyline)$"),
     max_depth: Optional[int] = Query(None, ge=0, le=9),
     story_node: Optional[str] = Query(None),
+    story_nodes: Optional[str] = Query(
+        None, description="逗号分隔的已进入节点 id；提供时按它们的并集提升知识"
+    ),
 ):
     store = _store()
     try:
         _require_scenario(store, scenario_id)
         config = store.get_play_config(scenario_id)
         entries = store.list_knowledge(scenario_id)
+        entered = [part.strip() for part in (story_nodes or "").split(",") if part.strip()]
         return knowledge_service.build_context(
             entries,
             mode=mode or config.mode,
@@ -200,6 +204,7 @@ def preview_context(
             story_node=story_node,
             storyline=config.storyline,
             scenario_id=scenario_id,
+            story_nodes=entered or None,
         )
     finally:
         store.close()

@@ -629,11 +629,12 @@ export async function validateKnowledge(scenarioId) {
   return jsonOrThrow(r, '校验知识库失败')
 }
 
-export async function previewKnowledgeContext(scenarioId, { mode, maxDepth, storyNode } = {}) {
+export async function previewKnowledgeContext(scenarioId, { mode, maxDepth, storyNode, storyNodes } = {}) {
   const params = new URLSearchParams()
   if (mode) params.set('mode', mode)
   if (maxDepth !== undefined && maxDepth !== null) params.set('max_depth', String(maxDepth))
-  if (storyNode) params.set('story_node', storyNode)
+  if (storyNodes !== undefined) params.set('story_nodes', storyNodes.join(','))
+  else if (storyNode) params.set('story_node', storyNode)
   const query = params.toString()
   const r = await fetch(`${V1}/scenarios/${scenarioId}/context/preview${query ? `?${query}` : ''}`)
   return jsonOrThrow(r, '预览知识上下文失败')

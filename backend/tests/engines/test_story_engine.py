@@ -7,7 +7,7 @@ from app.engines.story_engine import (
     validate_storyline,
 )
 from app.models.game import Condition, GameState
-from app.models.knowledge import Storyline, StoryNode
+from app.models.knowledge import StoryLineDef, Storyline, StoryNode
 from tests.support import village_world
 
 
@@ -87,6 +87,123 @@ def test_unknown_knowledge_and_events_are_rejected_when_sets_are_given():
     errors = validate_storyline(storyline, knowledge_ids=set(), event_ids=set())
     assert any("k-missing" in e for e in errors)
     assert any("e-missing" in e for e in errors)
+
+
+def test_side_root_without_a_trigger_is_rejected():
+    storyline = _storyline([
+        StoryNode(id="main", title="Main"),
+        StoryNode(id="side", title="Side", kind="side"),
+    ])
+    errors = validate_storyline(storyline)
+    assert len(errors) == 1
+    assert "side" in errors[0] and "必须至少有一个条件或依赖事件" in errors[0]
+
+
+@pytest.mark.parametrize("trigger,state_update", [
+    ({"conditions": [{"kind": "has_item", "target": "iron_key"}]}, {"inventory": {"iron_key": 1}}),
+    ({"requires_event": "keeper_alert"}, {"fired_events": ["keeper_alert"]}),
+])
+def test_side_nodes_trigger_independently_and_progress_without_becoming_active(trigger, state_update):
+    world = _world()
+    storyline = _storyline([
+        StoryNode(id="main", title="Main",
+                  conditions=[Condition(kind="door_open", target="warehouse_door")]),
+        StoryNode(id="side", title="Side", kind="side", **trigger),
+        StoryNode(id="followup", title="Side followup", kind="side", prereq=["side"]),
+    ])
+    assert validate_storyline(storyline, event_ids={"keeper_alert"}) == []
+    state = _state()
+    blocked = advance_storyline(storyline, state, world)
+    assert blocked.entered == state.story_nodes == []
+    assert blocked.pending == ["main", "side"]
+    assert blocked.locked == ["followup"]
+    assert "side" in blocked.reasons
+
+    state = state.model_copy(update=state_update, deep=True)
+    preview = storyline_status(storyline, state, world)
+    assert state.story_nodes == []  # Read-only evaluation must not write history.
+    status = advance_storyline(storyline, state, world)
+    assert status == preview
+    assert status.newly_entered == state.story_nodes == ["side", "followup"]
+    assert status.active is None
+    assert status.pending == ["main"]
+
+    state.doors["warehouse_door"] = True
+    resumed = advance_storyline(storyline, state, world)
+    assert resumed.newly_entered == ["main"]
+    assert resumed.active == "main"
+    assert state.story_nodes == ["side", "followup", "main"]
+    assert advance_storyline(storyline, state, world).newly_entered == []
+
+
+@pytest.mark.parametrize("kind", ["main", "branch", "side"])
+def test_disabled_lines_gate_new_nodes_but_preserve_history_when_reenabled(kind):
+    world = _world()
+    line = StoryLineDef(id="optional", title="Optional line", kind=kind, enabled=False)
+    storyline = Storyline(lines=[line], nodes=[
+        StoryNode(id="arrive", title="Arrival"),
+        StoryNode(id="first", title="First", kind=kind, line="optional",
+                  prereq=[] if kind == "side" else ["arrive"],
+                  conditions=[Condition(kind="has_item", target="iron_key")]),
+        StoryNode(id="second", title="Second", kind=kind, line="optional", prereq=["first"],
+                  conditions=[Condition(kind="door_open", target="warehouse_door")]),
+    ])
+    assert validate_storyline(storyline) == []
+    state = _state(inventory={"iron_key": 1})
+    blocked = advance_storyline(storyline, state, world)
+    assert state.story_nodes == ["arrive"]
+    assert blocked.pending == ["first"]
+    assert blocked.locked == ["second"]
+    assert all("已停用" in blocked.reasons[node] for node in ["first", "second"])
+
+    storyline.lines[0].enabled = True
+    enabled = advance_storyline(storyline, state, world)
+    assert enabled.newly_entered == ["first"]
+    assert enabled.pending == ["second"]
+    assert "条件未满足" in enabled.reasons["second"]
+
+    storyline.lines[0].enabled = False
+    state.doors["warehouse_door"] = True
+    disabled_again = advance_storyline(storyline, state, world)
+    assert disabled_again.newly_entered == []
+    assert disabled_again.entered == state.story_nodes == ["arrive", "first"]
+    assert disabled_again.active == ("first" if kind == "main" else "arrive")
+    assert "first" not in disabled_again.reasons
+    assert "已停用" in disabled_again.reasons["second"]
+
+    storyline.lines[0].enabled = True
+    resumed = advance_storyline(storyline, state, world)
+    assert resumed.newly_entered == ["second"]
+    assert state.story_nodes == ["arrive", "first", "second"]
+    assert resumed.active == ("second" if kind == "main" else "arrive")
+    assert advance_storyline(storyline, state, world).newly_entered == []
+
+
+def test_unknown_line_reference_is_rejected_but_ungrouped_nodes_remain_valid():
+    storyline = _storyline([StoryNode(id="main", title="Main", line="missing")])
+    errors = validate_storyline(storyline)
+    assert any("main" in error and "missing" in error and "不存在" in error for error in errors)
+    storyline.nodes[0].line = ""
+    assert validate_storyline(storyline) == []
+
+
+@pytest.mark.parametrize("kind", ["branch", "side"])
+def test_node_kind_must_match_its_line_kind(kind):
+    storyline = Storyline(
+        lines=[StoryLineDef(id="line", title="Line", kind=kind)],
+        nodes=[StoryNode(id="main", title="Main", line="line")],
+    )
+    errors = validate_storyline(storyline)
+    assert len(errors) == 1
+    assert "main" in errors[0] and "line" in errors[0] and "不一致" in errors[0]
+
+
+def test_duplicate_line_ids_are_rejected():
+    storyline = Storyline(
+        lines=[StoryLineDef(id="line", title="First"), StoryLineDef(id="line", title="Second")],
+        nodes=[StoryNode(id="main", title="Main", line="line")],
+    )
+    assert validate_storyline(storyline) == ["剧情线 id 重复：'line'"]
 
 
 # ------------------------------------------------------------------- evaluation
