@@ -1,4 +1,6 @@
 """Persistence tests for authored knowledge, play config and model presets."""
+import json
+
 import pytest
 
 from app.db.scenario_store import ScenarioStore
@@ -179,6 +181,13 @@ def test_schema_version_includes_knowledge_tables(tmp_path):
             ).fetchall()
         }
         assert "context_budget_chars" in columns
+        knowledge_columns = {
+            row[1]
+            for row in store._conn.execute(
+                "PRAGMA table_info(scenario_knowledge)"
+            ).fetchall()
+        }
+        assert "audience_npc_ids" in knowledge_columns
         names = {
             row[0]
             for row in store._conn.execute(
@@ -186,3 +195,23 @@ def test_schema_version_includes_knowledge_tables(tmp_path):
             ).fetchall()
         }
         assert {"scenario_knowledge", "scenario_play_config", "model_presets"} <= names
+
+def test_knowledge_audience_roundtrips(tmp_path):
+    with ScenarioStore(str(tmp_path / "audience.db")) as store:
+        scenario = store.create_scenario(title="Audience", language="zh")
+        created = store.add_knowledge(
+            scenario.id,
+            KnowledgeEntryCreate(
+                layer="character", title="Secret", audience_npc_ids=["guard"]
+            ),
+        )
+        assert created.audience_npc_ids == ["guard"]
+        assert store.get_knowledge(created.id).audience_npc_ids == ["guard"]
+        updated = store.update_knowledge(
+            created.id, KnowledgeEntryPatch(audience_npc_ids=["guard", "elder"])
+        )
+        assert updated.audience_npc_ids == ["guard", "elder"]
+        db = store._conn.execute(
+            "SELECT audience_npc_ids FROM scenario_knowledge WHERE id=?", (created.id,)
+        ).fetchone()[0]
+        assert json.loads(db) == ["guard", "elder"]

@@ -27,13 +27,19 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.db.game_state_store import GameStateStore, StateConflictError
-from app.engines.event_engine import apply_effects, run_triggered_events
+from app.engines.event_engine import (
+    apply_effects,
+    condition_holds,
+    entity_location,
+    run_triggered_events,
+)
 from app.engines.quest_engine import advance_quests
 from app.engines.rules_engine import RulesEngine
 from app.engines.story_engine import StoryStatus, advance_storyline
 from app.models.game import (
     ActionResult,
     ActionRequest,
+    Condition,
     Effect,
     GameState,
     NarrativeResult,
@@ -114,6 +120,32 @@ class ActionService:
         )
 
     # -------------------------------------------------------------- context
+    def _focus_tokens(
+        self, world: WorldDefinition, state: GameState, request: ActionRequest
+    ) -> List[str]:
+        """Place, present NPCs and the target: who this turn can 'see'."""
+        focus = [state.location_id] if state.location_id else []
+        for entity in world.entities:
+            if entity.kind == "object":
+                continue
+            if entity_location(state, world, entity.id) != state.location_id:
+                continue
+            if not condition_holds(
+                state, world, Condition(kind="entity_alive", target=entity.id)
+            ):
+                continue
+            focus.append(entity.id)
+        if request.target_id:
+            focus.append(request.target_id)
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for token in focus:
+            key = token.strip().casefold()
+            if key and key not in seen:
+                seen.add(key)
+                ordered.append(token)
+        return ordered
+
     def _load_play_context(
         self, world: WorldDefinition, campaign_id: str = ""
     ) -> Optional[ScenarioPlayContext]:
@@ -422,8 +454,10 @@ class ActionService:
         if request.narrate:
             try:
                 blocks, context_entries, options = self._knowledge(
-                    self._load_play_context(world, state.campaign_id), None, state,
-                    focus=[state.location_id, request.target_id or ""],
+                    self._load_play_context(world, state.campaign_id),
+                    None,
+                    state,
+                    focus=self._focus_tokens(world, state, request),
                 )
                 knowledge = blocks
                 narrative = await self.narrator.narrate(
@@ -526,7 +560,7 @@ class ActionService:
                 play,
                 active_node,
                 new_state,
-                focus=[new_state.location_id, request.target_id or ""],
+                focus=self._focus_tokens(world, new_state, request),
             )
         except Exception as exc:  # noqa: BLE001 - context is advisory only
             return (

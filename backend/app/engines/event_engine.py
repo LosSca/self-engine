@@ -446,6 +446,26 @@ def _repeat_reason(event: GameEventDef, state: GameState) -> str:
     return ""
 
 
+def _matching_branch(event: GameEventDef, state: GameState, world: WorldDefinition):
+    """The first branch whose conditions hold, or None."""
+    for branch in event.branches:
+        if all(condition_holds(state, world, c) for c in branch.conditions):
+            return branch
+    return None
+
+
+def _event_payload(event: GameEventDef, branch):
+    """Base effects/follow-ups plus the matched branch's additions."""
+    effects = list(event.effects)
+    followups = list(event.followup_events)
+    label = ""
+    if branch is not None:
+        effects.extend(branch.effects)
+        followups.extend(branch.followup_events)
+        label = branch.label
+    return effects, followups, label
+
+
 def run_triggered_events(
     world: WorldDefinition,
     state: GameState,
@@ -474,6 +494,7 @@ def run_triggered_events(
 
     for _ in range(len(ordered)):
         fired = False
+        forced_before = set(forced)
         for event in ordered:
             if event.id in processed:
                 continue
@@ -507,8 +528,10 @@ def run_triggered_events(
                 )
                 continue
             processed.add(event.id)
+            branch = _matching_branch(event, state, world)
+            effects, followups, branch_label = _event_payload(event, branch)
             scratch = state.model_copy(deep=True)
-            applied = apply_effects(scratch, world, event.effects)
+            applied = apply_effects(scratch, world, effects)
             failed = [a for a in applied if not a.ok]
             if failed:
                 executions.append(
@@ -517,7 +540,8 @@ def run_triggered_events(
                         name=event.name,
                         status="failed",
                         reason=failed[0].error,
-                        effects=event.effects,
+                        effects=effects,
+                        branch=branch_label,
                     )
                 )
                 forced.update(fid for fid in event.failure_events if fid in known)
@@ -530,16 +554,17 @@ def run_triggered_events(
             state.event_last_turn[event.id] = state.turn
             for item in applied:
                 new_facts.extend(item.facts)
-            forced.update(fid for fid in event.followup_events if fid in known)
+            forced.update(fid for fid in followups if fid in known)
             executions.append(
                 EventExecution(
                     event_id=event.id,
                     name=event.name,
                     status="fired",
-                    effects=event.effects,
+                    effects=effects,
+                    branch=branch_label,
                 )
             )
-        if not fired:
+        if not fired and forced == forced_before:
             break
     return state, executions, new_facts
 
@@ -572,6 +597,31 @@ def validate_event(world: WorldDefinition, event: GameEventDef) -> List[str]:
             errors.append("an event cannot name itself as a follow-up")
         elif followup_id not in known_events:
             errors.append(f"unknown follow-up event '{followup_id}'")
+    for index, branch in enumerate(event.branches):
+        label = branch.label or f"#{index + 1}"
+        for condition in branch.conditions:
+            errors.extend(
+                f"branch '{label}' condition: {msg}"
+                for msg in WorldDefinition._validate_condition(
+                    condition, item_ids, door_ids, location_ids, quest_ids, entity_ids
+                )
+            )
+        for effect in branch.effects:
+            errors.extend(
+                f"branch '{label}' effect: {msg}"
+                for msg in WorldDefinition._validate_effect(
+                    effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                )
+            )
+        for followup_id in branch.followup_events:
+            if followup_id == event.id:
+                errors.append(f"branch '{label}' cannot call its own event")
+            elif followup_id not in known_events:
+                errors.append(f"branch '{label}' follow-up '{followup_id}' is unknown")
+        if not branch.conditions and index != len(event.branches) - 1:
+            errors.append(
+                f"branch '{label}' has no conditions; an unconditional branch must be last"
+            )
     return errors
 
 
@@ -588,6 +638,10 @@ def simulate_event(
     scratch = state
     applied: List[AppliedEffect] = []
     failed: List[AppliedEffect] = []
+    branch = None
+    effects: List[Effect] = list(event.effects)
+    followups: List[str] = list(event.followup_events)
+    branch_label = ""
     if errors:
         status = "invalid"
     elif not event.enabled:
@@ -602,8 +656,10 @@ def simulate_event(
             if not conditions_met:
                 status = "not_applicable"
             else:
+                branch = _matching_branch(event, state, world)
+                effects, followups, branch_label = _event_payload(event, branch)
                 scratch = state.model_copy(deep=True)
-                applied = apply_effects(scratch, world, event.effects)
+                applied = apply_effects(scratch, world, effects)
                 failed = [item for item in applied if not item.ok]
                 status = "failed" if failed else "would_fire"
                 if failed:
@@ -622,7 +678,8 @@ def simulate_event(
         "name": event.name,
         "errors": errors,
         "conditions_met": conditions_met,
-        "followup_events": list(event.followup_events),
+        "branch": branch_label,
+        "followup_events": followups,
         "failure_events": list(event.failure_events),
         "effects_applied": [item.effect.model_dump() for item in applied if item.ok],
         "errors_effect": [item.error for item in failed],

@@ -233,6 +233,20 @@ class QuestDef(_ConfigModel):
     auto_accept: bool = True
 
 
+class EventBranchDef(_ConfigModel):
+    """One conditional outcome of an event.
+
+    Branches are evaluated in order after the event's own conditions hold; the
+    first matching branch appends its effects and follow-ups to the base ones.
+    A branch with no conditions is an unconditional fallback and must be last.
+    """
+
+    label: str = Field(default="", max_length=120)
+    conditions: List[Condition] = Field(default_factory=list)
+    effects: List[Effect] = Field(default_factory=list)
+    followup_events: List[str] = Field(default_factory=list)
+
+
 class GameEventDef(_ConfigModel):
     """A configurable event: validated conditions plus validated effects.
 
@@ -262,6 +276,8 @@ class GameEventDef(_ConfigModel):
     cooldown_turns: int = Field(0, ge=0)
     #: Hard cap on successful fires. None means unlimited (subject to repeat).
     max_fires: Optional[int] = Field(None, ge=1)
+    #: Ordered conditional outcomes; the first match adds to the base effects.
+    branches: List[EventBranchDef] = Field(default_factory=list)
 
 
 class WorldDefinition(BaseModel):
@@ -495,6 +511,39 @@ class WorldDefinition(BaseModel):
                 elif followup_id not in event_ids:
                     errors.append(
                         f"event '{event.id}' follow-up '{followup_id}' is unknown"
+                    )
+            for index, branch in enumerate(event.branches):
+                label = branch.label or f"#{index + 1}"
+                for condition in branch.conditions:
+                    errors.extend(
+                        f"event '{event.id}' branch '{label}' condition: {msg}"
+                        for msg in self._validate_condition(
+                            condition, item_ids, door_ids, location_ids,
+                            quest_ids, entity_ids,
+                        )
+                    )
+                for effect in branch.effects:
+                    errors.extend(
+                        f"event '{event.id}' branch '{label}' effect: {msg}"
+                        for msg in self._validate_effect(
+                            effect, item_ids, door_ids, quest_ids,
+                            entity_ids, location_ids,
+                        )
+                    )
+                for followup_id in branch.followup_events:
+                    if followup_id == event.id:
+                        errors.append(
+                            f"event '{event.id}' branch '{label}' cannot call itself"
+                        )
+                    elif followup_id not in event_ids:
+                        errors.append(
+                            f"event '{event.id}' branch '{label}' follow-up "
+                            f"'{followup_id}' is unknown"
+                        )
+                if not branch.conditions and index != len(event.branches) - 1:
+                    errors.append(
+                        f"event '{event.id}' branch '{label}' has no conditions; "
+                        "an unconditional branch must be last"
                     )
         errors.extend(
             self._validate_custom_actions(item_ids, door_ids, location_ids, quest_ids, entity_ids)
@@ -803,6 +852,8 @@ class EventExecution(BaseModel):
     status: Literal["fired", "failed", "skipped"] = "fired"
     reason: str = ""
     effects: List[Effect] = Field(default_factory=list)
+    #: Label of the branch that matched, empty when no branch was used.
+    branch: str = ""
 
 
 class NarrativeResult(BaseModel):

@@ -125,10 +125,27 @@ def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
 
         focus: list[str] = []
         try:
+            from app.engines.event_engine import condition_holds, entity_location
+            from app.models.game import Condition
+
             with GameStateStore(_game_state_db_path()) as game_store:
                 bound_state = game_store.get_state(campaign_id)
+                bound_world = (
+                    game_store.get_world(bound_state.world_id) if bound_state else None
+                )
             if bound_state is not None and bound_state.location_id:
                 focus.append(bound_state.location_id)
+                if bound_world is not None:
+                    for entity in bound_world.entities:
+                        if entity.kind == "object":
+                            continue
+                        if entity_location(bound_state, bound_world, entity.id) != bound_state.location_id:
+                            continue
+                        if condition_holds(
+                            bound_state, bound_world,
+                            Condition(kind="entity_alive", target=entity.id),
+                        ):
+                            focus.append(entity.id)
         except Exception:  # noqa: BLE001 - focus is advisory
             focus = []
         context = build_context(

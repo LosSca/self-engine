@@ -58,6 +58,9 @@ class KnowledgeEntryCreate(_Strict):
     mode_scope: ModeScope = "both"
     enabled: bool = True
     sort_order: int = 0
+    #: NPC ids this entry is private to. Empty means every scene may load it;
+    #: otherwise it is only injected when one of them is present or targeted.
+    audience_npc_ids: List[str] = Field(default_factory=list)
 
 
 class KnowledgeEntry(KnowledgeEntryCreate):
@@ -76,6 +79,7 @@ class KnowledgeEntryPatch(_Strict):
     mode_scope: Optional[ModeScope] = None
     enabled: Optional[bool] = None
     sort_order: Optional[int] = None
+    audience_npc_ids: Optional[List[str]] = None
 
 
 StoryKind = Literal["main", "branch", "side"]

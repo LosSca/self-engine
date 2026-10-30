@@ -98,7 +98,7 @@ class ScenarioCharacter:
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
 
     _MIGRATIONS = {
         1: [
@@ -169,6 +169,9 @@ class ScenarioStore:
         ],
         8: [
             "ALTER TABLE scenario_play_config ADD COLUMN context_budget_chars INTEGER NOT NULL DEFAULT 0",
+        ],
+        9: [
+            "ALTER TABLE scenario_knowledge ADD COLUMN audience_npc_ids TEXT NOT NULL DEFAULT '[]'",
         ],
         7: [
             """CREATE TABLE IF NOT EXISTS scenario_knowledge (
@@ -678,15 +681,16 @@ class ScenarioStore:
     # ------------------------------------------------------- knowledge entries
     _KNOWLEDGE_COLS = (
         "id, scenario_id, layer, title, content, tags, depth, always_on, "
-        "mode_scope, enabled, sort_order, created_at"
+        "mode_scope, enabled, sort_order, audience_npc_ids, created_at"
     )
 
     @staticmethod
     def _row_to_knowledge(row) -> KnowledgeEntry:
         try:
             tags = json.loads(row[5]) if row[5] else []
+            audience = json.loads(row[11]) if row[11] else []
         except (json.JSONDecodeError, TypeError):
-            tags = []
+            tags, audience = [], []
         return KnowledgeEntry(
             id=row[0],
             scenario_id=row[1],
@@ -699,7 +703,8 @@ class ScenarioStore:
             mode_scope=row[8],
             enabled=bool(row[9]),
             sort_order=row[10],
-            created_at=row[11],
+            audience_npc_ids=audience,
+            created_at=row[12],
         )
 
     def list_knowledge(
@@ -731,7 +736,7 @@ class ScenarioStore:
         with self._lock:
             self._conn.execute(
                 f"INSERT INTO scenario_knowledge ({self._KNOWLEDGE_COLS}) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record.id,
                     record.scenario_id,
@@ -744,6 +749,7 @@ class ScenarioStore:
                     record.mode_scope,
                     1 if record.enabled else 0,
                     record.sort_order,
+                    json.dumps(record.audience_npc_ids),
                     record.created_at,
                 ),
             )
@@ -758,7 +764,7 @@ class ScenarioStore:
             sets: list = []
             values: list = []
             for key, value in fields.items():
-                if key in ("tags",):
+                if key in ("tags", "audience_npc_ids"):
                     value = json.dumps(value)
                 elif key in ("always_on", "enabled"):
                     value = 1 if value else 0

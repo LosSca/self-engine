@@ -96,6 +96,10 @@ def build_context(
         always_present = entry.always_on and entry.layer == "event"
         if not entry.enabled:
             reason = "条目已停用"
+        elif entry.audience_npc_ids and not (
+            {npc.strip().casefold() for npc in entry.audience_npc_ids} & focus_tokens
+        ):
+            reason = "仅限特定 NPC 在场或成为行动目标时载入"
         elif mode == "free" and entry.mode_scope == "storyline" and not always_present:
             reason = "自由模式不载入故事线专属知识"
         elif mode == "storyline" and entry.mode_scope == "free":
@@ -120,7 +124,6 @@ def build_context(
                 depth=entry.depth,
             )
         )
-
     def _focus_hits(entry: KnowledgeEntry) -> int:
         if not focus_tokens:
             return 0

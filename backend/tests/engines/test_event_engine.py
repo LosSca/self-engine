@@ -19,6 +19,7 @@ from app.models.game import (
     Effect,
     EntityDef,
     EntityState,
+    EventBranchDef,
     GameEventDef,
     GameState,
 )
@@ -731,3 +732,109 @@ def test_followup_reference_is_validated():
     assert any("ghost" in error for error in errors)
     event.followup_events = ["caller"]
     assert any("itself" in error for error in validate_event(world, event))
+
+
+# ------------------------------------------------------ conditional branches
+def test_first_matching_branch_adds_effects_and_followups():
+    world, state = _setup()
+    state.flags["mood"] = "angry"
+    world.events = [
+        _event(
+            id="reaction",
+            trigger_action="look",
+            effects=[Effect(kind="set_flag", target="base", value=True)],
+            branches=[
+                EventBranchDef(
+                    label="calm",
+                    conditions=[Condition(kind="flag", target="mood", value="calm")],
+                    effects=[Effect(kind="set_flag", target="calm", value=True)],
+                ),
+                EventBranchDef(
+                    label="angry",
+                    conditions=[Condition(kind="flag", target="mood", value="angry")],
+                    effects=[Effect(kind="set_flag", target="angry", value=True)],
+                    followup_events=["aftermath"],
+                ),
+            ],
+        ),
+        _event(
+            id="aftermath",
+            trigger_action="open",
+            effects=[Effect(kind="set_flag", target="aftermath", value=True)],
+        ),
+    ]
+    state, executions, _ = run_triggered_events(world, state, "look", None, [])
+    fired = {e.event_id: e for e in executions if e.status == "fired"}
+    assert fired["reaction"].branch == "angry"
+    assert state.flags == {"mood": "angry", "base": True, "angry": True, "aftermath": True}
+    assert fired["aftermath"].branch == ""
+
+
+def test_branch_effect_failure_is_atomic_and_runs_failure_followups():
+    world, state = _setup()
+    world.events = [
+        _event(
+            id="risky",
+            trigger_action="look",
+            effects=[Effect(kind="set_flag", target="base", value=True)],
+            branches=[
+                EventBranchDef(
+                    label="bad",
+                    conditions=[],
+                    effects=[Effect(kind="remove_item", target="iron_key", amount=1)],
+                )
+            ],
+            failure_events=["recover"],
+        ),
+        _event(
+            id="recover",
+            trigger_action="open",
+            effects=[Effect(kind="set_flag", target="recovered", value=True)],
+        ),
+    ]
+    state, executions, _ = run_triggered_events(world, state, "look", None, [])
+    by_id = {e.event_id: e for e in executions}
+    assert by_id["risky"].status == "failed"
+    assert by_id["risky"].branch == "bad"
+    assert by_id["recover"].status == "fired"
+    assert state.flags == {"recovered": True}
+    assert "base" not in state.flags
+
+
+def test_unconditional_branch_must_be_last_and_is_validated():
+    world, state = _setup()
+    event = _event(
+        id="branchy",
+        branches=[
+            EventBranchDef(label="fallback"),
+            EventBranchDef(
+                label="later",
+                conditions=[Condition(kind="flag", target="x", value=True)],
+            ),
+        ],
+    )
+    world.events = [event]
+    assert any("must be last" in error for error in validate_event(world, event))
+    event.branches.reverse()
+    assert validate_event(world, event) == []
+
+
+def test_simulation_reports_the_matching_branch():
+    world, state = _setup()
+    state.flags["mood"] = "angry"
+    event = _event(
+        id="reaction",
+        trigger="state_change",
+        effects=[Effect(kind="set_flag", target="base", value=True)],
+        branches=[
+            EventBranchDef(
+                label="angry",
+                conditions=[Condition(kind="flag", target="mood", value="angry")],
+                effects=[Effect(kind="set_flag", target="angry", value=True)],
+            )
+        ],
+    )
+    world.events = [event]
+    sim = simulate_event(world, state, "reaction")
+    assert sim["branch"] == "angry"
+    assert {item["target"] for item in sim["effects_applied"]} == {"base", "angry"}

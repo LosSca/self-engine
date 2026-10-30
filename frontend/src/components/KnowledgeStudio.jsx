@@ -25,6 +25,7 @@ const EMPTY_ENTRY = {
   mode_scope: 'both',
   enabled: true,
   sort_order: 0,
+  audience_npc_ids: [],
 }
 
 const EMPTY_NODE = {
@@ -183,6 +184,15 @@ function KnowledgeEntryForm({ draft, setDraft, layers, onSubmit, onCancel, savin
               update({ tags: splitList(e.target.value) })
             }}
             placeholder="world, npc"
+          />
+        </label>
+        <label>
+          <FieldLabel>限定 NPC（逗号分隔，留空 = 所有场景）</FieldLabel>
+          <input
+            className={inputClass}
+            value={(draft.audience_npc_ids || []).join(', ')}
+            onChange={(e) => update({ audience_npc_ids: splitList(e.target.value) })}
+            placeholder="guard, innkeeper"
           />
         </label>
         <label>
@@ -614,6 +624,11 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                               常驻
                             </span>
                           )}
+                          {(entry.audience_npc_ids || []).length > 0 && (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-cyan-500/40 text-cyan-300">
+                              仅 {entry.audience_npc_ids.join('、')}
+                            </span>
+                          )}
                           {!entry.enabled && (
                             <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-rose-500/40 text-rose-400">
                               已停用
@@ -632,6 +647,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                                 mode_scope: entry.mode_scope,
                                 enabled: entry.enabled,
                                 sort_order: entry.sort_order,
+                                audience_npc_ids: entry.audience_npc_ids || [],
                               })
                               setEditingId(entry.id)
                               setCreating(false)

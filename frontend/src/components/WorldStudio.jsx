@@ -595,6 +595,12 @@ function ObjectiveRows({ value, onChange }) {
 function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
   const value = editor.value
   const update = (patch) => onChange({ ...editor, value: { ...value, ...patch } })
+  const updateBranch = (index, patch) => {
+    const branches = (value.branches || []).map((branch, i) =>
+      i === index ? { ...branch, ...patch } : branch
+    )
+    update({ branches })
+  }
   const kind = editor.kind
 
   return (
@@ -926,6 +932,77 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             <FieldLabel>状态效果（由规则引擎校验后执行）</FieldLabel>
             <EffectRows value={value.effects || []} onChange={(effects) => update({ effects })} world={world} />
           </div>
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <FieldLabel>结果分支（从上到下，首个匹配的分支追加到基础效果）</FieldLabel>
+              <button
+                onClick={() => update({
+                  branches: [
+                    ...(value.branches || []),
+                    { label: '', conditions: [], effects: [], followup_events: [] },
+                  ],
+                })}
+                className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+              >
+                + 添加分支
+              </button>
+            </div>
+            {(value.branches || []).length === 0 && (
+              <p className="text-xs text-white/30">没有分支时只执行基础效果。</p>
+            )}
+            {(value.branches || []).map((branch, index) => (
+              <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3 mb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-mono text-white/30">分支 {index + 1}</span>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => update({
+                      branches: (value.branches || []).filter((_, i) => i !== index),
+                    })}
+                    className={dangerButton}
+                  >
+                    移除
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label>
+                    <FieldLabel>分支标签（调试显示）</FieldLabel>
+                    <input
+                      className={inputClass}
+                      value={branch.label || ''}
+                      onChange={(e) => updateBranch(index, { label: e.target.value })}
+                      placeholder="calm / angry"
+                    />
+                  </label>
+                  <label>
+                    <FieldLabel>分支后续事件（逗号分隔）</FieldLabel>
+                    <input
+                      className={inputClass}
+                      value={(branch.followup_events || []).join(', ')}
+                      onChange={(e) => updateBranch(index, { followup_events: splitList(e.target.value) })}
+                      placeholder="aftermath"
+                    />
+                  </label>
+                </div>
+                <div>
+                  <FieldLabel>分支条件（全部满足；留空 = 兜底，必须放在最后）</FieldLabel>
+                  <ConditionRows
+                    value={branch.conditions || []}
+                    onChange={(conditions) => updateBranch(index, { conditions })}
+                    world={world}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>分支效果（追加到基础效果）</FieldLabel>
+                  <EffectRows
+                    value={branch.effects || []}
+                    onChange={(effects) => updateBranch(index, { effects })}
+                    world={world}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
         </>
       )}
 
@@ -1117,6 +1194,7 @@ const EMPTY_FOR = {
     failure_events: [],
     cooldown_turns: 0,
     max_fires: null,
+    branches: [],
   },
   quest: {
     id: '',
@@ -1559,6 +1637,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 {(item.failure_events || []).length > 0 && ' · 失败→' + item.failure_events.join(', ')}
                 {item.cooldown_turns ? ` · 冷却 ${item.cooldown_turns} 回合` : ''}
                 {item.max_fires ? ` · 至多 ${item.max_fires} 次` : ''}
+                {(item.branches || []).length > 0 ? ` · ${item.branches.length} 个结果分支` : ''}
               </div>
             )}
           </div>

@@ -262,3 +262,23 @@ def test_budget_truncates_and_reports_the_overflow():
     assert "预算" in context.stats.excluded[0].reason
     unlimited = knowledge_service.build_context(entries, mode="free", budget_chars=0)
     assert [b.entry_id for b in unlimited.blocks] == ["first", "second"]
+
+
+def test_audience_entries_need_their_npc_in_focus():
+    entries = [
+        _entry("public", layer="global"),
+        _entry("secret", layer="character", title="Guard secret"),
+    ]
+    entries[1] = entries[1].model_copy(update={"audience_npc_ids": ["guard"], "tags": ["guard"]})
+
+    hidden = knowledge_service.build_context(entries, mode="free")
+    assert [b.entry_id for b in hidden.blocks] == ["public"]
+    assert hidden.stats.excluded[0].entry_id == "secret"
+    assert "NPC" in hidden.stats.excluded[0].reason
+
+    shown = knowledge_service.build_context(entries, mode="free", focus=["guard"])
+    assert [b.entry_id for b in shown.blocks] == ["secret", "public"]
+    assert not shown.stats.excluded
+
+    elsewhere = knowledge_service.build_context(entries, mode="free", focus=["tavern"])
+    assert [b.entry_id for b in elsewhere.blocks] == ["public"]
