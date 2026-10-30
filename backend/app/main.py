@@ -20,7 +20,7 @@ from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
 from app.engines.llm_router import LLMProvider
 
-app = FastAPI(title="Project Lunar", version="0.1.0")
+app = FastAPI(title="Project Lunar", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
