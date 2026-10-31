@@ -257,6 +257,11 @@ class RepairRequest(BaseModel):
     dry_run: bool = True
 
 
+class ImportCampaignRequest(BaseModel):
+    state: Dict[str, Any]
+    reset: bool = False
+
+
 def _debug_tools_enabled() -> bool:
     """Whether state-mutating debug endpoints (rollback, repair) may run.
 
@@ -565,6 +570,60 @@ def get_campaign_lane(campaign_id: str):
         "world_id": state.world_id,
         "version": state.version,
     }
+
+
+@router.get("/campaigns/{campaign_id}/export", response_model=Dict[str, Any])
+def export_campaign(campaign_id: str):
+    """Download the authoritative snapshot and its domain events."""
+    store = _get_store()
+    try:
+        state = store.get_state(campaign_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail=f"campaign '{campaign_id}' is not bound")
+        return {
+            "format": "lunar-campaign",
+            "format_version": 1,
+            "exported_at": datetime.utcnow().isoformat(),
+            "state": state.model_dump(mode="json"),
+            "events": store.list_events(campaign_id, limit=100000),
+        }
+    finally:
+        store.close()
+
+
+@router.post("/campaigns/{campaign_id}/import", response_model=GameState)
+def import_campaign(campaign_id: str, body: ImportCampaignRequest):
+    """Restore a previously exported snapshot into a campaign.
+
+    Import is destructive: an existing campaign needs `reset=true`. The world
+    must still exist, and the campaign id is always taken from the URL, so a
+    file cannot overwrite a different campaign by naming it inside the payload.
+    """
+    store = _get_store()
+    try:
+        existing = store.get_state(campaign_id)
+        if existing is not None and not body.reset:
+            raise HTTPException(
+                status_code=409,
+                detail="campaign already exists; pass reset=true to overwrite it",
+            )
+        raw = dict(body.state or {})
+        raw["campaign_id"] = campaign_id
+        try:
+            state = GameState.model_validate(raw)
+        except Exception as exc:  # noqa: BLE001 - authored input
+            raise HTTPException(status_code=400, detail=f"invalid campaign state: {exc}")
+        if state.version < 0:
+            raise HTTPException(status_code=400, detail="state version cannot be negative")
+        if store.get_world(state.world_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown world '{state.world_id}'",
+            )
+        store.bind_campaign(state)
+        return state
+    finally:
+        store.close()
 
 
 @router.get("/campaigns/{campaign_id}/state", response_model=GameState)
@@ -1076,6 +1135,9 @@ def list_event_executions(
                 "status": outcome,
                 "reason": payload.get("reason", ""),
                 "effects": payload.get("effects", []),
+                "branch": payload.get("branch", ""),
+                "parent_event_id": payload.get("parent_event_id", ""),
+                "depth": payload.get("depth", 0),
                 "state_version": row["state_version"],
                 "request_id": row["request_id"],
                 "created_at": row["created_at"],

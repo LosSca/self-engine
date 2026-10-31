@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { Map, X, RefreshCw, Search } from 'lucide-react'
+import { Map as MapIcon, X, RefreshCw, Search } from 'lucide-react'
 import { fetchWorld, fetchWorldGraph, searchWorldGraph } from '../api'
 
 const NODE_COLORS = {
@@ -35,12 +35,21 @@ const TYPE_POSITIONS = {
   EVENT: { x: -60, y: 80 },
 }
 
+function presentEntitiesFrom(world, engineState) {
+  return (world?.entities || []).filter((entity) => {
+    const runtime = engineState?.entities?.[entity.id]
+    const locationId = runtime?.location_id || entity.location_id
+    return locationId === engineState?.location_id && runtime?.alive !== false
+  })
+}
+
 export default function WorldMapModal({ open, onClose, campaignId, engineState, onEngineAction, busy = false }) {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] })
   const [world, setWorld] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [pending, setPending] = useState(false)
+  const [remoteTarget, setRemoteTarget] = useState('')
   const [hoverNode, setHoverNode] = useState(null)
   const [hoverLink, setHoverLink] = useState(null)
   const [selectedNode, setSelectedNode] = useState(null)
@@ -89,18 +98,53 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
   const exits = (currentLocation?.exits || [])
     .map((exitDef) => ({ exit: exitDef, location: world?.locations?.find((item) => item.id === exitDef.target_id) }))
     .filter((entry) => entry.location)
+  const shopOffers = []
+  for (const entity of presentEntitiesFrom(world, engineState)) {
+    if (!entity.shop_items || entity.shop_items.length === 0) continue
+    for (const itemId of entity.shop_items) {
+      const item = (world?.items || []).find((entry) => entry.id === itemId)
+      if (item) shopOffers.push({ merchant: entity, item })
+    }
+  }
+
   const presentEntities = (world?.entities || []).filter((entity) => {
     const runtime = engineState?.entities?.[entity.id]
     const locationId = runtime?.location_id || entity.location_id
     return locationId === engineState?.location_id && runtime?.alive !== false
   })
 
-  const runAction = async (action, targetId, label) => {
+  const routeTo = (destinationId) => {
+    if (!world || !engineState?.location_id || !destinationId) return null
+    if (destinationId === engineState.location_id) return []
+    const byId = new Map((world.locations || []).map((item) => [item.id, item]))
+    const queue = [[engineState.location_id]]
+    const seen = new Set([engineState.location_id])
+    while (queue.length > 0) {
+      const path = queue.shift()
+      const current = byId.get(path[path.length - 1])
+      if (!current) continue
+      for (const exit of current.exits || []) {
+        if (seen.has(exit.target_id)) continue
+        const nextPath = [...path, exit.target_id]
+        if (exit.target_id === destinationId) return nextPath.slice(1)
+        seen.add(exit.target_id)
+        queue.push(nextPath)
+      }
+    }
+    return null
+  }
+
+  const remoteRoutes = (world?.locations || [])
+    .filter((location) => location.id !== engineState?.location_id)
+    .map((location) => ({ location, path: routeTo(location.id) }))
+    .filter((entry) => entry.path && entry.path.length > 1)
+
+  const runAction = async (action, targetId, label, params) => {
     if (!onEngineAction || busy || pending) return
     setPending(true)
     setError('')
     try {
-      const result = await onEngineAction({ action, targetId, label })
+      const result = await onEngineAction({ action, targetId, label, params })
       if (result && !result.ok) setError(result.message || '行动被规则拒绝。')
     } catch (err) {
       setError(err.message || '行动请求失败')
@@ -325,7 +369,7 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-none">
           <div className="flex items-center gap-3">
-            <Map size={16} className="text-emerald-400" />
+            <MapIcon size={16} className="text-emerald-400" />
             <h2 className="text-white font-bold text-sm uppercase tracking-widest">世界地图</h2>
             {graphData.nodes.length > 0 && (
               <span className="text-white/20 text-xs ml-2">
@@ -384,6 +428,51 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
                 </button>
               ))}
             </div>
+            {remoteRoutes.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-white/40 text-xs">沿路线前往</span>
+                <select
+                  className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white"
+                  value={remoteTarget}
+                  onChange={(e) => setRemoteTarget(e.target.value)}
+                >
+                  <option value="">选择目的地</option>
+                  {remoteRoutes.map(({ location, path }) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}{location.region ? `（${location.region}）` : ''} · {path.length} 段
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!remoteTarget || busy || pending}
+                  onClick={() => {
+                    const route = remoteRoutes.find((entry) => entry.location.id === remoteTarget)
+                    if (!route) return
+                    runAction('move', remoteTarget, `前往 ${route.location.name}`, { path: route.path })
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-[11px] text-cyan-200 bg-cyan-500/15 border border-cyan-400/30 hover:bg-cyan-500/25 disabled:opacity-40"
+                >
+                  沿路线前往
+                </button>
+              </div>
+            )}
+            {shopOffers.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-white/40 text-xs">商店</span>
+                {shopOffers.map(({ merchant, item }) => (
+                  <button
+                    key={merchant.id + ':' + item.id}
+                    type="button"
+                    disabled={busy || pending}
+                    onClick={() => runAction('buy', item.id, `购买 ${item.name}（${item.price}）`)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] text-amber-200 bg-amber-500/15 border border-amber-400/30 hover:bg-amber-500/25 disabled:opacity-40"
+                  >
+                    {item.name} · {item.price}
+                  </button>
+                ))}
+              </div>
+            )}
             {presentEntities.length > 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-white/40 text-xs">在场</span>
@@ -446,7 +535,7 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
           {graphData.nodes.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
-                <Map size={32} className="text-white/20 mx-auto mb-3" />
+                <MapIcon size={32} className="text-white/20 mx-auto mb-3" />
                 <p className="text-white/20 text-sm font-light">
                   {loading
                     ? '正在绘制世界拓扑……'

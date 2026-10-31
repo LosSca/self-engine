@@ -170,6 +170,61 @@ register_action(
 )
 register_action(
     ActionSpec(
+        name="equip",
+        label="装备",
+        handler="_equip",
+        target="required",
+        description="Equip an item you carry into its authored slot.",
+        verbs=("装备", "穿上", "穿戴", "equip", "wield", "wear"),
+        verb_priority=25,
+    )
+)
+register_action(
+    ActionSpec(
+        name="unequip",
+        label="卸下",
+        handler="_unequip",
+        target="optional",
+        description="Remove an equipped item by slot or item id.",
+        verbs=("卸下", "脱下", "unequip", "remove armor", "take off"),
+        verb_priority=26,
+    )
+)
+register_action(
+    ActionSpec(
+        name="buy",
+        label="购买",
+        handler="_buy",
+        target="required",
+        description="Buy an item from a merchant here.",
+        verbs=("购买", "买", "buy", "purchase"),
+        verb_priority=27,
+    )
+)
+register_action(
+    ActionSpec(
+        name="sell",
+        label="出售",
+        handler="_sell",
+        target="required",
+        description="Sell a carried item to a merchant here.",
+        verbs=("出售", "卖掉", "卖", "sell"),
+        verb_priority=28,
+    )
+)
+register_action(
+    ActionSpec(
+        name="choose",
+        label="选择",
+        handler="_choose",
+        target="required",
+        description="Resolve the pending authored choice with one of its option ids.",
+        verbs=(),
+        verb_priority=210,
+    )
+)
+register_action(
+    ActionSpec(
         name="custom",
         label="自定义行动",
         handler="_custom",
@@ -184,13 +239,23 @@ register_action(
 )
 register_action(
     ActionSpec(
+        name="investigate",
+        label="调查",
+        handler="_investigate",
+        target="optional",
+        description="Inspect one entity, item or door here, or the room when no target is named.",
+        verbs=("调查", "检查", "查看", "端详", "inspect", "examine", "investigate"),
+        verb_priority=85,
+    )
+)
+register_action(
+    ActionSpec(
         name="look",
         label="观察",
         handler="_look",
         target="none",
         description="Describe the current location, its items, doors and exits.",
-        verbs=("观察", "环顾", "查看", "调查", "检查", "看看", "看", "look", "observe",
-               "examine", "inspect"),
+        verbs=("观察", "环顾", "看看", "看", "look", "observe", "survey"),
         verb_priority=90,
     )
 )

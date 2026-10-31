@@ -5,7 +5,6 @@ import { useGameStore } from '../store'
 import {
   streamAction,
   fetchEngineAvailability,
-  fetchEngineState,
   submitTextAction,
   submitAction,
   fetchJournal,
@@ -369,7 +368,9 @@ export default function GameCanvas() {
       try {
         const entries = await fetchJournal(activeCampaignId)
         setJournal(entries)
-      } catch {}
+      } catch {
+        /* journal is optional */
+      }
     }
     setJournalOpen(true)
   }
@@ -379,7 +380,9 @@ export default function GameCanvas() {
       try {
         const entries = await fetchJournal(activeCampaignId)
         setJournal(entries)
-      } catch {}
+      } catch {
+        /* journal is optional */
+      }
     }
   }
 
@@ -431,13 +434,13 @@ export default function GameCanvas() {
     }
   }
 
-  const handleStructuredAction = async ({ action, targetId, label }) => {
+  const handleStructuredAction = async ({ action, targetId, label, params }) => {
     if (isStreaming) return null
     setSuggestions([])
     appendMessage({ role: 'user', content: label || `${action} ${targetId || ''}`.trim() })
     setStreaming(true)
     try {
-      const result = await submitAction(activeCampaignId, { action, targetId })
+      const result = await submitAction(activeCampaignId, { action, targetId, params })
       applyEngineResult(result)
       return result
     } catch (err) {
@@ -799,6 +802,32 @@ export default function GameCanvas() {
 
         {/* Input Area */}
         <div className="flex-none bg-black/80 backdrop-blur-2xl border-t border-white/5 relative z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+          {engineLane.bound && engineLane.state?.pending_choice && (
+            <div className="max-w-4xl mx-auto w-full px-4 md:px-6 pt-3">
+              <div className="rounded-2xl border border-amber-400/30 bg-amber-400/[0.06] p-4 flex flex-col gap-3">
+                <p className="text-sm text-amber-100">
+                  {engineLane.state.pending_choice.prompt || '请选择：'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(engineLane.state.pending_choice.options || []).map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      disabled={isStreaming}
+                      onClick={() => handleStructuredAction({
+                        action: 'choose',
+                        targetId: option.id,
+                        label: option.label,
+                      })}
+                      className="px-3 py-1.5 rounded-xl text-xs text-amber-100 bg-amber-500/15 border border-amber-400/30 hover:bg-amber-500/25 disabled:opacity-40"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           <div className="max-w-4xl mx-auto w-full px-4 md:px-6 pt-3">
             <SuggestionList
               suggestions={suggestions}

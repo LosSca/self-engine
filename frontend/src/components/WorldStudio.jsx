@@ -31,6 +31,8 @@ import {
   fetchCampaignStateDiff,
   rollbackCampaign,
   fetchActionDetail,
+  exportCampaign,
+  importCampaign,
 } from '../api'
 import WorldMapGraph from './WorldMapGraph'
 
@@ -43,6 +45,10 @@ const CONDITION_KINDS = [
   ['quest_status', '任务状态'],
   ['entity_at', '实体位于地点'],
   ['entity_alive', '实体存活'],
+  ['entity_item_count', '实体持有物品数'],
+  ['entity_relation', '实体关系'],
+  ['entity_alert', '实体警戒'],
+  ['skill', '角色技能'],
   ['combatant_hp', '实体生命值'],
 ]
 
@@ -67,6 +73,11 @@ const EFFECT_KINDS = [
   ['quest_complete', '完成任务'],
   ['combat_hp', '设置实体生命值'],
   ['player_damage', '玩家受伤'],
+  ['give_entity', '把物品放入实体'],
+  ['take_entity', '从实体取出物品'],
+  ['adjust_relation', '调整实体关系'],
+  ['adjust_alert', '调整实体警戒'],
+  ['skill_change', '改变角色技能'],
   ['emit', '发出信号'],
 ]
 
@@ -114,14 +125,14 @@ const ghostButton =
   'px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white'
 const dangerButton = 'text-[10px] text-white/30 hover:text-rose-400 tracking-[0.15em] uppercase'
 
-export function splitList(text) {
+function splitList(text) {
   return String(text)
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean)
 }
 
-export function parseValue(text) {
+function parseValue(text) {
   const trimmed = String(text).trim()
   if (trimmed === 'true') return true
   if (trimmed === 'false') return false
@@ -129,7 +140,7 @@ export function parseValue(text) {
   return trimmed
 }
 
-export function showValue(value) {
+function showValue(value) {
   if (value === null || value === undefined) return ''
   if (typeof value === 'string') return value
   return JSON.stringify(value)
@@ -373,6 +384,10 @@ const CONDITION_TARGETS = {
   quest_status: { source: 'quests', placeholder: '任务 ID', value: '任务状态 inactive/active/completed/failed' },
   entity_at: { source: 'entities', placeholder: '实体 ID', value: '地点 ID' },
   entity_alive: { source: 'entities', placeholder: '实体 ID' },
+  entity_item_count: { source: 'entities', placeholder: '实体 ID', value: '物品 ID', count: true },
+  entity_relation: { source: 'entities', placeholder: '实体 ID', value: '其他角色 ID（player）', count: true },
+  entity_alert: { source: 'entities', placeholder: '实体 ID', count: true },
+  skill: { source: 'none', placeholder: '技能名', count: true },
   combatant_hp: { source: 'entities', placeholder: '实体 ID', value: '生命值下限' },
 }
 
@@ -437,6 +452,15 @@ function ConditionRows({ value, onChange, world }) {
             onChange={(e) => update(index, { value: parseValue(e.target.value) })}
             placeholder={needsValue ? meta.value || '值' : 'true / 1 / active'}
           />
+          {meta.count && (
+            <input
+              className={tinyInput + ' w-20'}
+              type="number"
+              value={row.count === undefined || row.count === null ? 1 : row.count}
+              onChange={(e) => update(index, { count: Number(e.target.value) })}
+              placeholder="阈值"
+            />
+          )}
         </RowShell>
         )
       })}
@@ -463,6 +487,11 @@ const EFFECT_TARGETS = {
   quest_complete: { source: 'quests', placeholder: '任务 ID' },
   combat_hp: { source: 'entities', placeholder: '实体 ID', value: { hint: '剩余生命值' } },
   player_damage: { source: 'player', placeholder: 'player' },
+  give_entity: { source: 'entities', placeholder: '实体 ID', value: { source: 'items', hint: '物品 ID' } },
+  take_entity: { source: 'entities', placeholder: '实体 ID', value: { source: 'items', hint: '物品 ID' } },
+  adjust_relation: { source: 'entities', placeholder: '实体 ID', value: { hint: '其他角色 ID（player）' } },
+  adjust_alert: { source: 'entities', placeholder: '实体 ID' },
+  skill_change: { source: 'none', placeholder: '技能名' },
   emit: { source: 'none', placeholder: '信号名' },
 }
 
@@ -750,6 +779,45 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             <FieldLabel>使用效果（留空则沿用内置行为：作为钥匙开门）</FieldLabel>
             <EffectRows value={value.use_effects || []} onChange={(use_effects) => update({ use_effects })} world={world} />
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <label>
+              <FieldLabel>装备槽（留空 = 不可装备）</FieldLabel>
+              <select className={inputClass} value={value.slot || ''} onChange={(e) => update({ slot: e.target.value })}>
+                <option value="">不可装备</option>
+                <option value="weapon">武器</option>
+                <option value="armor">护甲</option>
+                <option value="accessory">饰品</option>
+              </select>
+            </label>
+            <label>
+              <FieldLabel>攻击加成</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                value={(value.bonus || {}).attack || 0}
+                onChange={(e) => update({ bonus: { ...(value.bonus || {}), attack: Number(e.target.value) } })}
+              />
+            </label>
+            <label>
+              <FieldLabel>防御加成</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                value={(value.bonus || {}).defense || 0}
+                onChange={(e) => update({ bonus: { ...(value.bonus || {}), defense: Number(e.target.value) } })}
+              />
+            </label>
+            <label>
+              <FieldLabel>交易价值（供自定义买卖使用）</FieldLabel>
+              <input
+                className={inputClass}
+                type="number"
+                min="0"
+                value={value.price || 0}
+                onChange={(e) => update({ price: Number(e.target.value) })}
+              />
+            </label>
+          </div>
           <label className="flex items-center gap-2 text-xs text-white/60">
             <input type="checkbox" checked={Boolean(value.consumable)} onChange={(e) => update({ consumable: e.target.checked })} />
             使用后消耗一个
@@ -848,6 +916,15 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             </label>
           </div>
           <label>
+            <FieldLabel>阵营（自由文本，用于叙事与条件）</FieldLabel>
+            <input
+              className={inputClass}
+              value={value.faction || ''}
+              onChange={(e) => update({ faction: e.target.value })}
+              placeholder="village_guard / bandits"
+            />
+          </label>
+          <label>
             <FieldLabel>台词（每行一句；只进入叙事上下文，不改变状态）</FieldLabel>
             <textarea
               className={inputClass + ' min-h-[80px]'}
@@ -856,6 +933,15 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             />
           </label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label>
+              <FieldLabel>商店商品（item id，逗号分隔；留空 = 非商人）</FieldLabel>
+              <input
+                className={inputClass}
+                value={(value.shop_items || []).join(', ')}
+                onChange={(e) => update({ shop_items: splitList(e.target.value) })}
+                placeholder="potion, sword"
+              />
+            </label>
             <label>
               <FieldLabel>携带 / 容器物品（item id，逗号分隔；重复表示数量）</FieldLabel>
               <input
@@ -1051,6 +1137,78 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               </div>
             ))}
           </div>
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <FieldLabel>触发时提供的玩家选项（至少两个；留空表示无选择）</FieldLabel>
+              <button
+                onClick={() => update({
+                  choices: [
+                    ...(value.choices || []),
+                    { id: '', label: '', effects: [] },
+                  ],
+                })}
+                className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+              >
+                + 添加选项
+              </button>
+            </div>
+            {(value.choices || []).map((option, index) => (
+              <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3 mb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-mono text-white/30">选项 {index + 1}</span>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => update({
+                      choices: (value.choices || []).filter((_, i) => i !== index),
+                    })}
+                    className={dangerButton}
+                  >
+                    移除
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label>
+                    <FieldLabel>选项 ID</FieldLabel>
+                    <input
+                      className={inputClass}
+                      value={option.id || ''}
+                      onChange={(e) => update({
+                        choices: (value.choices || []).map((row, i) =>
+                          i === index ? { ...row, id: e.target.value } : row
+                        ),
+                      })}
+                      placeholder="accept"
+                    />
+                  </label>
+                  <label>
+                    <FieldLabel>选项文本</FieldLabel>
+                    <input
+                      className={inputClass}
+                      value={option.label || ''}
+                      onChange={(e) => update({
+                        choices: (value.choices || []).map((row, i) =>
+                          i === index ? { ...row, label: e.target.value } : row
+                        ),
+                      })}
+                      placeholder="接受委托"
+                    />
+                  </label>
+                </div>
+                <div>
+                  <FieldLabel>选项效果</FieldLabel>
+                  <EffectRows
+                    value={option.effects || []}
+                    onChange={(effects) => update({
+                      choices: (value.choices || []).map((row, i) =>
+                        i === index ? { ...row, effects } : row
+                      ),
+                    })}
+                    world={world}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
         </>
       )}
 
@@ -1213,7 +1371,7 @@ const DELETERS = {
 
 const EMPTY_FOR = {
   location: { id: '', name: '', description: '', tags: [], region: '', x: null, y: null, exits: [], door_ids: [], item_ids: [], npc_ids: [] },
-  item: { id: '', name: '', description: '', tags: [], stackable: true, pickup_requires: [], use_effects: [], consumable: false },
+  item: { id: '', name: '', description: '', tags: [], stackable: true, pickup_requires: [], use_effects: [], consumable: false, slot: '', bonus: {}, price: 0 },
   door: { id: '', name: '', location_id: '', locked: true, opened: false, key_item_id: null, consumes_key: false },
   entity: {
     id: '',
@@ -1226,6 +1384,8 @@ const EMPTY_FOR = {
     hostile: false,
     attributes: {},
     items: [],
+    shop_items: [],
+    faction: '',
   },
   event: {
     id: '',
@@ -1244,6 +1404,7 @@ const EMPTY_FOR = {
     cooldown_turns: 0,
     max_fires: null,
     branches: [],
+    choices: [],
   },
   quest: {
     id: '',
@@ -1304,6 +1465,8 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [debugBusy, setDebugBusy] = useState(false)
   const [debugNonce, setDebugNonce] = useState(0)
   const [binding, setBinding] = useState(false)
+  const [archiveBusy, setArchiveBusy] = useState(false)
+  const [archiveMessage, setArchiveMessage] = useState('')
   const [builtinActions, setBuiltinActions] = useState([])
 
   const report = useCallback((err) => {
@@ -1675,6 +1838,8 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               <div className="text-[10px] font-mono text-white/30 mt-2">
                 地点 {item.location_id || '—'} · {item.kind}
                 {(item.items || []).length > 0 && ` · 携带 ${item.items.length} 件物品`}
+                {(item.shop_items || []).length > 0 && ` · 商店 ${item.shop_items.length} 件`}
+                {item.faction ? ` · 阵营 ${item.faction}` : ''}
                 {item.hostile ? ' · 敌对' : ''}
               </div>
             )}
@@ -2104,6 +2269,119 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               {campaignId && debug.state && (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-3">
+                    <span className="text-sm font-bold text-white">角色技能与实体关系</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-3 text-xs text-white/60">
+                    <Badge tone="accent">货币 {debug.state.currency ?? 0}</Badge>
+                    <Badge>经验 {debug.state.xp ?? 0}</Badge>
+                    <Badge>等级 {debug.state.level ?? 1}</Badge>
+                    {Object.entries(debug.state.equipment || {}).map(([slot, item]) => (
+                      <Badge key={slot}>{slot}: {item}</Badge>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-3 text-xs text-white/60">
+                    <span className="text-white/40">技能</span>
+                    {Object.keys(debug.state.skills || {}).length === 0 && (
+                      <span className="text-white/30">尚未获得技能</span>
+                    )}
+                    {Object.entries(debug.state.skills || {}).map(([name, value]) => (
+                      <Badge key={name}>{name} {value}</Badge>
+                    ))}
+                  </div>
+                  {Object.keys(debug.state.entities || {}).length === 0 ? (
+                    <p className="text-xs text-white/30">尚无已实体化的实体状态。</p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {Object.values(debug.state.entities).map((entity) => (
+                        <div key={entity.entity_id} className="flex flex-wrap items-center gap-2 text-xs text-white/60">
+                          <span className="font-mono text-white/70">{entity.entity_id}</span>
+                          <Badge>地点 {entity.location_id || '—'}</Badge>
+                          <Badge tone={entity.alert > 0 ? 'warn' : 'muted'}>警戒 {entity.alert || 0}</Badge>
+                          {Object.entries(entity.relations || {}).map(([other, value]) => (
+                            <Badge key={other} tone={value < 0 ? 'bad' : 'good'}>对 {other} {value > 0 ? '+' : ''}{value}</Badge>
+                          ))}
+                          {Object.entries(entity.inventory || {}).map(([item, qty]) => (
+                            <Badge key={item}>持有 {item} ×{qty}</Badge>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {campaignId && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center gap-3 mb-2">
+                    <span className="text-sm font-bold text-white">存档导入导出</span>
+                    <Badge>权威状态 + 领域事件</Badge>
+                  </div>
+                  <p className="text-xs text-white/40 mb-3">
+                    导出用于备份或迁移；导入会覆盖当前战役，需显式确认。
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      disabled={archiveBusy}
+                      className={ghostButton}
+                      onClick={async () => {
+                        setArchiveBusy(true)
+                        setArchiveMessage('')
+                        try {
+                          const payload = await exportCampaign(campaignId)
+                          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+                          const url = URL.createObjectURL(blob)
+                          const link = document.createElement('a')
+                          link.href = url
+                          link.download = `campaign-${campaignId}.json`
+                          link.click()
+                          URL.revokeObjectURL(url)
+                          setArchiveMessage('已导出')
+                        } catch (err) {
+                          report(err)
+                        } finally {
+                          setArchiveBusy(false)
+                        }
+                      }}
+                    >
+                      导出存档
+                    </button>
+                    <label className={ghostButton + ' cursor-pointer'}>
+                      导入存档
+                      <input
+                        type="file"
+                        accept="application/json"
+                        className="hidden"
+                        disabled={archiveBusy}
+                        onChange={async (event) => {
+                          const file = event.target.files && event.target.files[0]
+                          event.target.value = ''
+                          if (!file) return
+                          if (!window.confirm('导入会覆盖当前战役，继续？')) return
+                          setArchiveBusy(true)
+                          setArchiveMessage('')
+                          try {
+                            const text = await file.text()
+                            const parsed = JSON.parse(text)
+                            const state = parsed.state || parsed
+                            await importCampaign(campaignId, state, true)
+                            setArchiveMessage('已导入，请刷新状态')
+                            setDebugNonce((value) => value + 1)
+                          } catch (err) {
+                            report(err)
+                          } finally {
+                            setArchiveBusy(false)
+                          }
+                        }}
+                      />
+                    </label>
+                    {archiveMessage && <span className="text-xs text-emerald-300">{archiveMessage}</span>}
+                  </div>
+                </div>
+              )}
+
+              {campaignId && debug.state && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
                     <span className="text-sm font-bold text-white">剧情进度与阻塞原因</span>
                     <button onClick={() => setDebugNonce((value) => value + 1)} disabled={debugBusy} className={ghostButton}>
                       {debugBusy ? '读取中…' : '刷新进度'}
@@ -2207,8 +2485,12 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                       <div
                         key={index}
                         className="rounded-xl border border-white/10 px-3 py-2 text-[11px] text-white/60"
+                        style={{ marginLeft: Math.min(Number(execution.depth) || 0, 6) * 18 }}
                       >
                         <div className="flex flex-wrap items-center gap-2">
+                          {(execution.depth || 0) > 0 && (
+                            <span className="font-mono text-white/30">↳ {execution.parent_event_id || 'parent'}</span>
+                          )}
                           <Badge
                             tone={
                               execution.status === 'fired'
@@ -2221,6 +2503,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                             {execution.status}
                           </Badge>
                           <span className="font-bold text-white/80">{execution.name || execution.event_id}</span>
+                          {execution.branch && <Badge>{execution.branch}</Badge>}
                           <span className="font-mono text-white/30">v{execution.state_version}</span>
                         </div>
                         {execution.reason && <div className="text-rose-300/80 mt-1">{execution.reason}</div>}

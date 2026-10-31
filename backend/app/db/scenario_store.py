@@ -98,7 +98,7 @@ class ScenarioCharacter:
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 9
+    SCHEMA_VERSION = 11
 
     _MIGRATIONS = {
         1: [
@@ -172,6 +172,14 @@ class ScenarioStore:
         ],
         9: [
             "ALTER TABLE scenario_knowledge ADD COLUMN audience_npc_ids TEXT NOT NULL DEFAULT '[]'",
+        ],
+        10: [
+            "ALTER TABLE scenario_play_config ADD COLUMN intent_preset_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE scenario_play_config ADD COLUMN narrator_prompt TEXT NOT NULL DEFAULT ''",
+        ],
+        11: [
+            "ALTER TABLE scenario_play_config ADD COLUMN dialogue_preset_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE scenario_play_config ADD COLUMN summary_preset_id TEXT NOT NULL DEFAULT ''",
         ],
         7: [
             """CREATE TABLE IF NOT EXISTS scenario_knowledge (
@@ -791,7 +799,8 @@ class ScenarioStore:
     def get_play_config(self, scenario_id: str) -> PlayConfig:
         row = self._conn.execute(
             "SELECT scenario_id, mode, storyline_json, max_depth, "
-            "context_budget_chars, model_preset_id, updated_at "
+            "context_budget_chars, model_preset_id, intent_preset_id, narrator_prompt, "
+            "dialogue_preset_id, summary_preset_id, updated_at "
             "FROM scenario_play_config WHERE scenario_id=?",
             (scenario_id,),
         ).fetchone()
@@ -808,7 +817,11 @@ class ScenarioStore:
             max_depth=row[3] if row[3] is not None else 9,
             context_budget_chars=row[4] if row[4] is not None else 0,
             model_preset_id=row[5] or "",
-            updated_at=row[6] or "",
+            intent_preset_id=row[6] or "",
+            narrator_prompt=row[7] or "",
+            dialogue_preset_id=row[8] or "",
+            summary_preset_id=row[9] or "",
+            updated_at=row[10] or "",
         )
 
     def set_play_config(self, scenario_id: str, config: PlayConfig) -> PlayConfig:
@@ -817,13 +830,18 @@ class ScenarioStore:
             self._conn.execute(
                 "INSERT INTO scenario_play_config "
                 "(scenario_id, mode, storyline_json, max_depth, "
-                "context_budget_chars, model_preset_id, updated_at) "
-                "VALUES (?,?,?,?,?,?,?) "
+                "context_budget_chars, model_preset_id, intent_preset_id, "
+                "narrator_prompt, dialogue_preset_id, summary_preset_id, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(scenario_id) DO UPDATE SET mode=excluded.mode, "
                 "storyline_json=excluded.storyline_json, "
                 "max_depth=excluded.max_depth, "
                 "context_budget_chars=excluded.context_budget_chars, "
                 "model_preset_id=excluded.model_preset_id, "
+                "intent_preset_id=excluded.intent_preset_id, "
+                "narrator_prompt=excluded.narrator_prompt, "
+                "dialogue_preset_id=excluded.dialogue_preset_id, "
+                "summary_preset_id=excluded.summary_preset_id, "
                 "updated_at=excluded.updated_at",
                 (
                     scenario_id,
@@ -832,6 +850,10 @@ class ScenarioStore:
                     config.max_depth,
                     config.context_budget_chars,
                     config.model_preset_id,
+                    config.intent_preset_id,
+                    config.narrator_prompt,
+                    config.dialogue_preset_id,
+                    config.summary_preset_id,
                     now,
                 ),
             )

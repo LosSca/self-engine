@@ -129,7 +129,7 @@ export function streamAction({
           try {
             const entry = JSON.parse(control.slice(9))
             onJournal?.(entry)
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[MODE]')) {
@@ -140,33 +140,33 @@ export function streamAction({
           try {
             const crystal = JSON.parse(control.slice(9))
             onCrystal?.(crystal)
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[PLOT_AUTO]')) {
           try {
             const plot = JSON.parse(control.slice(11))
             onPlotAuto?.(plot)
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[INVENTORY]')) {
           try {
             const item = JSON.parse(control.slice(11))
             onInventory?.(item)
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[IMAGE]')) {
           try {
             onImage?.(JSON.parse(control.slice(7)))
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[SUGGESTIONS]')) {
           try {
             onSuggestions?.(JSON.parse(control.slice(13)))
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[TRUNCATE_CLEAN]')) {
@@ -178,14 +178,14 @@ export function streamAction({
           try {
             const usage = JSON.parse(control.slice(7))
             onUsage?.(usage)
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         if (control.startsWith('[TRACE]')) {
           try {
             const trace = JSON.parse(control.slice(7))
             onTrace?.(trace)
-          } catch {}
+          } catch { /* optional */ }
           return false
         }
         // Strip inventory tags from narrative display
@@ -476,7 +476,7 @@ export async function regenerateOpening(campaignId) {
     err.status = r.status
     try {
       err.detail = (await r.json()).detail
-    } catch {}
+    } catch { /* optional */ }
     throw err
   }
   return r.json()
@@ -685,7 +685,7 @@ const ENGINE_V1 = '/api/v1'
 export function newRequestId() {
   try {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
-  } catch {}
+  } catch { /* optional */ }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
@@ -699,7 +699,7 @@ export async function fetchEngineAvailability(campaignId) {
     let state = null
     try {
       state = await fetchEngineState(campaignId)
-    } catch {}
+    } catch { /* optional */ }
     return { bound: true, state, worldId: lane.world_id }
   } catch (err) {
     return { bound: false, state: null, error: String(err) }
@@ -935,6 +935,20 @@ export async function simulateWorldEvent(worldId, eventId, campaignId) {
 export async function fetchCampaignEngineState(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/state`)
   return jsonOrThrow(r, '读取权威状态失败')
+}
+
+export async function exportCampaign(campaignId) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/export`)
+  return jsonOrThrow(r, '导出存档失败')
+}
+
+export async function importCampaign(campaignId, state, reset = true) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state, reset }),
+  })
+  return jsonOrThrow(r, '导入存档失败')
 }
 
 export async function runCombatAction(campaignId, { action = 'attack', targetId = null, requestId = null, narrate = true } = {}) {

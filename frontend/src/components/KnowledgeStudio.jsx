@@ -53,7 +53,7 @@ const EMPTY_PRESET = {
 }
 
 const SCOPE_LABELS = { both: '两种模式', storyline: '仅故事线', free: '仅自由模式' }
-const ROLE_LABELS = { narrator: '叙事', intent: '意图解析', judge: '判定', any: '通用' }
+const ROLE_LABELS = { narrator: '叙事', intent: '意图解析', judge: '判定', dialogue: '对话', summary: '摘要', any: '通用' }
 const CONDITION_KINDS = [
   ['flag', '剧情标记'],
   ['has_item', '持有物品'],
@@ -358,6 +358,10 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
         max_depth: next.max_depth,
         context_budget_chars: next.context_budget_chars ?? 0,
         model_preset_id: next.model_preset_id,
+        intent_preset_id: next.intent_preset_id ?? '',
+        dialogue_preset_id: next.dialogue_preset_id ?? '',
+        summary_preset_id: next.summary_preset_id ?? '',
+        narrator_prompt: next.narrator_prompt ?? '',
       })
       setConfig(saved)
       setPreview(null)
@@ -743,7 +747,41 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                   />
                 </label>
                 <label>
-                  <FieldLabel>模型预设（叙事采样参数）</FieldLabel>
+                  <FieldLabel>对话模型预设（talk，role = dialogue/any）</FieldLabel>
+                  <select
+                    className={inputClass}
+                    value={config.dialogue_preset_id || ''}
+                    onChange={(e) => setConfig({ ...config, dialogue_preset_id: e.target.value })}
+                  >
+                    <option value="">跟随全局设置</option>
+                    {presets
+                      .filter((preset) => preset.role === 'dialogue' || preset.role === 'any')
+                      .map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}（{ROLE_LABELS[preset.role] || preset.role}）
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  <FieldLabel>摘要模型预设（每 4 回合，role = summary/any）</FieldLabel>
+                  <select
+                    className={inputClass}
+                    value={config.summary_preset_id || ''}
+                    onChange={(e) => setConfig({ ...config, summary_preset_id: e.target.value })}
+                  >
+                    <option value="">不启用模型摘要</option>
+                    {presets
+                      .filter((preset) => preset.role === 'summary' || preset.role === 'any')
+                      .map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}（{ROLE_LABELS[preset.role] || preset.role}）
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  <FieldLabel>叙事模型预设</FieldLabel>
                   <select
                     className={inputClass}
                     value={config.model_preset_id || ''}
@@ -756,6 +794,35 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                       </option>
                     ))}
                   </select>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label>
+                  <FieldLabel>意图解析预设（role = intent/any）</FieldLabel>
+                  <select
+                    className={inputClass}
+                    value={config.intent_preset_id || ''}
+                    onChange={(e) => setConfig({ ...config, intent_preset_id: e.target.value })}
+                  >
+                    <option value="">跟随全局设置</option>
+                    {presets
+                      .filter((preset) => preset.role === 'intent' || preset.role === 'any')
+                      .map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}（{ROLE_LABELS[preset.role] || preset.role}）
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  <FieldLabel>叙事提示词模板（追加到系统规则前，不能推翻规则结果）</FieldLabel>
+                  <textarea
+                    className={inputClass + ' min-h-[80px]'}
+                    value={config.narrator_prompt || ''}
+                    onChange={(e) => setConfig({ ...config, narrator_prompt: e.target.value })}
+                    placeholder="例如：使用冷峻、短句的第三人称叙述。"
+                  />
                 </label>
               </div>
 

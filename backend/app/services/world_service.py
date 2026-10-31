@@ -70,6 +70,7 @@ def build_initial_state(
         item_locations=item_locations,
         quests=initial_quest_progress(world),
         fired_events=[],
+        skills=dict(world.starting_skills),
         updated_at=datetime.utcnow().isoformat(),
     )
 

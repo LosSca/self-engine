@@ -102,7 +102,7 @@ def test_envelopes_and_bare_exact_aliases_preserve_intent(text, action, target):
 
 
 @pytest.mark.parametrize("text", [
-    "sneak past guard", "investigate Chest", "iron", "please steal iron_key",
+    "sneak past guard", "iron", "please steal iron_key",
     "lookout guard", "openly iron_key", "takeover iron_key", "guardrail",
     "[SAY] take iron_key", "[SAY] attack guard", "[META] take iron_key",
     "[CONTINUE]", "[THINK] take iron_key", "[DO] sneak past guard",
@@ -128,6 +128,19 @@ async def test_an_explicit_wrong_verb_never_changes_action(service, text, action
     assert result["parsed"]["action"] == action
     assert service.game_store.get_state("camp-1").model_dump_json() == before
     assert service.game_store.list_events("camp-1") == []
+
+
+@pytest.mark.parametrize("text, target", [
+    ("investigate Chest", "chest"),
+    ("调查 chest", "chest"),
+    ("inspect the guard", "guard"),
+])
+def test_investigate_resolves_a_present_target(text, target):
+    world = _entity_world()
+    parsed = TextActionParser().parse(text, world, fresh_state(world))
+    assert parsed is not None
+    assert parsed.action == "investigate"
+    assert parsed.target_id == target
 
 
 @pytest.mark.parametrize("text", ["look Chest", "look iron_key", "look nonexistent"])
@@ -348,3 +361,15 @@ async def test_text_take_can_loot_a_present_container(service):
     assert out["status"] == "applied"
     assert out["result"]["state"]["inventory"]["iron_key"] == 1
     assert out["result"]["state"]["entities"]["chest"]["inventory"].get("iron_key", 0) == 0
+
+
+def test_equip_and_unequip_resolve_carried_items():
+    world = _entity_world()
+    item = next(entry for entry in world.items if entry.id == "iron_key")
+    item.slot = "weapon"
+    state = fresh_state(world)
+    state.inventory["iron_key"] = 1
+    equipped = TextActionParser().parse("equip iron_key", world, state)
+    assert equipped is not None and equipped.action == "equip" and equipped.target_id == "iron_key"
+    removed = TextActionParser().parse("unequip iron_key", world, state)
+    assert removed is not None and removed.action == "unequip" and removed.target_id == "iron_key"

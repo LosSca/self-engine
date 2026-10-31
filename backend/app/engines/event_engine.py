@@ -17,6 +17,7 @@ from app.models.game import (
     EntityDef,
     EntityState,
     EventExecution,
+    PendingChoice,
     GameEventDef,
     GameState,
     QuestProgress,
@@ -102,6 +103,12 @@ def entity_state_for(
     inventory: Dict[str, int] = {}
     for item_id in entity.items:
         inventory[item_id] = inventory.get(item_id, 0) + 1
+    authored_alert = seed.get("alert", 0)
+    alert = (
+        int(authored_alert)
+        if isinstance(authored_alert, (int, float)) and not isinstance(authored_alert, bool)
+        else 0
+    )
     record = EntityState(
         entity_id=entity.id,
         location_id=entity.location_id,
@@ -109,6 +116,7 @@ def entity_state_for(
         max_hp=max_hp,
         alive=True,
         inventory=inventory,
+        alert=max(0, alert),
     )
     state.entities[entity.id] = record
     return record
@@ -142,7 +150,7 @@ def condition_holds(
     state: GameState, world: WorldDefinition, condition: Condition
 ) -> bool:
     kind = condition.kind
-    if kind in ("entity_at", "entity_alive", "entity_item_count", "combatant_hp", "combatant_alive"):
+    if kind in ("entity_at", "entity_alive", "entity_item_count", "entity_relation", "entity_alert", "combatant_hp", "combatant_alive"):
         if not any(entity.id == condition.target for entity in world.entities):
             return False
     if kind == "flag":
@@ -180,6 +188,23 @@ def condition_holds(
         item_id = condition.value if isinstance(condition.value, str) else ""
         held = entity_item_count(state, world, condition.target, item_id)
         return _compare(held, condition.count, condition.op)
+    if kind == "entity_relation":
+        other = condition.value if isinstance(condition.value, str) else ""
+        record = state.entities.get(condition.target)
+        value = record.relations.get(other, 0) if record is not None else 0
+        return _compare(value, condition.count, condition.op)
+    if kind == "entity_alert":
+        record = state.entities.get(condition.target)
+        value = record.alert if record is not None else 0
+        return _compare(value, condition.count, condition.op)
+    if kind == "skill":
+        return _compare(
+            state.skills.get(condition.target, 0), condition.count, condition.op
+        )
+    if kind == "currency":
+        return _compare(state.currency, condition.count, condition.op)
+    if kind == "level":
+        return _compare(state.level, condition.count, condition.op)
     if kind == "entity_at":
         here = entity_location(state, world, condition.target)
         return (
@@ -485,6 +510,138 @@ def apply_effect(
             ],
         )
 
+    if kind == "equip_item":
+        item = next((entry for entry in world.items if entry.id == effect.target), None)
+        if item is None:
+            return AppliedEffect(effect, False, f"unknown item '{effect.target}'")
+        if not item.slot:
+            return AppliedEffect(effect, False, f"item '{item.id}' has no slot")
+        if state.inventory.get(item.id, 0) <= 0:
+            return AppliedEffect(effect, False, f"item '{item.id}' is not carried")
+        state.equipment[item.slot] = item.id
+        return AppliedEffect(
+            effect, True, facts=[Fact("equipped", item.id, item.slot)]
+        )
+
+    if kind == "unequip_item":
+        slot = effect.target
+        if slot not in state.equipment:
+            return AppliedEffect(effect, False, f"slot '{slot}' is empty")
+        item_id = state.equipment.pop(slot)
+        return AppliedEffect(
+            effect, True, facts=[Fact("unequipped", item_id, slot)]
+        )
+
+    if kind == "advance_dialogue":
+        entity = next((e for e in world.entities if e.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        record = entity_state_for(state, world, entity)
+        current = record.flags.get("dialogue_index", 0)
+        record.flags["dialogue_index"] = (
+            int(current) + 1 if isinstance(current, (int, float)) else 1
+        )
+        return AppliedEffect(
+            effect, True,
+            facts=[Fact("dialogue_advanced", entity.id, record.flags["dialogue_index"])],
+        )
+
+    if kind in ("add_currency", "remove_currency"):
+        amount = max(1, int(effect.amount or 1))
+        if kind == "remove_currency":
+            if state.currency < amount:
+                return AppliedEffect(
+                    effect, False,
+                    f"cannot spend {amount}, only {state.currency} available",
+                )
+            state.currency -= amount
+        else:
+            state.currency += amount
+        return AppliedEffect(
+            effect, True, facts=[Fact("currency_changed", "player", state.currency)]
+        )
+
+    if kind == "add_xp":
+        amount = max(1, int(effect.amount or 1))
+        state.xp += amount
+        state.level = 1 + state.xp // 100
+        return AppliedEffect(
+            effect, True,
+            facts=[Fact("xp_changed", "player", state.xp), Fact("level", "player", state.level)],
+        )
+
+    if kind == "offer_choice":
+        choice = next((c for c in world.choices if c.id == effect.target), None)
+        if choice is None:
+            return AppliedEffect(effect, False, f"unknown choice '{effect.target}'")
+        if len(choice.options) < 2:
+            return AppliedEffect(effect, False, "a choice needs at least two options")
+        state.pending_choice = PendingChoice(
+            choice_id=choice.id,
+            prompt=choice.prompt,
+            options=[{"id": option.id, "label": option.label} for option in choice.options],
+        )
+        return AppliedEffect(
+            effect, True, facts=[Fact("choice_offered", choice.id)]
+        )
+
+    if kind == "resolve_choice":
+        pending = state.pending_choice
+        if pending is None or pending.choice_id != effect.target:
+            return AppliedEffect(effect, False, "no matching pending choice")
+        inline_event = next(
+            (e for e in world.events if e.id == effect.target and e.choices), None
+        )
+        if inline_event is not None:
+            options = inline_event.choices
+        else:
+            choice = next((c for c in world.choices if c.id == effect.target), None)
+            if choice is None:
+                return AppliedEffect(effect, False, f"unknown choice '{effect.target}'")
+            options = choice.options
+        option = next((o for o in options if o.id == effect.value), None)
+        if option is None:
+            return AppliedEffect(effect, False, f"unknown option '{effect.value}'")
+        applied = apply_effects(state, world, option.effects)
+        failed = next((item for item in applied if not item.ok), None)
+        if failed is not None:
+            return AppliedEffect(
+                effect, False, f"choice option failed: {failed.error}"
+            )
+        state.pending_choice = None
+        facts = [Fact("choice_resolved", effect.target, option.id)]
+        for item in applied:
+            facts.extend(item.facts)
+        return AppliedEffect(effect, True, facts=facts)
+
+    if kind in ("adjust_relation", "adjust_alert", "skill_change"):
+        if kind == "skill_change":
+            if not effect.target:
+                return AppliedEffect(effect, False, "skill_change needs a skill name")
+            value = state.skills.get(effect.target, 0) + int(effect.amount or 0)
+            state.skills[effect.target] = max(0, value)
+            return AppliedEffect(
+                effect, True,
+                facts=[Fact("skill_changed", effect.target, state.skills[effect.target])],
+            )
+        entity = next((e for e in world.entities if e.id == effect.target), None)
+        if entity is None:
+            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+        record = entity_state_for(state, world, entity)
+        if kind == "adjust_alert":
+            record.alert = max(0, record.alert + int(effect.amount or 0))
+            return AppliedEffect(
+                effect, True, facts=[Fact("entity_alert", entity.id, record.alert)]
+            )
+        other = effect.value if isinstance(effect.value, str) else ""
+        if not other:
+            return AppliedEffect(effect, False, "adjust_relation needs an actor id")
+        record.relations[other] = record.relations.get(other, 0) + int(effect.amount or 0)
+        return AppliedEffect(
+            effect, True,
+            facts=[Fact("entity_relation", entity.id, other)],
+        )
+
     if kind == "emit":
         return AppliedEffect(
             effect, True, facts=[Fact("emit", effect.target, effect.value)]
@@ -557,6 +714,7 @@ def run_triggered_events(
     *,
     processed: Optional[set[str]] = None,
     forced: Optional[set[str]] = None,
+    origins: Optional[Dict[str, Tuple[str, int]]] = None,
 ) -> Tuple[GameState, List[EventExecution], List[Fact]]:
     """Settle matching events in priority order, attempting each once per action.
 
@@ -569,6 +727,7 @@ def run_triggered_events(
     state = state.model_copy(deep=True)
     processed = processed if processed is not None else set()
     forced = forced if forced is not None else set()
+    origins = origins if origins is not None else {}
     executions: List[EventExecution] = []
     new_facts: List[Fact] = []
     ordered = sorted(world.events, key=lambda e: (-e.priority, e.id))
@@ -610,6 +769,7 @@ def run_triggered_events(
                 )
                 continue
             processed.add(event.id)
+            parent_id, depth = origins.get(event.id, ("", 0))
             branch = _matching_branch(event, state, world)
             effects, followups, branch_label = _event_payload(event, branch)
             scratch = state.model_copy(deep=True)
@@ -624,8 +784,13 @@ def run_triggered_events(
                         reason=failed[0].error,
                         effects=effects,
                         branch=branch_label,
+                        parent_event_id=parent_id,
+                        depth=depth,
                     )
                 )
+                for fid in event.failure_events:
+                    if fid in known and fid not in origins:
+                        origins[fid] = (event.id, depth + 1)
                 forced.update(fid for fid in event.failure_events if fid in known)
                 continue
             state = scratch
@@ -636,6 +801,18 @@ def run_triggered_events(
             state.event_last_turn[event.id] = state.turn
             for item in applied:
                 new_facts.extend(item.facts)
+            if event.choices and state.pending_choice is None:
+                state.pending_choice = PendingChoice(
+                    choice_id=event.id,
+                    prompt=event.description or event.name,
+                    options=[
+                        {"id": option.id, "label": option.label}
+                        for option in event.choices
+                    ],
+                )
+            for fid in followups:
+                if fid in known and fid not in origins:
+                    origins[fid] = (event.id, depth + 1)
             forced.update(fid for fid in followups if fid in known)
             executions.append(
                 EventExecution(
@@ -644,6 +821,8 @@ def run_triggered_events(
                     status="fired",
                     effects=effects,
                     branch=branch_label,
+                    parent_event_id=parent_id,
+                    depth=depth,
                 )
             )
         if not fired and forced == forced_before:
@@ -671,6 +850,12 @@ def validate_event(world: WorldDefinition, event: GameEventDef) -> List[str]:
                 effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
             )
         )
+    known_choices = {choice.id for choice in world.choices}
+    if event.choices and len(event.choices) < 2:
+        errors.append("inline choices need at least two options")
+    for effect in event.effects:
+        if effect.kind == "offer_choice" and effect.target not in known_choices:
+            errors.append(f"unknown offer_choice '{effect.target}'")
     if event.trigger == "action" and not event.trigger_action:
         errors.append("trigger 'action' requires trigger_action")
     known_events = {candidate.id for candidate in world.events}

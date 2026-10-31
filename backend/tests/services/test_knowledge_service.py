@@ -282,3 +282,21 @@ def test_audience_entries_need_their_npc_in_focus():
 
     elsewhere = knowledge_service.build_context(entries, mode="free", focus=["tavern"])
     assert [b.entry_id for b in elsewhere.blocks] == ["public"]
+
+
+def test_query_uses_content_similarity_not_only_tags():
+    entries = [
+        _entry("generic", layer="global", depth=1, title="World", content="islands and fog"),
+        _entry("dragon", layer="scene", depth=5, title="Old tale", content="The dragon sleeps under the mountain."),
+    ]
+    context = knowledge_service.build_context(entries, mode="free", query="dragon mountain")
+    assert [block.entry_id for block in context.blocks] == ["dragon", "generic"]
+
+
+def test_cjk_query_matches_content_bigrams():
+    entries = [
+        _entry("generic", layer="global", depth=1, title="世界", content="群岛与雾"),
+        _entry("tavern", layer="scene", depth=5, title="酒馆", content="酒馆里流传着旧王朝的故事"),
+    ]
+    context = knowledge_service.build_context(entries, mode="free", query="酒馆 故事")
+    assert [block.entry_id for block in context.blocks] == ["tavern", "generic"]

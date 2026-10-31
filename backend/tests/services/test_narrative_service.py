@@ -194,3 +194,45 @@ async def test_narrator_prefers_the_scene_preset_router(monkeypatch):
     assert result.status == "ok"
     assert result.text == "preset prose"
     assert len(preset.calls) == 1 and not default.calls
+
+
+@pytest.mark.asyncio
+async def test_narrator_system_prompt_override_keeps_rules():
+    router = StubRouter()
+    narrator = LLMNarrator(router, language="zh")
+    state = build_initial_state(village_world(), "c")
+    result = await narrator.narrate(
+        ActionRequest(campaign_id="c", request_id="r", action="look"),
+        RuleOutcome(ok=True, message="ok"),
+        state,
+        village_world(),
+        options={"system_prompt": "Use terse, cold prose."},
+    )
+    assert result.status == "ok"
+    system = router.calls[-1]["messages"][0]["content"]
+    assert system.startswith("Use terse, cold prose.")
+    assert "Never invent item gains" in system
+
+
+@pytest.mark.asyncio
+async def test_summary_service_returns_bounded_text_and_fails_silently():
+    from app.services.summary_service import summarize
+
+    class Stub:
+        def __init__(self, text):
+            self.text = text
+
+        async def complete(self, messages, **kwargs):
+            return self.text
+
+    long_text = "summary line " * 200
+    result = await summarize(Stub(long_text), "[T1] recap")
+    assert result and len(result) <= 1200
+    assert await summarize(Stub(""), "[T1] recap") == ""
+    assert await summarize(None, "[T1] recap") == ""
+
+    class Broken:
+        async def complete(self, messages, **kwargs):
+            raise RuntimeError("down")
+
+    assert await summarize(Broken(), "[T1] recap") == ""

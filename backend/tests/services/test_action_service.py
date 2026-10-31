@@ -510,3 +510,125 @@ async def test_concurrent_effect_rejection_is_also_replayed(store, monkeypatch):
     assert result.code == "effect_failed"
     assert store.get_state("camp-1") == before
     assert store.list_events("camp-1") == []
+
+
+async def test_world_starting_skills_and_skill_effects_reach_state(store):
+    from app.models.game import CustomActionDef
+
+    world = village_world().model_copy(update={"starting_skills": {"stealth": 2}})
+    world.custom_actions.append(
+        CustomActionDef(
+            id="train", label="Train", verbs=["train"],
+            effects=[Effect(kind="skill_change", target="stealth", amount=1)],
+        )
+    )
+    save_world(store, world)
+    bind_world(store, "camp-skill", world.world_id, reset=True)
+    service = ActionService(store)
+    out = await service.execute(
+        ActionRequest(
+            campaign_id="camp-skill", request_id="skill-1",
+            action="custom", params={"action_id": "train"}, narrate=False,
+        )
+    )
+    assert out.status == "applied"
+    assert out.state.skills["stealth"] == 3
+
+
+async def test_offer_choice_then_choose_resolves_atomically(store):
+    from app.models.game import ChoiceDef, ChoiceOption, GameEventDef
+
+    world = village_world()
+    world.events.append(
+        GameEventDef(
+            id="crossroads", name="Crossroads", trigger="state_change", repeat="once",
+            effects=[Effect(kind="offer_choice", target="fork")],
+        )
+    )
+    world.choices.append(
+        ChoiceDef(
+            id="fork", prompt="Which way?",
+            options=[
+                ChoiceOption(id="left", label="Left", effects=[Effect(kind="set_flag", target="went_left", value=True)]),
+                ChoiceOption(id="right", label="Right", effects=[Effect(kind="set_flag", target="went_right", value=True)]),
+            ],
+        )
+    )
+    save_world(store, world)
+    bind_world(store, "camp-choice", world.world_id, reset=True)
+    service = ActionService(store)
+
+    first = await service.execute(
+        ActionRequest(campaign_id="camp-choice", request_id="c1", action="look", narrate=False)
+    )
+    assert first.status == "applied"
+    pending = first.state.pending_choice
+    assert pending is not None and pending.choice_id == "fork"
+    assert {option["id"] for option in pending.options} == {"left", "right"}
+
+    bad = await service.execute(
+        ActionRequest(
+            campaign_id="camp-choice", request_id="c2", action="choose",
+            target_id="middle", narrate=False,
+        )
+    )
+    assert bad.status == "rejected" and bad.code == "invalid_choice"
+
+    chosen = await service.execute(
+        ActionRequest(
+            campaign_id="camp-choice", request_id="c3", action="choose",
+            target_id="left", narrate=False,
+        )
+    )
+    assert chosen.status == "applied"
+    assert chosen.state.pending_choice is None
+    assert chosen.state.flags.get("went_left") is True
+    assert "went_right" not in chosen.state.flags
+
+
+async def test_long_term_summary_accumulates_and_reaches_context(store):
+    world, _state = bound_world(store, "camp-summary")
+    service = ActionService(store)
+    first = await service.execute(
+        ActionRequest(campaign_id="camp-summary", request_id="s1", action="look", narrate=True)
+    )
+    second = await service.execute(
+        ActionRequest(campaign_id="camp-summary", request_id="s2", action="look", narrate=True)
+    )
+    assert first.state.summary.startswith("[T1]")
+    assert "[T2]" in second.state.summary
+    assert f"longterm:camp-summary" in second.context_entries
+    assert len(second.state.summary) <= 2000
+
+
+async def test_inline_event_choices_queue_and_resolve(store):
+    from app.models.game import ChoiceOption, GameEventDef
+
+    world = village_world()
+    world.events.append(
+        GameEventDef(
+            id="inline", name="Inline", trigger="state_change", repeat="once",
+            description="Pick one.",
+            choices=[
+                ChoiceOption(id="a", label="A", effects=[Effect(kind="set_flag", target="picked_a", value=True)]),
+                ChoiceOption(id="b", label="B", effects=[Effect(kind="set_flag", target="picked_b", value=True)]),
+            ],
+        )
+    )
+    save_world(store, world)
+    bind_world(store, "camp-inline", world.world_id, reset=True)
+    service = ActionService(store)
+    first = await service.execute(
+        ActionRequest(campaign_id="camp-inline", request_id="i1", action="look", narrate=False)
+    )
+    assert first.state.pending_choice.choice_id == "inline"
+    assert first.state.pending_choice.prompt == "Pick one."
+    chosen = await service.execute(
+        ActionRequest(
+            campaign_id="camp-inline", request_id="i2", action="choose",
+            target_id="b", narrate=False,
+        )
+    )
+    assert chosen.status == "applied"
+    assert chosen.state.pending_choice is None
+    assert chosen.state.flags.get("picked_b") is True

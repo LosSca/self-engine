@@ -236,7 +236,8 @@ async def test_engine_recap_uses_committed_requests_not_legacy_mirrors(store, mo
     await service.execute(_request("past", "look"))
     await service.execute(_request("refused", "open", "warehouse_door"))
     await service.execute(_request("current", "look"))
-    history = narrator.seen[-1][0]["content"]
+    blocks = narrator.seen[-1]
+    history = next(block for block in blocks if block.get("title") == "recent turns")["content"]
     assert history.splitlines() == ["player: look", "narrator: ok", "player: open warehouse_door", "narrator: ok"]
     assert store.get_state("camp-1").version == 2
 

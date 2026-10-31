@@ -409,3 +409,44 @@ def test_graph_mirror_is_off_without_neo4j_credentials(client, monkeypatch):
 
     time.sleep(0.05)
     assert calls == [], "ENGINE_GRAPH_MIRROR=0 must silence the mirror"
+
+
+def test_campaign_export_and_import_roundtrip(client):
+    assert _create_world(client).status_code == 200
+    bound = client.post(
+        f"{API}/campaigns/camp-export/world",
+        json={"world_id": "demo_village", "reset": True},
+    )
+    assert bound.status_code == 200
+    taken = client.post(
+        f"{API}/campaigns/camp-export/text-actions",
+        json={"text": "take iron_key", "request_id": "exp-1", "narrate": False},
+    ).json()
+    assert taken["status"] == "applied"
+
+    exported = client.get(f"{API}/campaigns/camp-export/export").json()
+    assert exported["format"] == "lunar-campaign"
+    assert exported["state"]["inventory"]["iron_key"] == 1
+    assert exported["state"]["campaign_id"] == "camp-export"
+    assert exported["events"]
+
+    # A different campaign can be created from the file; the URL id wins.
+    payload = dict(exported["state"], campaign_id="ignored-in-file")
+    restored = client.post(
+        f"{API}/campaigns/camp-restored/import",
+        json={"state": payload, "reset": True},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["campaign_id"] == "camp-restored"
+    assert restored.json()["inventory"]["iron_key"] == 1
+
+    # Overwriting needs an explicit reset.
+    assert client.post(
+        f"{API}/campaigns/camp-restored/import",
+        json={"state": payload},
+    ).status_code == 409
+    unknown_world = dict(payload, world_id="ghost")
+    assert client.post(
+        f"{API}/campaigns/camp-ghost/import",
+        json={"state": unknown_world, "reset": True},
+    ).status_code == 400

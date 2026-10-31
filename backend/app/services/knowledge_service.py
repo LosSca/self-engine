@@ -15,6 +15,8 @@ separate, explicit step, so tests can assert exactly what the model would see.
 """
 from __future__ import annotations
 
+import math
+import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from app.engines.story_engine import validate_storyline
@@ -32,6 +34,45 @@ from app.models.knowledge import (
 )
 
 DEFAULT_MAX_DEPTH = 9
+
+_WORD_RE = re.compile(r"[a-z0-9_]+")
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
+def _tokens(text: str) -> List[str]:
+    """Words plus CJK characters and bigrams: a tiny sparse-vector tokenizer."""
+    lowered = (text or "").casefold()
+    words = _WORD_RE.findall(lowered)
+    cjk = _CJK_RE.findall(lowered)
+    bigrams = ["".join(pair) for pair in zip(cjk, cjk[1:])]
+    return words + cjk + bigrams
+
+
+def _cosine(query_tokens: List[str], doc_tokens: List[str], idf: Dict[str, float]) -> float:
+    if not query_tokens or not doc_tokens:
+        return 0.0
+    q: Dict[str, float] = {}
+    d: Dict[str, float] = {}
+    for token in query_tokens:
+        q[token] = q.get(token, 0.0) + 1.0
+    for token in doc_tokens:
+        d[token] = d.get(token, 0.0) + 1.0
+    dot = sum(
+        (count / len(query_tokens)) * (d[token] / len(doc_tokens)) * idf.get(token, 0.0)
+        for token, count in q.items()
+        if token in d
+    )
+    if dot <= 0:
+        return 0.0
+    q_norm = math.sqrt(
+        sum((count / len(query_tokens)) ** 2 * idf.get(token, 0.0) ** 2 for token, count in q.items())
+    )
+    d_norm = math.sqrt(
+        sum((count / len(doc_tokens)) ** 2 * idf.get(token, 0.0) ** 2 for token, count in d.items())
+    )
+    if q_norm == 0 or d_norm == 0:
+        return 0.0
+    return dot / (q_norm * d_norm)
 
 
 def _layer_rank(layer: str) -> int:
@@ -51,6 +92,7 @@ def build_context(
     story_nodes: Optional[Sequence[str]] = None,
     focus: Optional[Sequence[str]] = None,
     budget_chars: int = 0,
+    query: str = "",
 ) -> KnowledgeContext:
     """Select and order the knowledge entries visible for one turn.
 
@@ -65,6 +107,8 @@ def build_context(
     whole.
     """
     max_depth = max(0, min(9, int(max_depth)))
+    query_text = " ".join([query or "", *(str(item) for item in (focus or []))]).strip()
+    query_tokens = _tokens(query_text)
     focus_tokens = {
         str(item).strip().casefold() for item in (focus or []) if str(item).strip()
     }
@@ -124,6 +168,24 @@ def build_context(
                 depth=entry.depth,
             )
         )
+    doc_tokens = {
+        entry.id: _tokens(" ".join([entry.title, entry.content, *entry.tags]))
+        for entry in entries
+    }
+    document_count = max(1, len(entries))
+    document_frequency: Dict[str, int] = {}
+    for tokens in doc_tokens.values():
+        for token in set(tokens):
+            document_frequency[token] = document_frequency.get(token, 0) + 1
+    idf = {
+        token: math.log((document_count + 1) / (frequency + 1)) + 1.0
+        for token, frequency in document_frequency.items()
+    }
+    scores = {
+        entry_id: _cosine(query_tokens, tokens, idf)
+        for entry_id, tokens in doc_tokens.items()
+    }
+
     def _focus_hits(entry: KnowledgeEntry) -> int:
         if not focus_tokens:
             return 0
@@ -135,6 +197,7 @@ def build_context(
         return (
             boosted,
             -_focus_hits(entry),
+            -round(scores.get(block.entry_id, 0.0), 6),
             _layer_rank(block.layer),
             entry.depth,
             entry.sort_order,

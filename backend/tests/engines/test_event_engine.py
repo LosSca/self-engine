@@ -24,6 +24,7 @@ from app.models.game import (
     GameEventDef,
     GameState,
 )
+from app.engines.rules_engine import RulesEngine
 from app.services.action_service import ActionService
 from app.services.world_service import build_initial_state
 from tests.support import village_world
@@ -900,3 +901,84 @@ def test_entity_item_count_requires_a_known_item():
     world.events = [event]
     errors = validate_event(world, event)
     assert any("ghost_item" in error for error in errors)
+
+
+# --------------------------------------------------- relations, alert, skills
+def test_relation_alert_and_skill_conditions_and_effects():
+    world, state = _setup()
+    world.entities.append(
+        EntityDef(id="guard", name="Guard", location_id="village_square")
+    )
+    state.skills["stealth"] = 2
+    assert condition_holds(
+        state, world, Condition(kind="skill", target="stealth", op="gte", count=2)
+    ) is True
+
+    relation = apply_effect(
+        state, world,
+        Effect(kind="adjust_relation", target="guard", value="player", amount=-3),
+    )
+    assert relation.ok
+    assert condition_holds(
+        state, world,
+        Condition(kind="entity_relation", target="guard", value="player", op="lte", count=-3),
+    ) is True
+
+    alert = apply_effect(
+        state, world, Effect(kind="adjust_alert", target="guard", amount=2)
+    )
+    assert alert.ok and state.entities["guard"].alert == 2
+    assert condition_holds(
+        state, world, Condition(kind="entity_alert", target="guard", op="gte", count=2)
+    ) is True
+
+    skill = apply_effect(
+        state, world, Effect(kind="skill_change", target="stealth", amount=1)
+    )
+    assert skill.ok and state.skills["stealth"] == 3
+    assert condition_holds(
+        state, world, Condition(kind="skill", target="stealth", op="eq", count=3)
+    ) is True
+
+
+def test_execution_records_followup_parent_and_depth():
+    world, state = _setup()
+    world.events = [
+        _event(id="root", trigger_action="look",
+               effects=[Effect(kind="set_flag", target="root", value=True)],
+               followup_events=["child"]),
+        _event(id="child", trigger_action="open",
+               effects=[Effect(kind="set_flag", target="child", value=True)],
+               followup_events=["grand"]),
+        _event(id="grand", trigger_action="open",
+               effects=[Effect(kind="set_flag", target="grand", value=True)]),
+    ]
+    state, executions, _ = run_triggered_events(world, state, "look", None, [])
+    by_id = {item.event_id: item for item in executions}
+    assert by_id["root"].parent_event_id == "" and by_id["root"].depth == 0
+    assert by_id["child"].parent_event_id == "root" and by_id["child"].depth == 1
+    assert by_id["grand"].parent_event_id == "child" and by_id["grand"].depth == 2
+
+
+def test_equipment_currency_and_growth():
+    world, state = _setup()
+    item = next(entry for entry in world.items if entry.id == "iron_key")
+    item.slot = "weapon"
+    item.bonus = {"attack": 3}
+    state.inventory["iron_key"] = 1
+    assert RulesEngine()._player_stats(world, state)[0] == 4
+
+    equipped = apply_effect(state, world, Effect(kind="equip_item", target="iron_key"))
+    assert equipped.ok and state.equipment["weapon"] == "iron_key"
+    assert RulesEngine()._player_stats(world, state)[0] == 7
+    removed = apply_effect(state, world, Effect(kind="unequip_item", target="weapon"))
+    assert removed.ok and state.equipment == {}
+
+    assert apply_effect(state, world, Effect(kind="add_currency", amount=25)).ok
+    assert state.currency == 25 and condition_holds(
+        state, world, Condition(kind="currency", op="gte", count=20)
+    )
+    assert apply_effect(state, world, Effect(kind="remove_currency", amount=30)).ok is False
+    assert apply_effect(state, world, Effect(kind="add_xp", amount=120)).ok
+    assert state.level == 2 and state.xp == 120
+    assert condition_holds(state, world, Condition(kind="level", op="gte", count=2))

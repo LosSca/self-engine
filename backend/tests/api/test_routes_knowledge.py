@@ -290,3 +290,23 @@ def test_context_preview_uses_budget_and_focus(client, scenario_id):
     ).json()
     assert [block["title"] for block in preview["blocks"]] == ["Tavern"]
     assert any("预算" in item["reason"] for item in preview["stats"]["excluded"])
+
+
+def test_intent_preset_and_narrator_prompt_roundtrip(client, scenario_id):
+    body = {
+        "mode": "free",
+        "intent_preset_id": "builtin-fast",
+        "narrator_prompt": "Use terse, cold prose.",
+    }
+    res = client.put(f"/api/v1/scenarios/{scenario_id}/play-config", json=body)
+    assert res.status_code == 200, res.text
+    stored = res.json()
+    assert stored["intent_preset_id"] == "builtin-fast"
+    assert stored["narrator_prompt"] == "Use terse, cold prose."
+
+    bad = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config",
+        json={"mode": "free", "intent_preset_id": "ghost"},
+    )
+    assert bad.status_code == 400
+    assert "ghost" in bad.text

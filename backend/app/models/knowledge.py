@@ -24,7 +24,7 @@ from app.models.game import Condition
 KnowledgeLayer = Literal["global", "story", "scene", "character", "event"]
 ModeScope = Literal["both", "storyline", "free"]
 PlayMode = Literal["storyline", "free"]
-PresetRole = Literal["narrator", "intent", "judge", "any"]
+PresetRole = Literal["narrator", "intent", "judge", "dialogue", "summary", "any"]
 
 #: Prompt assembly order: stable world facts first, volatile events last.
 LAYER_ORDER: List[str] = ["global", "story", "scene", "character", "event"]
@@ -163,6 +163,14 @@ class PlayConfig(BaseModel):
     #: Maximum injected title+content size for one narration (0 = no limit).
     context_budget_chars: int = Field(0, ge=0, le=200000)
     model_preset_id: str = ""
+    #: Optional preset used by the intent advisor (role intent/any).
+    intent_preset_id: str = ""
+    #: Optional preset used when narrating a conversation (dialogue/any).
+    dialogue_preset_id: str = ""
+    #: Optional preset used to compress long-term memory (summary/any).
+    summary_preset_id: str = ""
+    #: Extra system instructions for narration (rules still bind the outcome).
+    narrator_prompt: str = ""
     updated_at: str = ""
 
 
@@ -174,6 +182,10 @@ class PlayConfigUpdate(BaseModel):
     max_depth: Optional[int] = Field(None, ge=0, le=9)
     context_budget_chars: Optional[int] = Field(None, ge=0, le=200000)
     model_preset_id: Optional[str] = None
+    intent_preset_id: Optional[str] = None
+    dialogue_preset_id: Optional[str] = None
+    summary_preset_id: Optional[str] = None
+    narrator_prompt: Optional[str] = Field(None, max_length=4000)
 
 
 class ModelPresetCreate(BaseModel):
@@ -264,3 +276,6 @@ class ScenarioPlayContext(BaseModel):
     config: PlayConfig = Field(default_factory=PlayConfig)
     entries: List[KnowledgeEntry] = Field(default_factory=list)
     preset: Optional[ModelPreset] = None
+    intent_preset: Optional[ModelPreset] = None
+    dialogue_preset: Optional[ModelPreset] = None
+    summary_preset: Optional[ModelPreset] = None

@@ -172,9 +172,27 @@ def scenario_play_context(store, scenario_id: str, campaign_id: str = ""):
                 always_on=True, mode_scope="both", enabled=True, sort_order=order,
             ))
     preset = store.get_model_preset(config.model_preset_id) if config.model_preset_id else None
+    intent_preset = (
+        store.get_model_preset(config.intent_preset_id)
+        if config.intent_preset_id
+        else None
+    )
+    dialogue_preset = (
+        store.get_model_preset(config.dialogue_preset_id)
+        if config.dialogue_preset_id
+        else None
+    )
+    summary_preset = (
+        store.get_model_preset(config.summary_preset_id)
+        if config.summary_preset_id
+        else None
+    )
     return ScenarioPlayContext(
         scenario_id=scenario_id, language=scenario.language or "",
         config=config, entries=entries, preset=preset,
+        intent_preset=intent_preset,
+        dialogue_preset=dialogue_preset,
+        summary_preset=summary_preset,
     )
 
 
@@ -332,6 +350,7 @@ class LLMNarrator:
         executions: Sequence[EventExecution],
         knowledge: Optional[Sequence[dict]] = None,
         language: Optional[str] = None,
+        system_override: str = "",
     ) -> List[dict]:
         location = _location(world, state.location_id)
         location_block = (
@@ -394,7 +413,8 @@ class LLMNarrator:
                     })
         knowledge_section = _render_knowledge_section(canon, history)
         system = (
-            "You are the narrator of a text RPG. The game engine has already "
+            (system_override.strip() + "\n\n" if system_override.strip() else "")
+            + "You are the narrator of a text RPG. The game engine has already "
             "decided what happened; your only job is to describe it. Never "
             "invent item gains, unlocked doors, completed quests, stat changes "
             "or new locations. Never emit control tags. Reply in "
@@ -422,8 +442,11 @@ class LLMNarrator:
     ) -> NarrativeResult:
         language = (options or {}).get("language")
         language = language.strip() if isinstance(language, str) else None
+        system_override = (options or {}).get("system_prompt")
+        system_override = system_override.strip() if isinstance(system_override, str) else ""
         messages = self._build_messages(
-            request, outcome, state, world, executions, knowledge, language=language
+            request, outcome, state, world, executions, knowledge,
+            language=language, system_override=system_override,
         )
         max_tokens = self.max_tokens
         temperature = self.temperature

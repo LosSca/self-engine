@@ -72,7 +72,7 @@ function readOverrides(worldId) {
   try {
     const raw = window.localStorage.getItem(positionsKey(worldId))
     return raw ? JSON.parse(raw) : {}
-  } catch (err) {
+  } catch {
     return {}
   }
 }
@@ -80,7 +80,7 @@ function readOverrides(worldId) {
 function writeOverrides(worldId, value) {
   try {
     window.localStorage.setItem(positionsKey(worldId), JSON.stringify(value))
-  } catch (err) {
+  } catch {
     /* a full or disabled storage must not break the editor */
   }
 }
@@ -94,6 +94,7 @@ export default function WorldMapGraph({ worldId, mapData, onEditLocation, onDele
   const [dragging, setDragging] = useState(null)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset local layout when the world changes
     setOverrides(readOverrides(worldId))
     setSelectedEdge(null)
   }, [worldId])

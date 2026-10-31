@@ -286,6 +286,151 @@ class RulesEngine:
             message=" ".join(parts),
         )
 
+    def _investigate(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        if not target_id:
+            return self._look(world, state, None, params)
+        locations = self._locations(world)
+        items = self._items(world)
+        doors = self._doors(world)
+        entities = {entity.id: entity for entity in world.entities}
+
+        entity = entities.get(target_id)
+        if entity is not None:
+            if entity_location(state, world, entity.id) != state.location_id:
+                return RuleOutcome(
+                    ok=False, code="entity_not_here",
+                    message=f"{entity.name} is not here.",
+                )
+            parts = [f"{entity.name}: {entity.description or entity.kind}."]
+            record = state.entities.get(entity.id)
+            if record is not None and entity.kind != "object":
+                parts.append(f"HP {record.hp}/{record.max_hp}.")
+            contents = [
+                items[item_id].name
+                for item_id in entity.items
+                if item_id in items
+                and entity_item_count(state, world, entity.id, item_id) > 0
+            ]
+            if contents:
+                parts.append("It holds: " + ", ".join(contents) + ".")
+            if entity.dialogue and entity.kind != "object":
+                parts.append("It seems willing to talk.")
+            return RuleOutcome(ok=True, code="investigated", message=" ".join(parts))
+
+        item = items.get(target_id)
+        if item is not None:
+            held = state.inventory.get(target_id, 0) > 0
+            on_ground = state.item_locations.get(target_id) == state.location_id
+            in_container = any(
+                entity_location(state, world, candidate.id) == state.location_id
+                and entity_item_count(state, world, candidate.id, target_id) > 0
+                for candidate in world.entities
+            )
+            if not (held or on_ground or in_container):
+                return RuleOutcome(
+                    ok=False, code="item_not_here",
+                    message=f"The {item.name} is not here.",
+                )
+            where = (
+                "you carry it" if held
+                else "it is on the ground" if on_ground
+                else "it is inside something here"
+            )
+            return RuleOutcome(
+                ok=True, code="investigated",
+                message=f"{item.name}: {item.description or 'no notable detail'} ({where}).",
+            )
+
+        door = doors.get(target_id)
+        if door is not None:
+            if door.location_id != state.location_id:
+                return RuleOutcome(
+                    ok=False, code="door_not_here",
+                    message=f"The {door.name} is not here.",
+                )
+            is_open = self._door_is_open(state, door)
+            detail = "open" if is_open else ("locked" if door.locked else "closed")
+            key = ""
+            if door.key_item_id and door.key_item_id in items:
+                key = f" It needs the {items[door.key_item_id].name}."
+            return RuleOutcome(
+                ok=True, code="investigated",
+                message=f"{door.name}: {detail}.{key}",
+            )
+
+        location = locations.get(target_id)
+        if location is not None:
+            if target_id != state.location_id and not any(
+                exit_def.target_id == target_id
+                for exit_def in (locations.get(state.location_id).exits if state.location_id in locations else [])
+            ):
+                return RuleOutcome(
+                    ok=False, code="location_not_here",
+                    message=f"{location.name} is not within view.",
+                )
+            return RuleOutcome(
+                ok=True, code="investigated",
+                message=f"{location.name}: {location.description or 'no description'}",
+            )
+
+        return RuleOutcome(
+            ok=False, code="unknown_target",
+            message=f"There is nothing called '{target_id}' to investigate.",
+        )
+
+    def _exit_problem(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        locations: Dict[str, LocationDef],
+        doors: Dict[str, DoorDef],
+        items: Dict[str, ItemDef],
+        source_id: str,
+        destination_id: str,
+    ) -> Optional[RuleOutcome]:
+        source = locations.get(source_id)
+        destination = locations.get(destination_id)
+        if source is None or destination is None:
+            return RuleOutcome(
+                ok=False, code="unknown_location",
+                message="The route names an undefined location.",
+            )
+        exit_def = next(
+            (e for e in source.exits if e.target_id == destination_id), None
+        )
+        if exit_def is None:
+            return RuleOutcome(
+                ok=False, code="no_route",
+                message=f"You cannot reach {destination.name} from {source.name}.",
+            )
+        if exit_def.requires_item_id:
+            if state.inventory.get(exit_def.requires_item_id, 0) <= 0:
+                item = items.get(exit_def.requires_item_id)
+                name = item.name if item else exit_def.requires_item_id
+                return RuleOutcome(
+                    ok=False, code="missing_item",
+                    message=f"You need the {name} to go that way.",
+                )
+        if exit_def.door_id:
+            door = doors.get(exit_def.door_id)
+            if door is None:
+                return RuleOutcome(
+                    ok=False, code="unknown_door",
+                    message=f"The way is blocked by an undefined door '{exit_def.door_id}'.",
+                )
+            if not self._door_is_open(state, door):
+                return RuleOutcome(
+                    ok=False, code="exit_blocked",
+                    message=f"The {door.name} is closed.",
+                )
+        return None
+
     def _move(
         self,
         world: WorldDefinition,
@@ -308,8 +453,7 @@ class RulesEngine:
         locations = self._locations(world)
         doors = self._doors(world)
         items = self._items(world)
-        loc = locations.get(state.location_id)
-        if loc is None:
+        if state.location_id not in locations:
             return RuleOutcome(
                 ok=False,
                 code="unknown_location",
@@ -322,41 +466,228 @@ class RulesEngine:
                 code="unknown_location",
                 message=f"The destination '{target_id}' is not defined.",
             )
-        exit_def = next((e for e in loc.exits if e.target_id == target_id), None)
-        if exit_def is None:
-            return RuleOutcome(
-                ok=False,
-                code="no_route",
-                message=f"You cannot reach {destination.name} from {loc.name}.",
+
+        raw_path = (params or {}).get("path")
+        path: List[str] = []
+        if isinstance(raw_path, list) and raw_path:
+            if not all(isinstance(step, str) and step for step in raw_path):
+                return RuleOutcome(
+                    ok=False, code="invalid_path",
+                    message="path must be a non-empty list of location ids.",
+                )
+            if raw_path[-1] != target_id:
+                return RuleOutcome(
+                    ok=False, code="invalid_path",
+                    message="the path must end at the destination.",
+                )
+            if len(raw_path) > len(locations):
+                return RuleOutcome(
+                    ok=False, code="invalid_path",
+                    message="the path is longer than the world has locations.",
+                )
+            path = list(raw_path)
+        else:
+            path = [target_id]
+
+        cursor = state.location_id
+        for step in path:
+            problem = self._exit_problem(
+                world, state, locations, doors, items, cursor, step
             )
-        if exit_def.requires_item_id:
-            if state.inventory.get(exit_def.requires_item_id, 0) <= 0:
-                item = items.get(exit_def.requires_item_id)
-                name = item.name if item else exit_def.requires_item_id
-                return RuleOutcome(
-                    ok=False,
-                    code="missing_item",
-                    message=f"You need the {name} to go that way.",
-                )
-        if exit_def.door_id:
-            door = doors.get(exit_def.door_id)
-            if door is None:
-                return RuleOutcome(
-                    ok=False,
-                    code="unknown_door",
-                    message=f"The way is blocked by an undefined door '{exit_def.door_id}'.",
-                )
-            if not self._door_is_open(state, door):
-                return RuleOutcome(
-                    ok=False,
-                    code="exit_blocked",
-                    message=f"The {door.name} is closed.",
-                )
+            if problem is not None:
+                return problem
+            cursor = step
+
+        if len(path) > 1:
+            message = f"You travel to {destination.name}."
+        else:
+            message = f"You move to {destination.name}."
         return RuleOutcome(
             ok=True,
             code="moved",
-            message=f"You move to {destination.name}.",
+            message=message,
             effects=[Effect(kind="move_player", target=target_id)],
+        )
+
+    def _equip(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        if not target_id:
+            return RuleOutcome(
+                ok=False, code="missing_target", message="equip requires an item id."
+            )
+        item = self._items(world).get(target_id)
+        if item is None:
+            return RuleOutcome(
+                ok=False, code="unknown_item", message=f"There is no item '{target_id}'."
+            )
+        if not item.slot:
+            return RuleOutcome(
+                ok=False, code="not_equippable",
+                message=f"The {item.name} cannot be equipped.",
+            )
+        if state.inventory.get(target_id, 0) <= 0:
+            return RuleOutcome(
+                ok=False, code="not_carried",
+                message=f"You do not carry the {item.name}.",
+            )
+        return RuleOutcome(
+            ok=True, code="equipped",
+            message=f"You equip the {item.name}.",
+            effects=[Effect(kind="equip_item", target=target_id)],
+        )
+
+    def _unequip(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        items = self._items(world)
+        slot = target_id if target_id in state.equipment else ""
+        if not slot and target_id:
+            slot = next(
+                (name for name, item_id in state.equipment.items() if item_id == target_id),
+                "",
+            )
+        if not slot and not target_id and len(state.equipment) == 1:
+            slot = next(iter(state.equipment))
+        if not slot:
+            return RuleOutcome(
+                ok=False, code="not_equipped",
+                message="That item is not equipped.",
+            )
+        item_id = state.equipment.get(slot, "")
+        name = items[item_id].name if item_id in items else item_id
+        return RuleOutcome(
+            ok=True, code="unequipped",
+            message=f"You remove the {name}.",
+            effects=[Effect(kind="unequip_item", target=slot)],
+        )
+
+    def _merchant_here(self, world: WorldDefinition, state: GameState):
+        return next(
+            (
+                entity
+                for entity in self._entities_present(world, state)
+                if entity.shop_items
+            ),
+            None,
+        )
+
+    def _buy(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        if not target_id:
+            return RuleOutcome(
+                ok=False, code="missing_target", message="buy requires an item id."
+            )
+        item = self._items(world).get(target_id)
+        if item is None:
+            return RuleOutcome(
+                ok=False, code="unknown_item", message=f"There is no item '{target_id}'."
+            )
+        merchant = self._merchant_here(world, state)
+        if merchant is None or target_id not in merchant.shop_items:
+            return RuleOutcome(
+                ok=False, code="not_for_sale",
+                message=f"Nobody here sells the {item.name}.",
+            )
+        if item.price <= 0:
+            return RuleOutcome(
+                ok=False, code="not_for_sale",
+                message=f"The {item.name} has no price and cannot be bought.",
+            )
+        if state.currency < item.price:
+            return RuleOutcome(
+                ok=False, code="insufficient_funds",
+                message=f"The {item.name} costs {item.price}; you have {state.currency}.",
+            )
+        return RuleOutcome(
+            ok=True, code="bought",
+            message=f"You buy the {item.name} for {item.price}.",
+            effects=[
+                Effect(kind="remove_currency", amount=item.price),
+                Effect(kind="give_item", target=item.id, amount=1),
+            ],
+        )
+
+    def _sell(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        if not target_id:
+            return RuleOutcome(
+                ok=False, code="missing_target", message="sell requires an item id."
+            )
+        item = self._items(world).get(target_id)
+        if item is None:
+            return RuleOutcome(
+                ok=False, code="unknown_item", message=f"There is no item '{target_id}'."
+            )
+        if state.inventory.get(target_id, 0) <= 0:
+            return RuleOutcome(
+                ok=False, code="not_carried",
+                message=f"You do not carry the {item.name}.",
+            )
+        merchant = self._merchant_here(world, state)
+        if merchant is None:
+            return RuleOutcome(
+                ok=False, code="no_merchant",
+                message="There is no merchant here to buy it.",
+            )
+        if item.price <= 0:
+            return RuleOutcome(
+                ok=False, code="no_value",
+                message=f"The {item.name} has no trade value.",
+            )
+        offer = max(1, item.price // 2)
+        return RuleOutcome(
+            ok=True, code="sold",
+            message=f"You sell the {item.name} for {offer}.",
+            effects=[
+                Effect(kind="remove_item", target=item.id, amount=1),
+                Effect(kind="add_currency", amount=offer),
+            ],
+        )
+
+    def _choose(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        pending = state.pending_choice
+        if pending is None:
+            return RuleOutcome(
+                ok=False, code="no_pending_choice",
+                message="There is no choice waiting to be resolved.",
+            )
+        option_ids = {option.get("id") for option in pending.options}
+        if not target_id or target_id not in option_ids:
+            return RuleOutcome(
+                ok=False, code="invalid_choice",
+                message="That option is not part of the pending choice.",
+            )
+        return RuleOutcome(
+            ok=True, code="chosen",
+            message="You make your choice.",
+            effects=[
+                Effect(kind="resolve_choice", target=pending.choice_id, value=target_id)
+            ],
         )
 
     def _take(
@@ -610,9 +941,16 @@ class RulesEngine:
         )
 
     @staticmethod
-    def _player_stats(state: GameState) -> Tuple[int, int]:
+    def _player_stats(world: WorldDefinition, state: GameState) -> Tuple[int, int]:
         attack = int(state.flags.get("player_attack", 4) or 4)
         defense = int(state.flags.get("player_defense", 1) or 1)
+        items = {item.id: item for item in world.items}
+        for item_id in state.equipment.values():
+            item = items.get(item_id)
+            if item is None:
+                continue
+            attack += int(item.bonus.get("attack", 0) or 0)
+            defense += int(item.bonus.get("defense", 0) or 0)
         return attack, defense
 
     @staticmethod
@@ -682,7 +1020,7 @@ class RulesEngine:
             return error
         assert entity is not None and combatant is not None
         rng = random.Random(self._seed(state, "attack", entity.id))
-        player_attack, _player_defense = self._player_stats(state)
+        player_attack, _player_defense = self._player_stats(world, state)
         # A hit needs more than a lucky swing: compare the attacker's power to
         # the target's guard and fold the remainder into a bounded chance.
         hit_chance = min(0.95, max(0.05, 0.5 + (player_attack - combatant.defense) * 0.1))
@@ -711,6 +1049,11 @@ class RulesEngine:
             effects.append(Effect(kind="set_flag", target="combat_active", value=True))
         if counter:
             effects.append(Effect(kind="player_damage", target="player", amount=counter))
+        effects.append(Effect(kind="adjust_alert", target=entity.id, amount=1))
+        if hit:
+            effects.append(
+                Effect(kind="adjust_relation", target=entity.id, value="player", amount=-1)
+            )
         parts = [f"You strike at {entity.name}." if hit else f"You lunge at {entity.name} and miss."]
         if hit:
             parts.append(f"{entity.name} takes {damage} damage.")
@@ -751,7 +1094,7 @@ class RulesEngine:
             return error
         assert entity is not None and combatant is not None
         rng = random.Random(self._seed(state, "defend", entity.id))
-        _attack, player_defense = self._player_stats(state)
+        _attack, player_defense = self._player_stats(world, state)
         guard = 2 + player_defense
         hit_chance = min(0.9, max(0.05, 0.5 + (combatant.attack - (player_defense + 2)) * 0.1))
         damage = 0
@@ -870,13 +1213,29 @@ class RulesEngine:
                     code="entity_dead",
                     message=f"{entity.name} is beyond conversation.",
                 )
-            line = entity.dialogue[0] if entity.dialogue else ""
+            record = state.entities.get(entity.id)
+            index = 0
+            if record is not None:
+                stored = record.flags.get("dialogue_index", 0)
+                index = int(stored) if isinstance(stored, (int, float)) else 0
+            line = (
+                entity.dialogue[index % len(entity.dialogue)]
+                if entity.dialogue
+                else ""
+            )
             message = (
                 f'{entity.name}: "{line}"'
                 if line
                 else f"You talk to {entity.name}."
             )
-            return RuleOutcome(ok=True, code="talked", message=message)
+            effects = (
+                [Effect(kind="advance_dialogue", target=entity.id)]
+                if entity.dialogue
+                else []
+            )
+            return RuleOutcome(
+                ok=True, code="talked", message=message, effects=effects
+            )
         names = [entity.name for entity in present] + legacy_names
         if not names:
             return RuleOutcome(

@@ -107,6 +107,12 @@ class ItemDef(_ConfigModel):
     use_effects: List[Effect] = Field(default_factory=list)
     #: Whether using the item spends one of it.
     consumable: bool = False
+    #: Equipment slot; empty means the item cannot be equipped.
+    slot: Literal["", "weapon", "armor", "accessory"] = ""
+    #: Stat bonuses applied while equipped (attack/defense/flee_chance).
+    bonus: Dict[str, int] = Field(default_factory=dict)
+    #: Authored trade value (custom actions/events decide when it is paid).
+    price: int = Field(0, ge=0)
 
 
 class EntityDef(_ConfigModel):
@@ -124,11 +130,15 @@ class EntityDef(_ConfigModel):
     location_id: str = Field(..., min_length=1, max_length=64)
     kind: Literal["npc", "creature", "object"] = "npc"
     dialogue: List[str] = Field(default_factory=list)
+    #: Items this NPC sells; empty means not a merchant.
+    shop_items: List[str] = Field(default_factory=list)
     hostile: bool = False
     attributes: Dict[str, Any] = Field(default_factory=dict)
     #: Items this entity starts with (repeated ids mean quantity). A chest is an
     #: object entity with items; an NPC uses the same field for belongings.
     items: List[str] = Field(default_factory=list)
+    #: Editorial faction/team label; inter-entity relations and alert are state.
+    faction: str = Field(default="", max_length=64)
 
 
 class DoorDef(_ConfigModel):
@@ -156,12 +166,17 @@ class Condition(_ConfigModel):
         "entity_at",
         "entity_alive",
         "entity_item_count",
+        "currency",
+        "level",
+        "entity_relation",
+        "entity_alert",
+        "skill",
     ]
     target: str = ""
     op: Literal["eq", "ne", "gte", "lte", "gt", "lt"] = "eq"
     value: Any = True
     #: Expected quantity for numeric entity conditions (entity_item_count).
-    count: int = Field(1, ge=0)
+    count: int = 1
 
 
 class Effect(_ConfigModel):
@@ -182,6 +197,17 @@ class Effect(_ConfigModel):
         "seed_entity",
         "give_entity",
         "take_entity",
+        "adjust_relation",
+        "adjust_alert",
+        "skill_change",
+        "offer_choice",
+        "resolve_choice",
+        "equip_item",
+        "unequip_item",
+        "advance_dialogue",
+        "add_currency",
+        "remove_currency",
+        "add_xp",
         "quest_accept",
         "quest_fail",
         "emit",
@@ -261,6 +287,26 @@ class EventBranchDef(_ConfigModel):
     followup_events: List[str] = Field(default_factory=list)
 
 
+class ChoiceOption(_ConfigModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=200)
+    effects: List[Effect] = Field(default_factory=list)
+
+
+class ChoiceDef(_ConfigModel):
+    """An authored choice set shown to the player while it is pending."""
+
+    id: str = Field(..., min_length=1, max_length=64)
+    prompt: str = Field(default="", max_length=500)
+    options: List[ChoiceOption] = Field(default_factory=list)
+
+
+class PendingChoice(BaseModel):
+    choice_id: str
+    prompt: str = ""
+    options: List[Dict[str, str]] = Field(default_factory=list)
+
+
 class GameEventDef(_ConfigModel):
     """A configurable event: validated conditions plus validated effects.
 
@@ -292,6 +338,8 @@ class GameEventDef(_ConfigModel):
     max_fires: Optional[int] = Field(None, ge=1)
     #: Ordered conditional outcomes; the first match adds to the base effects.
     branches: List[EventBranchDef] = Field(default_factory=list)
+    #: Inline choices: when non-empty, firing the event queues a pending choice.
+    choices: List[ChoiceOption] = Field(default_factory=list)
 
 
 class WorldDefinition(BaseModel):
@@ -311,6 +359,9 @@ class WorldDefinition(BaseModel):
     quests: List[QuestDef] = Field(default_factory=list)
     events: List[GameEventDef] = Field(default_factory=list)
     custom_actions: List[CustomActionDef] = Field(default_factory=list)
+    choices: List[ChoiceDef] = Field(default_factory=list)
+    #: Player skill values at campaign start; effects advance them later.
+    starting_skills: Dict[str, int] = Field(default_factory=dict)
 
     def validate_references(self) -> List[str]:
         """Return human-readable reference errors (empty list == valid).
@@ -327,6 +378,7 @@ class WorldDefinition(BaseModel):
         quest_ids = {quest.id for quest in self.quests}
         entity_ids = {entity.id for entity in self.entities}
         event_ids = {event.id for event in self.events}
+        choice_ids = {choice.id for choice in self.choices}
 
         for name, ids in (
             ("location", [loc.id for loc in self.locations]),
@@ -340,6 +392,17 @@ class WorldDefinition(BaseModel):
                 if value in seen:
                     errors.append(f"duplicate {name} id '{value}'")
                 seen.add(value)
+
+        for item in self.items:
+            for key, value in item.bonus.items():
+                if key not in ("attack", "defense", "flee_chance"):
+                    errors.append(
+                        f"item '{item.id}' has unknown bonus '{key}'"
+                    )
+                elif not isinstance(value, int) or isinstance(value, bool):
+                    errors.append(
+                        f"item '{item.id}' bonus '{key}' must be an integer"
+                    )
 
         if self.start_location_id not in location_ids:
             errors.append(
@@ -496,6 +559,11 @@ class WorldDefinition(BaseModel):
                     errors.append(
                         f"entity '{entity.id}' starts with unknown item '{item_id}'"
                     )
+            for item_id in entity.shop_items:
+                if item_id not in item_ids:
+                    errors.append(
+                        f"entity '{entity.id}' sells unknown item '{item_id}'"
+                    )
 
         for event in self.events:
             for condition in event.conditions:
@@ -517,6 +585,10 @@ class WorldDefinition(BaseModel):
                         effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
                     )
                 )
+                if effect.kind == "offer_choice" and effect.target not in choice_ids:
+                    errors.append(
+                        f"event '{event.id}' offers unknown choice '{effect.target}'"
+                    )
             if event.trigger == "action" and event.trigger_action is None:
                 errors.append(
                     f"event '{event.id}' uses trigger 'action' but has no trigger_action"
@@ -537,6 +609,26 @@ class WorldDefinition(BaseModel):
                     errors.append(
                         f"event '{event.id}' follow-up '{followup_id}' is unknown"
                     )
+            if event.choices:
+                if len(event.choices) < 2:
+                    errors.append(
+                        f"event '{event.id}' needs at least two inline choices"
+                    )
+                option_ids = set()
+                for option in event.choices:
+                    if option.id in option_ids:
+                        errors.append(
+                            f"event '{event.id}' has duplicate option '{option.id}'"
+                        )
+                    option_ids.add(option.id)
+                    for effect in option.effects:
+                        errors.extend(
+                            f"event '{event.id}' option '{option.id}' effect: {msg}"
+                            for msg in self._validate_effect(
+                                effect, item_ids, door_ids, quest_ids,
+                                entity_ids, location_ids,
+                            )
+                        )
             for index, branch in enumerate(event.branches):
                 label = branch.label or f"#{index + 1}"
                 for condition in branch.conditions:
@@ -573,6 +665,47 @@ class WorldDefinition(BaseModel):
         errors.extend(
             self._validate_custom_actions(item_ids, door_ids, location_ids, quest_ids, entity_ids)
         )
+        errors.extend(
+            self._validate_choices(item_ids, door_ids, location_ids, quest_ids, entity_ids)
+        )
+        return errors
+
+    def _validate_choices(
+        self,
+        item_ids: set,
+        door_ids: set,
+        location_ids: set,
+        quest_ids: set,
+        entity_ids: set,
+    ) -> List[str]:
+        errors: List[str] = []
+        known_choices = {choice.id for choice in self.choices}
+        seen = set()
+        for choice in self.choices:
+            if choice.id in seen:
+                errors.append(f"duplicate choice id '{choice.id}'")
+            seen.add(choice.id)
+            if len(choice.options) < 2:
+                errors.append(f"choice '{choice.id}' needs at least two options")
+            option_ids = set()
+            for option in choice.options:
+                if option.id in option_ids:
+                    errors.append(
+                        f"choice '{choice.id}' has duplicate option '{option.id}'"
+                    )
+                option_ids.add(option.id)
+                for effect in option.effects:
+                    errors.extend(
+                        f"choice '{choice.id}' option '{option.id}' effect: {msg}"
+                        for msg in self._validate_effect(
+                            effect, item_ids, door_ids, quest_ids,
+                            entity_ids, location_ids,
+                        )
+                    )
+                    if effect.kind == "offer_choice" and effect.target not in known_choices:
+                        errors.append(
+                            f"choice '{choice.id}' offers unknown choice '{effect.target}'"
+                        )
         return errors
 
     def _validate_custom_actions(
@@ -699,6 +832,23 @@ class WorldDefinition(BaseModel):
             known_entities = entity_ids if entity_ids is not None else set()
             if condition.target not in known_entities:
                 errors.append(f"unknown entity '{condition.target}'")
+        if condition.kind == "entity_relation":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+            if not isinstance(condition.value, str) or not condition.value:
+                errors.append("entity_relation requires value = other actor id")
+        if condition.kind == "entity_alert":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+        if condition.kind == "skill" and not condition.target:
+            errors.append("skill requires a skill name")
+        if condition.kind in ("currency", "level"):
+            try:
+                int(condition.count)
+            except (TypeError, ValueError):
+                errors.append(f"{condition.kind} requires an integer count")
         if condition.kind == "entity_item_count":
             known_entities = entity_ids if entity_ids is not None else set()
             if condition.target not in known_entities:
@@ -776,6 +926,25 @@ class WorldDefinition(BaseModel):
                 errors.append(f"unknown item '{effect.value}'")
             if int(effect.amount or 0) <= 0:
                 errors.append(f"{effect.kind} requires a positive amount")
+        if effect.kind in ("adjust_relation", "adjust_alert"):
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            if effect.kind == "adjust_relation" and (
+                not isinstance(effect.value, str) or not effect.value
+            ):
+                errors.append("adjust_relation requires value = other actor id")
+        if effect.kind == "skill_change" and not effect.target:
+            errors.append("skill_change requires a skill name")
+        if effect.kind == "advance_dialogue":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+        if effect.kind == "equip_item" and effect.target not in item_ids:
+            errors.append(f"unknown item '{effect.target}'")
+        if effect.kind in ("add_currency", "remove_currency", "add_xp"):
+            if int(effect.amount or 0) <= 0:
+                errors.append(f"{effect.kind} requires a positive amount")
         return errors
 
 
@@ -826,6 +995,10 @@ class EntityState(BaseModel):
     flags: Dict[str, Any] = Field(default_factory=dict)
     #: Items this entity currently owns or contains.
     inventory: Dict[str, int] = Field(default_factory=dict)
+    #: Opinion toward other actors, keyed by entity id or "player" (signed).
+    relations: Dict[str, int] = Field(default_factory=dict)
+    #: How watchful/hostile this entity currently is (0 = calm).
+    alert: int = 0
 
 
 class GameState(BaseModel):
@@ -853,6 +1026,17 @@ class GameState(BaseModel):
     entities: Dict[str, EntityState] = Field(default_factory=dict)
     combatants: Dict[str, CombatantState] = Field(default_factory=dict)
     combat: Dict[str, Any] = Field(default_factory=dict)
+    #: Player skill values, advanced by authored effects and checked by rules.
+    skills: Dict[str, int] = Field(default_factory=dict)
+    #: A choice offered by an event; resolved by the `choose` action.
+    pending_choice: Optional[PendingChoice] = None
+    #: Rolling long-term recap of committed turns (deterministic, bounded).
+    summary: str = ""
+    #: slot -> item id for equipped gear.
+    equipment: Dict[str, str] = Field(default_factory=dict)
+    currency: int = 0
+    xp: int = 0
+    level: int = 1
     updated_at: str = ""
 
 
@@ -867,6 +1051,12 @@ class ActionRequest(BaseModel):
     action: Literal[
         "move",
         "look",
+        "investigate",
+        "choose",
+        "equip",
+        "unequip",
+        "buy",
+        "sell",
         "take",
         "open",
         "use",
@@ -899,6 +1089,9 @@ class EventExecution(BaseModel):
     effects: List[Effect] = Field(default_factory=list)
     #: Label of the branch that matched, empty when no branch was used.
     branch: str = ""
+    #: Parent event for forced follow-ups, and its depth in the execution tree.
+    parent_event_id: str = ""
+    depth: int = 0
 
 
 class NarrativeResult(BaseModel):

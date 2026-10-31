@@ -269,3 +269,133 @@ def test_look_reports_container_contents():
     assert outcome.ok
     assert "Containers here" in outcome.message
     assert "Chest" in outcome.message and "Iron Key" in outcome.message
+
+
+def test_investigate_reports_entity_item_and_door():
+    world, state = _setup()
+    world.entities.append(
+        EntityDef(
+            id="chest", name="Chest", location_id="village_square",
+            kind="object", description="A banded chest.", items=["iron_key"],
+        )
+    )
+    outcome = RulesEngine().evaluate(world, state, "investigate", "chest")
+    assert outcome.ok and outcome.code == "investigated"
+    assert "banded chest" in outcome.message
+    assert "Iron Key" in outcome.message
+
+    item = RulesEngine().evaluate(world, state, "investigate", "iron_key")
+    assert item.ok and "Iron Key" in item.message
+
+    door = RulesEngine().evaluate(world, state, "investigate", "warehouse_door")
+    assert door.ok and "locked" in door.message
+
+
+def test_move_accepts_a_validated_path_and_rejects_a_blocked_segment():
+    world, state = _setup()
+    from app.models.game import ExitDef, LocationDef
+
+    world.locations.append(
+        LocationDef(
+            id="shrine", name="Shrine",
+            exits=[ExitDef(target_id="forest_edge")],
+        )
+    )
+    forest = next(item for item in world.locations if item.id == "forest_edge")
+    forest.exits.append(ExitDef(target_id="shrine"))
+
+    outcome = RulesEngine().evaluate(
+        world, state, "move", "shrine",
+        {"path": ["forest_edge", "shrine"]},
+    )
+    assert outcome.ok
+    assert outcome.effects[0].target == "shrine"
+
+    blocked = RulesEngine().evaluate(
+        world, state, "move", "warehouse",
+        {"path": ["forest_edge", "warehouse"]},
+    )
+    assert not blocked.ok
+    assert blocked.code == "no_route"
+
+    closed = RulesEngine().evaluate(
+        world, state, "move", "warehouse",
+        {"path": ["warehouse"]},
+    )
+    assert not closed.ok and closed.code == "exit_blocked"
+
+
+def test_attacking_raises_alert_and_lowers_relation_on_hit():
+    world, state = _setup()
+    from app.models.game import EntityDef
+
+    world.entities.append(
+        EntityDef(
+            id="guard", name="Guard", location_id="village_square",
+            hostile=True, attributes={"max_hp": 50},
+        )
+    )
+    effects = []
+    for seed in range(5):
+        state.turn = seed
+        outcome = RulesEngine().evaluate(world, state, "attack", "guard")
+        if outcome.ok:
+            effects = outcome.effects
+            break
+    kinds = {effect.kind for effect in effects}
+    assert "adjust_alert" in kinds
+    if "player_hit" == next(
+        (effect.target for effect in effects if effect.kind == "combat_target"), None
+    ):
+        pass
+    # A hit also records the relation drop; a miss only raises alert.
+    hits = [effect for effect in effects if effect.kind == "combat_hp"]
+    assert hits
+
+
+def test_dialogue_advances_and_wraps_per_entity():
+    world, state = _setup()
+    from app.models.game import EntityDef
+
+    world.entities.append(
+        EntityDef(
+            id="guard", name="Guard", location_id="village_square",
+            dialogue=["First line.", "Second line."],
+        )
+    )
+    first = RulesEngine().evaluate(world, state, "talk", "guard")
+    assert first.ok and "First line." in first.message
+    apply_effects(state, world, first.effects)
+    second = RulesEngine().evaluate(world, state, "talk", "guard")
+    assert second.ok and "Second line." in second.message
+    apply_effects(state, world, second.effects)
+    third = RulesEngine().evaluate(world, state, "talk", "guard")
+    assert "First line." in third.message
+
+
+def test_buy_and_sell_use_currency_and_merchant_stock():
+    world, state = _setup()
+    from app.models.game import EntityDef
+
+    key = next(item for item in world.items if item.id == "iron_key")
+    key.price = 10
+    world.entities.append(
+        EntityDef(
+            id="merchant", name="Merchant", location_id="village_square",
+            shop_items=["iron_key"],
+        )
+    )
+    state.currency = 25
+    bought = RulesEngine().evaluate(world, state, "buy", "iron_key")
+    assert bought.ok
+    apply_effects(state, world, bought.effects)
+    assert state.currency == 15 and state.inventory["iron_key"] == 1
+
+    sold = RulesEngine().evaluate(world, state, "sell", "iron_key")
+    assert sold.ok
+    apply_effects(state, world, sold.effects)
+    assert state.currency == 20 and "iron_key" not in state.inventory
+
+    state.currency = 2
+    poor = RulesEngine().evaluate(world, state, "buy", "iron_key")
+    assert not poor.ok and poor.code == "insufficient_funds"

@@ -1,9 +1,12 @@
+import hmac
 import logging
 import mimetypes
+import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -20,7 +23,7 @@ from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
 from app.engines.llm_router import LLMProvider
 
-app = FastAPI(title="Project Lunar", version="0.2.0")
+app = FastAPI(title="Project Lunar", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,6 +41,29 @@ app.include_router(game_router, prefix="/api/game", tags=["game"])
 app.include_router(engine_router, prefix="/api/v1", tags=["engine"])
 app.include_router(characters_router, prefix="/api", tags=["characters"])
 app.include_router(knowledge_router, prefix="/api/v1", tags=["knowledge"])
+
+
+@app.middleware("http")
+async def api_token_guard(request: Request, call_next):
+    """Optional bearer-token gate for every /api route.
+
+    Off unless API_TOKEN is set. The health probe stays public so process
+    supervisors and load balancers can check liveness without a secret.
+    """
+    token = os.environ.get("API_TOKEN", "").strip()
+    if (
+        token
+        and request.url.path.startswith("/api")
+        and request.url.path != "/api/health"
+    ):
+        supplied = request.headers.get("authorization", "")
+        if supplied.lower().startswith("bearer "):
+            supplied = supplied[7:].strip()
+        else:
+            supplied = request.headers.get("x-api-token", "").strip()
+        if not hmac.compare_digest(supplied, token):
+            return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+    return await call_next(request)
 
 # Windows registry often lacks these; StaticFiles would fall back to text/plain.
 mimetypes.add_type("image/webp", ".webp")

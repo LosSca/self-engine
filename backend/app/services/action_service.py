@@ -48,7 +48,8 @@ from app.models.game import (
 )
 from app.models.knowledge import ScenarioPlayContext
 from app.services.knowledge_service import build_context
-from app.services.narrative_service import TemplateNarrator
+from app.services.narrative_service import TemplateNarrator, preset_router
+from app.services.summary_service import SUMMARY_EVERY_TURNS, summarize
 
 
 logger = logging.getLogger(__name__)
@@ -176,14 +177,23 @@ class ActionService:
         state: Optional[GameState] = None,
         story_nodes: Optional[List[str]] = None,
         focus: Optional[List[str]] = None,
+        query: str = "",
     ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
         provider = self.history_provider
         blocks: List[Dict[str, Any]] = []
+        if state is not None and state.summary:
+            blocks.append(
+                {
+                    "id": f"longterm:{state.campaign_id}",
+                    "layer": "history",
+                    "title": "长期摘要",
+                    "content": state.summary,
+                    "kind": "history",
+                }
+            )
         if play is None and (state is None or provider is None):
-            # Nothing authored and no record to recall: no context at all.
-            # Every local this function later assigns is already bound here, so
-            # this early return cannot trip over an unbound name.
-            return [], [], None
+            # Nothing authored and no record to recall: only long-term memory.
+            return blocks, [block["id"] for block in blocks], None
         if play is not None:
             try:
                 if play.config.mode == "storyline":
@@ -207,6 +217,7 @@ class ActionService:
                     story_nodes=story_nodes,
                     focus=focus,
                     budget_chars=play.config.context_budget_chars,
+                    query=query,
                 )
                 blocks = [dict(block, kind="canon") for block in context.prompt_blocks()]
             except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
@@ -234,6 +245,8 @@ class ActionService:
                     options["model"] = play.preset.model
         if play is not None and play.language:
             options = {**(options or {}), "language": play.language}
+        if play is not None and play.config.narrator_prompt:
+            options = {**(options or {}), "system_prompt": play.config.narrator_prompt}
         if not blocks:
             # Sampling settings are authored too: they apply even when the
             # scenario has no knowledge entries to hand over.
@@ -458,6 +471,7 @@ class ActionService:
                     None,
                     state,
                     focus=self._focus_tokens(world, state, request),
+                    query=str(request.params.get("text") or ""),
                 )
                 knowledge = blocks
                 narrative = await self.narrator.narrate(
@@ -533,6 +547,41 @@ class ActionService:
     async def _call_narrator(self, *args, **kwargs):
         return await self.narrator.narrate(*args, **kwargs)
 
+    def _append_summary(
+        self,
+        state: GameState,
+        request: ActionRequest,
+        outcome: RuleOutcome,
+        narrative: NarrativeResult,
+    ) -> None:
+        """Keep a bounded, deterministic recap of committed turns."""
+        text = (narrative.text or "").strip() or (outcome.message or "").strip()
+        if not text:
+            return
+        line = f"[T{state.turn}] {text[:200]}"
+        lines = [item for item in (state.summary or "").split("\n") if item]
+        lines.append(line)
+        state.summary = "\n".join(lines[-12:])[-2000:]
+
+    async def _maybe_llm_summary(self, state: GameState, play) -> None:
+        if play is None or play.summary_preset is None:
+            return
+        if play.summary_preset.role not in ("summary", "any"):
+            return
+        if state.turn % SUMMARY_EVERY_TURNS != 0:
+            return
+        router = preset_router(
+            {
+                "provider": play.summary_preset.provider,
+                "model": play.summary_preset.model,
+            }
+        )
+        if router is None:
+            return
+        summarized = await summarize(router, state.summary)
+        if summarized:
+            state.summary = summarized
+
     async def _narrate_applied(
         self,
         request: ActionRequest,
@@ -561,6 +610,7 @@ class ActionService:
                 active_node,
                 new_state,
                 focus=self._focus_tokens(world, new_state, request),
+                query=str(request.params.get("text") or ""),
             )
         except Exception as exc:  # noqa: BLE001 - context is advisory only
             return (
@@ -568,6 +618,18 @@ class ActionService:
                 [],
             )
         knowledge = blocks
+        if (
+            play is not None
+            and request.action == "talk"
+            and play.dialogue_preset is not None
+            and play.dialogue_preset.role in ("dialogue", "any")
+            and play.dialogue_preset.provider
+        ):
+            options = {
+                **(options or {}),
+                "provider": play.dialogue_preset.provider,
+                "model": play.dialogue_preset.model,
+            }
         try:
             narrative = await self.narrator.narrate(
                 request,
@@ -631,10 +693,11 @@ class ActionService:
         combat_round = self._combat_round(request, state, new_state, applied)
         processed: set[str] = set()
         forced: set[str] = set()
+        origins: dict = {}
         attempted_quests: set[str] = set()
         new_state, executions, event_facts = run_triggered_events(
             world, new_state, request.action, request.target_id, facts,
-            processed=processed, forced=forced,
+            processed=processed, forced=forced, origins=origins,
         )
         new_state, quest_updates, reward_facts = advance_quests(
             world, new_state, facts + event_facts, attempted=attempted_quests
@@ -644,7 +707,7 @@ class ActionService:
                 break
             new_state, more_executions, event_facts = run_triggered_events(
                 world, new_state, request.action, request.target_id,
-                reward_facts, processed=processed, forced=forced,
+                reward_facts, processed=processed, forced=forced, origins=origins,
             )
             executions.extend(more_executions)
             if not event_facts:
@@ -676,6 +739,8 @@ class ActionService:
         narrative, context_entries = await self._narrate_applied(
             request, outcome, new_state, world, executions, quest_updates, play, active_node
         )
+        self._append_summary(new_state, request, outcome, narrative)
+        await self._maybe_llm_summary(new_state, play)
 
         result = ActionResult(
             **self._base(request),
@@ -714,6 +779,9 @@ class ActionService:
                         "name": execution.name,
                         "reason": execution.reason,
                         "effects": [e.model_dump(mode="json") for e in execution.effects],
+                        "branch": execution.branch,
+                        "parent_event_id": execution.parent_event_id,
+                        "depth": execution.depth,
                     },
                     "state_version": new_state.version,
                 }

@@ -333,12 +333,57 @@ class TextActionParser:
                 matched_name=self._display(matched, world, action) if matched else "",
                 confidence="exact" if matched else "verb_only",
             )
+        if action in ("buy", "sell"):
+            candidates = (
+                self._shop_candidates(world, state)
+                if action == "buy"
+                else self._item_candidates(world, state)
+            )
+            matched = self._best(fragment, candidates) if fragment else None
+            if matched is None:
+                return ParsedAction(
+                    action=action,
+                    confidence="missing_target",
+                    note=f"could not resolve a target from '{fragment}'",
+                )
+            return ParsedAction(
+                action=action,
+                target_id=matched.id,
+                matched_name=self._display(matched, world, action),
+                confidence="exact",
+            )
+        if action == "investigate":
+            if not fragment:
+                return ParsedAction(action="investigate", confidence="verb_only")
+            candidates = (
+                self._entity_candidates(world, state)
+                + self._item_candidates(world, state)
+                + self._door_candidates(world, state)
+                + self._move_candidates(world, state)
+            )
+            matched = self._best(fragment, candidates)
+            if matched is None:
+                return ParsedAction(
+                    action="investigate",
+                    confidence="missing_target",
+                    note=f"could not resolve a target from '{fragment}'",
+                )
+            return ParsedAction(
+                action="investigate",
+                target_id=matched.id,
+                matched_name=self._display(matched, world, "investigate"),
+                confidence="exact",
+            )
         if action == "talk" and not fragment:
             return ParsedAction(action="talk", confidence="verb_only")
         if action == "move":
             rules = ("move", self._move_candidates(world, state))
-        elif action in ("take", "use"):
+        elif action in ("take", "use", "equip"):
             rules = (action, self._item_candidates(world, state))
+        elif action == "unequip":
+            if not fragment:
+                return ParsedAction(action="unequip", confidence="verb_only")
+            rules = ("unequip", self._item_candidates(world, state))
         elif action == "open":
             rules = ("open", self._door_candidates(world, state))
         elif action == "talk":
@@ -374,11 +419,35 @@ class TextActionParser:
 
     @staticmethod
     def _display(candidate: _Candidate, world: WorldDefinition, action: str) -> str:
+        if action in ("buy", "sell"):
+            candidates = (
+                self._shop_candidates(world, state)
+                if action == "buy"
+                else self._item_candidates(world, state)
+            )
+            matched = self._best(fragment, candidates) if fragment else None
+            if matched is None:
+                return ParsedAction(
+                    action=action,
+                    confidence="missing_target",
+                    note=f"could not resolve a target from '{fragment}'",
+                )
+            return ParsedAction(
+                action=action,
+                target_id=matched.id,
+                matched_name=self._display(matched, world, action),
+                confidence="exact",
+            )
+        if action == "investigate":
+            for collection in (world.entities, world.items, world.doors, world.locations):
+                for entry in collection:
+                    if entry.id == candidate.id:
+                        return entry.name
         if action == "move":
             for location in world.locations:
                 if location.id == candidate.id:
                     return location.name
-        if action in ("take", "use"):
+        if action in ("take", "use", "equip", "unequip", "buy", "sell"):
             for item in world.items:
                 if item.id == candidate.id:
                     return item.name
@@ -420,6 +489,23 @@ class TextActionParser:
             ):
                 items.append(_Candidate(item.id, [item.name, item.id], "item"))
         return items
+
+    @staticmethod
+    def _shop_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
+        items = {item.id: item for item in world.items}
+        seen = set()
+        candidates = []
+        for entity in world.entities:
+            if entity_location(state, world, entity.id) != state.location_id:
+                continue
+            for item_id in entity.shop_items:
+                if item_id in seen or item_id not in items:
+                    continue
+                seen.add(item_id)
+                candidates.append(
+                    _Candidate(item_id, [items[item_id].name, item_id], "item")
+                )
+        return candidates
 
     @staticmethod
     def _door_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
@@ -529,7 +615,7 @@ class TextActionService:
         parsed = self.parser.parse(text, world, state)
         advised = None
         if parsed is None or not parsed.action:
-            advised = await self._advise(text, world, state)
+            advised = await self._advise(text, world, state, campaign_id)
             if advised is not None:
                 parsed = advised
         if parsed is None or not parsed.action or parsed.confidence in _PARSE_FAILURES:
@@ -587,8 +673,32 @@ class TextActionService:
             "result": json.loads(result.model_dump_json()),
         }
 
+    def _intent_router(self, campaign_id: str):
+        """Router from the scenario's intent preset, or None to keep the global one."""
+        if self.scenario_store is None:
+            return None
+        try:
+            campaign = self.scenario_store.get_campaign(campaign_id)
+            if campaign is None:
+                return None
+            config = self.scenario_store.get_play_config(campaign.scenario_id)
+            preset = (
+                self.scenario_store.get_model_preset(config.intent_preset_id)
+                if config.intent_preset_id
+                else None
+            )
+            if preset is None or preset.role not in ("intent", "any") or not preset.provider:
+                return None
+            from app.services.narrative_service import preset_router
+
+            return preset_router(
+                {"provider": preset.provider, "model": preset.model}
+            )
+        except Exception:  # noqa: BLE001 - advice is optional
+            return None
+
     async def _advise(
-        self, text: str, world: WorldDefinition, state: GameState
+        self, text: str, world: WorldDefinition, state: GameState, campaign_id: str
     ) -> Optional[ParsedAction]:
         """Second chance for an utterance the deterministic parser did not map.
 
@@ -601,6 +711,9 @@ class TextActionService:
         if mode not in ("DO", "SAY") or not intent_advisor.enabled():
             return None
         advisor = self.advisor
+        router = self._intent_router(campaign_id) if advisor is not None else None
+        if router is not None:
+            advisor = intent_advisor.IntentAdvisor(router)
         if advisor is None:
             logger.info("intent advisor is enabled but not wired; keeping the rejection")
             return None

@@ -152,12 +152,38 @@ def put_play_config(scenario_id: str, body: PlayConfigUpdate):
                 if body.model_preset_id is not None
                 else current.model_preset_id
             ),
+            intent_preset_id=(
+                body.intent_preset_id
+                if body.intent_preset_id is not None
+                else current.intent_preset_id
+            ),
+            narrator_prompt=(
+                body.narrator_prompt
+                if body.narrator_prompt is not None
+                else current.narrator_prompt
+            ),
+            dialogue_preset_id=(
+                body.dialogue_preset_id
+                if body.dialogue_preset_id is not None
+                else current.dialogue_preset_id
+            ),
+            summary_preset_id=(
+                body.summary_preset_id
+                if body.summary_preset_id is not None
+                else current.summary_preset_id
+            ),
         )
-        if config.model_preset_id and store.get_model_preset(config.model_preset_id) is None:
-            raise HTTPException(
-                status_code=400,
-                detail=[f"unknown model preset '{config.model_preset_id}'"],
-            )
+        for preset_id in (
+            config.model_preset_id,
+            config.intent_preset_id,
+            config.dialogue_preset_id,
+            config.summary_preset_id,
+        ):
+            if preset_id and store.get_model_preset(preset_id) is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=[f"unknown model preset '{preset_id}'"],
+                )
         errors = knowledge_service.validate_play_config(
             config, store.list_knowledge(scenario_id)
         )
@@ -198,6 +224,9 @@ def preview_context(
     focus: Optional[str] = Query(
         None, description="逗号分隔的聚焦词（当前位置、目标、NPC），命中的标签优先"
     ),
+    query: Optional[str] = Query(
+        None, description="用于稀疏向量相似度的查询文本（通常是玩家这句话）"
+    ),
 ):
     store = _store()
     try:
@@ -216,6 +245,7 @@ def preview_context(
             story_nodes=entered or None,
             focus=focused or None,
             budget_chars=config.context_budget_chars,
+            query=query or "",
         )
     finally:
         store.close()
