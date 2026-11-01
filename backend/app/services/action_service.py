@@ -170,6 +170,25 @@ class ActionService:
         except Exception:  # noqa: BLE001 - degrade instead of failing the action
             return None
 
+    @staticmethod
+    def _preset_sampling(preset) -> Dict[str, Any]:
+        if preset is None:
+            return {}
+        values = {
+            "temperature": preset.temperature,
+            "max_tokens": preset.max_tokens,
+        }
+        for key in (
+            "top_p", "top_k", "min_p", "repetition_penalty",
+            "presence_penalty", "frequency_penalty", "seed",
+        ):
+            value = getattr(preset, key, None)
+            if value is not None:
+                values[key] = value
+        if getattr(preset, "stop", None):
+            values["stop"] = list(preset.stop)
+        return values
+
     def _knowledge(
         self,
         play: Optional[ScenarioPlayContext],
@@ -234,10 +253,7 @@ class ActionService:
                 blocks.append(dict(block, kind="history"))
         options: Optional[Dict[str, Any]] = None
         if play is not None and play.preset is not None:
-            options = {
-                "temperature": play.preset.temperature,
-                "max_tokens": play.preset.max_tokens,
-            }
+            options = self._preset_sampling(play.preset)
             if play.preset.role in ("narrator", "any"):
                 if play.preset.provider:
                     options["provider"] = play.preset.provider
@@ -245,8 +261,13 @@ class ActionService:
                     options["model"] = play.preset.model
         if play is not None and play.language:
             options = {**(options or {}), "language": play.language}
+        prompt_parts = []
+        if play is not None and play.preset is not None and play.preset.system_prompt:
+            prompt_parts.append(play.preset.system_prompt)
         if play is not None and play.config.narrator_prompt:
-            options = {**(options or {}), "system_prompt": play.config.narrator_prompt}
+            prompt_parts.append(play.config.narrator_prompt)
+        if prompt_parts:
+            options = {**(options or {}), "system_prompt": "\n\n".join(prompt_parts)}
         if not blocks:
             # Sampling settings are authored too: they apply even when the
             # scenario has no knowledge entries to hand over.
@@ -627,9 +648,20 @@ class ActionService:
         ):
             options = {
                 **(options or {}),
+                **self._preset_sampling(play.dialogue_preset),
                 "provider": play.dialogue_preset.provider,
                 "model": play.dialogue_preset.model,
             }
+            if play.dialogue_preset.system_prompt:
+                options["system_prompt"] = "\n\n".join(
+                    filter(
+                        None,
+                        [
+                            play.dialogue_preset.system_prompt,
+                            play.config.narrator_prompt,
+                        ],
+                    )
+                )
         try:
             narrative = await self.narrator.narrate(
                 request,

@@ -236,3 +236,25 @@ async def test_summary_service_returns_bounded_text_and_fails_silently():
             raise RuntimeError("down")
 
     assert await summarize(Broken(), "[T1] recap") == ""
+
+
+@pytest.mark.asyncio
+async def test_narrator_forwards_sillytavern_samplers():
+    router = StubRouter()
+    narrator = LLMNarrator(router, language="zh")
+    state = build_initial_state(village_world(), "c")
+    await narrator.narrate(
+        ActionRequest(campaign_id="c", request_id="r", action="look"),
+        RuleOutcome(ok=True, message="ok"),
+        state,
+        village_world(),
+        options={
+            "temperature": 0.5, "top_p": 0.9, "top_k": 60,
+            "repetition_penalty": 1.1, "stop": ["\nUser:"],
+        },
+    )
+    kwargs = router.calls[-1]["kwargs"]
+    assert kwargs["temperature"] == 0.5
+    assert kwargs["top_p"] == 0.9 and kwargs["top_k"] == 60
+    assert kwargs["repetition_penalty"] == 1.1
+    assert kwargs["stop"] == ["\nUser:"]

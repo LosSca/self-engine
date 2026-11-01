@@ -310,3 +310,36 @@ def test_intent_preset_and_narrator_prompt_roundtrip(client, scenario_id):
     )
     assert bad.status_code == 400
     assert "ghost" in bad.text
+
+
+def test_ai_knowledge_generation_requires_a_model(client, scenario_id, monkeypatch):
+    from app.services import ai_generator
+
+    monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: None)
+    res = client.post(
+        f"/api/v1/scenarios/{scenario_id}/generate/knowledge",
+        json={"prompt": "海岛", "count": 1},
+    )
+    assert res.status_code == 503
+
+
+def test_ai_knowledge_generation_returns_editable_drafts(client, scenario_id, monkeypatch):
+    import json
+
+    from app.services import ai_generator
+
+    class Router:
+        async def complete(self, messages, **kwargs):
+            return json.dumps({"entries": [
+                {"layer": "global", "title": "群岛", "content": "雾", "tags": ["world"]}
+            ]})
+
+    monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: Router())
+    res = client.post(
+        f"/api/v1/scenarios/{scenario_id}/generate/knowledge",
+        json={"prompt": "海岛", "count": 1},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["entries"][0]["title"] == "群岛"
+    # Drafts are not saved until the author applies them.
+    assert client.get(f"/api/v1/scenarios/{scenario_id}/knowledge").json() == []

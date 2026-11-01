@@ -26,7 +26,7 @@ from app.models.knowledge import (
     PlayConfig,
     PlayConfigUpdate,
 )
-from app.services import knowledge_service
+from app.services import ai_generator, knowledge_service
 
 router = APIRouter(tags=["knowledge"])
 
@@ -41,6 +41,20 @@ def _store() -> ScenarioStore:
 class ValidateResponse(BaseModel):
     valid: bool
     errors: List[str] = Field(default_factory=list)
+
+
+class GenerateKnowledgeRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    count: int = Field(6, ge=1, le=20)
+    preset_id: str = ""
+    language: str = "中文"
+
+
+class GenerateStorylineRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    node_count: int = Field(6, ge=2, le=20)
+    preset_id: str = ""
+    language: str = "中文"
 
 
 class LayersResponse(BaseModel):
@@ -247,6 +261,67 @@ def preview_context(
             budget_chars=config.context_budget_chars,
             query=query or "",
         )
+    finally:
+        store.close()
+
+
+# ------------------------------------------------------- AI drafting
+def _generation_router(store: ScenarioStore, preset_id: str):
+    preset = store.get_model_preset(preset_id) if preset_id else None
+    if preset_id and preset is None:
+        raise HTTPException(status_code=400, detail=[f"unknown model preset '{preset_id}'"])
+    return ai_generator.router_for(preset)
+
+
+@router.post("/scenarios/{scenario_id}/generate/knowledge")
+async def generate_knowledge(
+    scenario_id: str, body: GenerateKnowledgeRequest
+):
+    store = _store()
+    try:
+        _require_scenario(store, scenario_id)
+        router = _generation_router(store, body.preset_id)
+        if router is None:
+            raise HTTPException(
+                status_code=503,
+                detail="未配置可用模型：请先设置供应商密钥或本地模型",
+            )
+        try:
+            drafts = await ai_generator.generate_knowledge(
+                router, body.prompt, body.count, body.language
+            )
+        except ai_generator.GenerationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        return {"entries": drafts, "valid": len([d for d in drafts if "_error" not in d])}
+    finally:
+        store.close()
+
+
+@router.post("/scenarios/{scenario_id}/generate/storyline")
+async def generate_storyline(
+    scenario_id: str, body: GenerateStorylineRequest
+):
+    store = _store()
+    try:
+        _require_scenario(store, scenario_id)
+        router = _generation_router(store, body.preset_id)
+        if router is None:
+            raise HTTPException(
+                status_code=503,
+                detail="未配置可用模型：请先设置供应商密钥或本地模型",
+            )
+        knowledge_ids = [entry.id for entry in store.list_knowledge(scenario_id)]
+        try:
+            draft = await ai_generator.generate_storyline(
+                router,
+                body.prompt,
+                body.node_count,
+                knowledge_ids=knowledge_ids,
+                language=body.language,
+            )
+        except ai_generator.GenerationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        return draft
     finally:
         store.close()
 

@@ -450,11 +450,21 @@ class LLMNarrator:
         )
         max_tokens = self.max_tokens
         temperature = self.temperature
+        sampler_kwargs: dict = {}
         if options:
             if isinstance(options.get("max_tokens"), int) and options["max_tokens"] > 0:
                 max_tokens = options["max_tokens"]
             if isinstance(options.get("temperature"), (int, float)):
                 temperature = float(options["temperature"])
+            for key in (
+                "top_p", "top_k", "min_p", "repetition_penalty",
+                "presence_penalty", "frequency_penalty", "seed",
+            ):
+                if options.get(key) is not None:
+                    sampler_kwargs[key] = options[key]
+            stop = options.get("stop")
+            if isinstance(stop, list) and stop:
+                sampler_kwargs["stop"] = [str(item) for item in stop if str(item)]
         try:
             router = preset_router(options) or self.router
             text = await asyncio.wait_for(
@@ -462,6 +472,7 @@ class LLMNarrator:
                     messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    **sampler_kwargs,
                 ),
                 timeout=self.timeout,
             )

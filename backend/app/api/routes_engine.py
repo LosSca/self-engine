@@ -262,6 +262,13 @@ class ImportCampaignRequest(BaseModel):
     reset: bool = False
 
 
+class GenerateWorldRequest(BaseModel):
+    scenario_id: str = ""
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    preset_id: str = ""
+    language: str = "中文"
+
+
 def _debug_tools_enabled() -> bool:
     """Whether state-mutating debug endpoints (rollback, repair) may run.
 
@@ -313,6 +320,54 @@ def list_worlds(scenario_id: Optional[str] = Query(None)):
 def validate_world_definition(world: WorldDefinition):
     errors = world_service.validate_world(world)
     return ValidateResponse(valid=not errors, errors=errors)
+
+
+@router.post("/worlds/generate", response_model=Dict[str, Any])
+async def generate_world(body: GenerateWorldRequest):
+    """Draft and save a new validated world from a prompt."""
+    from uuid import uuid4
+
+    from app.services import ai_generator
+
+    scenario_store = _get_scenario_store()
+    game_store = _get_store()
+    try:
+        if body.scenario_id and scenario_store.get_scenario(body.scenario_id) is None:
+            raise HTTPException(status_code=404, detail="unknown scenario")
+        preset = (
+            scenario_store.get_model_preset(body.preset_id)
+            if body.preset_id
+            else None
+        )
+        if body.preset_id and preset is None:
+            raise HTTPException(
+                status_code=400, detail=f"unknown model preset '{body.preset_id}'"
+            )
+        router = ai_generator.router_for(preset)
+        if router is None:
+            raise HTTPException(
+                status_code=503,
+                detail="未配置可用模型：请先设置供应商密钥或本地模型",
+            )
+        world_id = f"ai_{uuid4().hex[:8]}"
+        try:
+            draft = await ai_generator.generate_world(
+                router, body.prompt, body.scenario_id, world_id, body.language
+            )
+        except ai_generator.GenerationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        world = draft["world"]
+        ai_generator.save_generated_world(game_store, world)
+        return {
+            "status": "saved",
+            "world_id": world.world_id,
+            "name": world.name,
+            "counts": draft["counting"],
+            "world": world.model_dump(mode="json"),
+        }
+    finally:
+        game_store.close()
+        scenario_store.close()
 
 
 @router.get("/worlds/{world_id}", response_model=WorldDefinition)

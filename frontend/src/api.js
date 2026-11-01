@@ -641,6 +641,33 @@ export async function previewKnowledgeContext(scenarioId, { mode, maxDepth, stor
   return jsonOrThrow(r, '预览知识上下文失败')
 }
 
+export async function generateKnowledgeDraft(scenarioId, { prompt, count = 6, presetId = '' } = {}) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/generate/knowledge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, count, preset_id: presetId }),
+  })
+  return jsonOrThrow(r, 'AI 生成知识失败')
+}
+
+export async function generateStorylineDraft(scenarioId, { prompt, nodeCount = 6, presetId = '' } = {}) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/generate/storyline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, node_count: nodeCount, preset_id: presetId }),
+  })
+  return jsonOrThrow(r, 'AI 生成剧情线失败')
+}
+
+export async function generateWorldFromPrompt({ scenarioId = '', prompt, presetId = '' } = {}) {
+  const r = await fetch(`${V1}/worlds/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario_id: scenarioId, prompt, preset_id: presetId }),
+  })
+  return jsonOrThrow(r, 'AI 生成世界失败')
+}
+
 export async function fetchModelPresets() {
   const r = await fetch(`${V1}/model-presets`)
   return jsonOrThrow(r, '读取模型预设失败')

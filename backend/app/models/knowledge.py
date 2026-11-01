@@ -197,6 +197,18 @@ class ModelPresetCreate(BaseModel):
     model: str = ""
     temperature: float = Field(0.8, ge=0.0, le=2.0)
     max_tokens: int = Field(800, ge=1, le=32768)
+    #: SillyTavern-style samplers; only sent when explicitly set.
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    top_k: Optional[int] = Field(None, ge=0, le=1000)
+    min_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    repetition_penalty: Optional[float] = Field(None, ge=0.0, le=3.0)
+    presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
+    frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
+    seed: Optional[int] = Field(None, ge=0)
+    stop: List[str] = Field(default_factory=list)
+    #: Extra prompt fragments owned by the preset (appended, never override rules).
+    system_prompt: str = ""
+    context_window: int = Field(0, ge=0, le=2000000)
     notes: str = ""
 
 
@@ -209,6 +221,16 @@ class ModelPresetPatch(BaseModel):
     model: Optional[str] = None
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, ge=1, le=32768)
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    top_k: Optional[int] = Field(None, ge=0, le=1000)
+    min_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    repetition_penalty: Optional[float] = Field(None, ge=0.0, le=3.0)
+    presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
+    frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
+    seed: Optional[int] = Field(None, ge=0)
+    stop: Optional[List[str]] = None
+    system_prompt: Optional[str] = None
+    context_window: Optional[int] = Field(None, ge=0, le=2000000)
     notes: Optional[str] = None
 
 

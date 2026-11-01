@@ -215,3 +215,24 @@ def test_knowledge_audience_roundtrips(tmp_path):
             "SELECT audience_npc_ids FROM scenario_knowledge WHERE id=?", (created.id,)
         ).fetchone()[0]
         assert json.loads(db) == ["guard", "elder"]
+
+
+def test_model_preset_extras_roundtrip(tmp_path):
+    with ScenarioStore(str(tmp_path / "presets.db")) as store:
+        preset = store.add_model_preset(
+            ModelPresetCreate(
+                name="Tavern", role="dialogue", top_p=0.9, top_k=50,
+                min_p=0.05, repetition_penalty=1.1, seed=7,
+                stop=["\nUser:"], system_prompt="Terse.", context_window=8000,
+            )
+        )
+        loaded = store.get_model_preset(preset.id)
+        assert loaded.top_p == 0.9 and loaded.top_k == 50
+        assert loaded.seed == 7 and loaded.stop == ["\nUser:"]
+        assert loaded.system_prompt == "Terse." and loaded.context_window == 8000
+
+        updated = store.update_model_preset(
+            preset.id, ModelPresetPatch(top_p=0.8, stop=["###"])
+        )
+        assert updated.top_p == 0.8 and updated.stop == ["###"]
+        assert updated.top_k == 50

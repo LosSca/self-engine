@@ -450,3 +450,39 @@ def test_campaign_export_and_import_roundtrip(client):
         f"{API}/campaigns/camp-ghost/import",
         json={"state": unknown_world, "reset": True},
     ).status_code == 400
+
+
+def test_ai_world_generation_saves_a_validated_world(client, monkeypatch):
+    import json
+
+    from app.services import ai_generator
+
+    payload = {
+        "name": "AI 小岛", "start_location_id": "a",
+        "locations": [{"id": "a", "name": "A", "region": "island", "x": 0, "y": 0}],
+        "items": [], "doors": [], "entities": [], "quests": [], "events": [],
+    }
+
+    class Router:
+        async def complete(self, messages, **kwargs):
+            return json.dumps(payload, ensure_ascii=False)
+
+    monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: Router())
+    res = client.post(
+        f"{API}/worlds/generate",
+        json={"scenario_id": "", "prompt": "小岛"},
+    )
+    assert res.status_code == 200, res.text
+    world_id = res.json()["world_id"]
+    assert world_id.startswith("ai_")
+    fetched = client.get(f"{API}/worlds/{world_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["locations"][0]["region"] == "island"
+
+
+def test_ai_world_generation_without_model_is_503(client, monkeypatch):
+    from app.services import ai_generator
+
+    monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: None)
+    res = client.post(f"{API}/worlds/generate", json={"prompt": "小岛"})
+    assert res.status_code == 503

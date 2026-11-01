@@ -98,7 +98,7 @@ class ScenarioCharacter:
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 11
+    SCHEMA_VERSION = 12
 
     _MIGRATIONS = {
         1: [
@@ -180,6 +180,9 @@ class ScenarioStore:
         11: [
             "ALTER TABLE scenario_play_config ADD COLUMN dialogue_preset_id TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE scenario_play_config ADD COLUMN summary_preset_id TEXT NOT NULL DEFAULT ''",
+        ],
+        12: [
+            "ALTER TABLE model_presets ADD COLUMN extras_json TEXT NOT NULL DEFAULT '{}'",
         ],
         7: [
             """CREATE TABLE IF NOT EXISTS scenario_knowledge (
@@ -863,11 +866,20 @@ class ScenarioStore:
     # --------------------------------------------------------- model presets
     _PRESET_COLS = (
         "id, name, role, provider, model, temperature, max_tokens, notes, "
-        "is_builtin, created_at"
+        "is_builtin, created_at, extras_json"
+    )
+    _PRESET_EXTRA_FIELDS = (
+        "top_p", "top_k", "min_p", "repetition_penalty",
+        "presence_penalty", "frequency_penalty", "seed", "stop",
+        "system_prompt", "context_window",
     )
 
-    @staticmethod
-    def _row_to_preset(row) -> ModelPreset:
+    @classmethod
+    def _row_to_preset(cls, row) -> ModelPreset:
+        try:
+            extras = json.loads(row[10]) if row[10] else {}
+        except (json.JSONDecodeError, TypeError):
+            extras = {}
         return ModelPreset(
             id=row[0],
             name=row[1],
@@ -879,6 +891,11 @@ class ScenarioStore:
             notes=row[7] or "",
             is_builtin=bool(row[8]),
             created_at=row[9],
+            **{
+                key: extras[key]
+                for key in cls._PRESET_EXTRA_FIELDS
+                if key in extras
+            },
         )
 
     def _seed_builtin_presets(self) -> None:
@@ -936,7 +953,7 @@ class ScenarioStore:
         with self._lock:
             self._conn.execute(
                 f"INSERT INTO model_presets ({self._PRESET_COLS}) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record.id,
                     record.name,
@@ -948,6 +965,12 @@ class ScenarioStore:
                     record.notes,
                     0,
                     record.created_at,
+                    json.dumps(
+                        {
+                            key: getattr(record, key)
+                            for key in self._PRESET_EXTRA_FIELDS
+                        }
+                    ),
                 ),
             )
             self._conn.commit()
@@ -957,12 +980,28 @@ class ScenarioStore:
         self, preset_id: str, patch: ModelPresetPatch
     ) -> "ModelPreset | None":
         fields = patch.model_dump(exclude_none=True)
-        if fields:
-            sets = ", ".join(f"{key}=?" for key in fields)
-            values = list(fields.values()) + [preset_id]
+        extras = {
+            key: fields.pop(key)
+            for key in list(fields)
+            if key in self._PRESET_EXTRA_FIELDS
+        }
+        if fields or extras:
+            sets = [f"{key}=?" for key in fields]
+            values = list(fields.values())
+            if extras:
+                current = self.get_model_preset(preset_id)
+                merged = (
+                    {key: getattr(current, key) for key in self._PRESET_EXTRA_FIELDS}
+                    if current is not None
+                    else {}
+                )
+                merged.update(extras)
+                sets.append("extras_json=?")
+                values.append(json.dumps(merged))
+            values.append(preset_id)
             with self._lock:
                 self._conn.execute(
-                    f"UPDATE model_presets SET {sets} WHERE id=?", values
+                    f"UPDATE model_presets SET {', '.join(sets)} WHERE id=?", values
                 )
                 self._conn.commit()
         return self.get_model_preset(preset_id)

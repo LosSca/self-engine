@@ -9,6 +9,7 @@ import {
   savePlayConfig,
   validateKnowledge,
   previewKnowledgeContext,
+  generateKnowledgeDraft,
   fetchModelPresets,
   createModelPreset,
   updateModelPreset,
@@ -28,19 +29,6 @@ const EMPTY_ENTRY = {
   audience_npc_ids: [],
 }
 
-const EMPTY_NODE = {
-  id: '',
-  title: '',
-  kind: 'main',
-  line: '',
-  summary: '',
-  prereq: [],
-  conditions: [],
-  requires_event: '',
-  knowledge_ids: [],
-}
-
-const STORY_KIND_LABELS = { main: '主线', branch: '分支', side: '独立剧情' }
 
 const EMPTY_PRESET = {
   name: '',
@@ -49,6 +37,16 @@ const EMPTY_PRESET = {
   model: '',
   temperature: 0.8,
   max_tokens: 800,
+  top_p: null,
+  top_k: null,
+  min_p: null,
+  repetition_penalty: null,
+  presence_penalty: null,
+  frequency_penalty: null,
+  seed: null,
+  stop: [],
+  system_prompt: '',
+  context_window: 0,
   notes: '',
 }
 
@@ -81,18 +79,7 @@ function splitList(text) {
     .filter(Boolean)
 }
 
-function parseValue(text) {
-  const trimmed = String(text).trim()
-  if (trimmed === 'true') return true
-  if (trimmed === 'false') return false
-  if (trimmed !== '' && !Number.isNaN(Number(trimmed))) return Number(trimmed)
-  return trimmed
-}
 
-function showValue(value) {
-  if (typeof value === 'string') return value
-  return JSON.stringify(value)
-}
 
 function TabButton({ active, children, onClick }) {
   return (
@@ -259,8 +246,11 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
   const [errors, setErrors] = useState([])
   const [notice, setNotice] = useState('')
   const [preview, setPreview] = useState(null)
-  const [previewNodes, setPreviewNodes] = useState([])
   const [previewFocus, setPreviewFocus] = useState('')
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiCount, setAiCount] = useState(6)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiDrafts, setAiDrafts] = useState([])
   const [presetDraft, setPresetDraft] = useState(EMPTY_PRESET)
   const [editingPresetId, setEditingPresetId] = useState(null)
   const [savingPreset, setSavingPreset] = useState(false)
@@ -287,7 +277,6 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     if (!open || !scenarioId) return
     setTab(initialTab)
     setPreview(null)
-    setPreviewNodes([])
     setPreviewFocus('')
     setNotice('')
     setCreating(false)
@@ -304,10 +293,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     return map
   }, [entries])
 
-  const knowledgeOptions = useMemo(
-    () => entries.map((entry) => ({ id: entry.id, title: entry.title, layer: entry.layer })),
-    [entries]
-  )
+
 
   if (!open) return null
 
@@ -393,7 +379,6 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
       const context = await previewKnowledgeContext(scenarioId, {
         mode: config.mode,
         maxDepth: config.max_depth,
-        storyNodes: config.mode === 'storyline' ? previewNodes : [],
         focus: splitList(previewFocus),
       })
       setPreview(context)
@@ -402,66 +387,41 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     }
   }
 
-  const updateNode = (index, patch) => {
-    const line = (config.storyline.lines || []).find((item) => item.id === patch.line)
-    const nodes = config.storyline.nodes.map((node, i) => (
-      i === index ? { ...node, ...patch, ...(line ? { kind: line.kind } : {}) } : node
-    ))
-    if (patch.id !== undefined) {
-      const previousId = config.storyline.nodes[index].id
-      setPreviewNodes((ids) => ids.map((id) => id === previousId ? patch.id : id))
+  const runAiKnowledge = async () => {
+    if (!aiPrompt.trim() || aiBusy) return
+    setAiBusy(true)
+    setErrors([])
+    setNotice('')
+    try {
+      const result = await generateKnowledgeDraft(scenarioId, {
+        prompt: aiPrompt,
+        count: aiCount,
+      })
+      setAiDrafts(result.entries || [])
+      setNotice(`已生成 ${result.valid ?? 0} 条草稿，确认后再写入知识库`)
+    } catch (err) {
+      reportError(err)
+    } finally {
+      setAiBusy(false)
     }
-    setConfig({ ...config, storyline: { ...config.storyline, nodes } })
   }
 
-  const addNode = () => {
-    const nodes = [...config.storyline.nodes, { ...EMPTY_NODE }]
-    setConfig({ ...config, storyline: { ...config.storyline, nodes } })
-  }
-
-  const removeNode = (index) => {
-    const removedId = config.storyline.nodes[index].id
-    const nodes = config.storyline.nodes.filter((_, i) => i !== index)
-    setPreviewNodes((ids) => ids.filter((id) => id !== removedId))
-    setConfig({ ...config, storyline: { ...config.storyline, nodes } })
-  }
-
-  const addLine = () => {
-    const lines = config.storyline.lines || []
-    let ordinal = 1
-    while (lines.some((line) => line.id === `line_${ordinal}`)) ordinal += 1
-    setConfig({
-      ...config,
-      storyline: {
-        ...config.storyline,
-        lines: [...lines, { id: `line_${ordinal}`, title: '新剧情线', kind: 'branch', description: '', enabled: true }],
-      },
-    })
-  }
-
-  const updateLine = (index, patch) => {
-    const previous = config.storyline.lines[index]
-    const lines = config.storyline.lines.map((line, i) => i === index ? { ...line, ...patch } : line)
-    const nodes = config.storyline.nodes.map((node) => (
-      node.line === previous.id && patch.kind ? { ...node, kind: patch.kind } : node
-    ))
-    setConfig({ ...config, storyline: { ...config.storyline, lines, nodes } })
-  }
-
-  const removeLine = (index) => {
-    const removed = config.storyline.lines[index]
-    if (!confirm(`移除剧情线「${removed.title}」？节点将保留并改为未分组。`)) return
-    const lines = config.storyline.lines.filter((_, i) => i !== index)
-    const nodes = config.storyline.nodes.map((node) => node.line === removed.id ? { ...node, line: '' } : node)
-    setConfig({ ...config, storyline: { ...config.storyline, lines, nodes } })
-  }
-
-  const updateCondition = (nodeIndex, condIndex, patch) => {
-    const node = config.storyline.nodes[nodeIndex]
-    const conditions = node.conditions.map((cond, i) =>
-      i === condIndex ? { ...cond, ...patch } : cond
-    )
-    updateNode(nodeIndex, { conditions })
+  const applyAiDrafts = async () => {
+    const valid = aiDrafts.filter((item) => !item._error)
+    if (valid.length === 0 || aiBusy) return
+    setAiBusy(true)
+    setErrors([])
+    try {
+      for (const item of valid) await createKnowledge(scenarioId, item)
+      setAiDrafts([])
+      setAiPrompt('')
+      setNotice(`已写入 ${valid.length} 条知识`)
+      await loadAll()
+    } catch (err) {
+      reportError(err)
+    } finally {
+      setAiBusy(false)
+    }
   }
 
   const savePreset = async () => {
@@ -560,6 +520,66 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
         <div className="p-6">
           {tab === 'knowledge' && (
             <div className="flex flex-col gap-5">
+              <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4 flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-sm font-bold text-cyan-100">AI 生成知识草稿</span>
+                  <span className="text-[10px] text-white/35">生成后先预览，确认再写入</span>
+                </div>
+                <textarea
+                  className={inputClass + ' min-h-[80px]'}
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="例如：为雾港写一组世界总览、酒馆场景、守夜人和一个夜间事件。"
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="text-xs text-white/50 flex items-center gap-2">
+                    条数
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      className={inputClass + ' w-20'}
+                      value={aiCount}
+                      onChange={(e) => setAiCount(Number(e.target.value))}
+                    />
+                  </label>
+                  <button
+                    onClick={runAiKnowledge}
+                    disabled={aiBusy || !aiPrompt.trim()}
+                    className="px-4 py-2 rounded-xl bg-cyan-400 text-black text-xs font-bold hover:bg-cyan-300 disabled:opacity-40"
+                  >
+                    {aiBusy ? '生成中…' : '生成草稿'}
+                  </button>
+                  {aiDrafts.length > 0 && (
+                    <>
+                      <button onClick={applyAiDrafts} disabled={aiBusy} className="px-4 py-2 rounded-xl border border-emerald-400/40 text-emerald-200 text-xs hover:bg-emerald-400/10">
+                        全部写入知识库
+                      </button>
+                      <button onClick={() => setAiDrafts([])} className="text-xs text-white/40 hover:text-white">清空</button>
+                    </>
+                  )}
+                </div>
+                {aiDrafts.length > 0 && (
+                  <div className="flex flex-col gap-2 max-h-72 overflow-auto">
+                    {aiDrafts.map((item, index) => (
+                      <div key={index} className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs">
+                        {item._error ? (
+                          <span className="text-rose-300">{item._error}</span>
+                        ) : (
+                          <>
+                            <div className="flex flex-wrap items-center gap-2 text-white/70">
+                              <span className="font-bold">{item.title}</span>
+                              <span className="text-white/30">[{item.layer}] 深度 {item.depth}</span>
+                              {(item.tags || []).map((tag) => <span key={tag} className="text-white/30">#{tag}</span>)}
+                            </div>
+                            <p className="mt-1 text-white/45 whitespace-pre-wrap">{item.content}</p>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-xs text-white/40 leading-relaxed max-w-2xl">
                   深度链从 0 到 9：数值越小越先载入，超出运行模式上限的条目会被跳过（常驻条目除外）。
@@ -826,312 +846,10 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 </label>
               </div>
 
-              {config.mode === 'storyline' && (
-                <div className="flex flex-col gap-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <label>
-                      <FieldLabel>故事线名称</FieldLabel>
-                      <input
-                        className={inputClass}
-                        value={config.storyline.name || ''}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            storyline: { ...config.storyline, name: e.target.value },
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      <FieldLabel>故事线说明</FieldLabel>
-                      <input
-                        className={inputClass}
-                        value={config.storyline.description || ''}
-                        onChange={(e) =>
-                          setConfig({
-                            ...config,
-                            storyline: { ...config.storyline, description: e.target.value },
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
-
-                  <div className="rounded-2xl border border-white/10 p-4 flex flex-col gap-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h3 className="text-sm font-bold text-white">剧情线分组</h3>
-                      <button onClick={addLine} className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:text-white">
-                        新增剧情线
-                      </button>
-                    </div>
-                    <p className="text-xs text-white/40">
-                      分组用于组织和整线启停；节点仍按前置与条件推进。停用不清除已进入的历史。
-                    </p>
-                    {(config.storyline.lines || []).map((line, lineIndex) => (
-                      <div key={line.id} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <label>
-                            <FieldLabel>剧情线 ID（固定）</FieldLabel>
-                            <input className={inputClass + ' text-white/40'} value={line.id} readOnly />
-                          </label>
-                          <label>
-                            <FieldLabel>剧情线名称</FieldLabel>
-                            <input className={inputClass} value={line.title} onChange={(e) => updateLine(lineIndex, { title: e.target.value })} />
-                          </label>
-                          <label>
-                            <FieldLabel>剧情线类型（同步到所属节点）</FieldLabel>
-                            <select className={inputClass} value={line.kind} onChange={(e) => updateLine(lineIndex, { kind: e.target.value })}>
-                              {Object.entries(STORY_KIND_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
-                            </select>
-                          </label>
-                        </div>
-                        <label>
-                          <FieldLabel>剧情线说明</FieldLabel>
-                          <input className={inputClass} value={line.description} onChange={(e) => updateLine(lineIndex, { description: e.target.value })} />
-                        </label>
-                        <div className="flex flex-wrap items-center gap-4 text-xs">
-                          <label className="flex items-center gap-2 text-white/60">
-                            <input type="checkbox" checked={line.enabled} onChange={(e) => updateLine(lineIndex, { enabled: e.target.checked })} />
-                            启用剧情线「{line.title}」
-                          </label>
-                          {!line.enabled && <span className="text-amber-300">已停用：不再进入新节点</span>}
-                          <span className="text-white/30">{config.storyline.nodes.filter((node) => node.line === line.id).length} 个节点</span>
-                          <button onClick={() => removeLine(lineIndex)} className="ml-auto text-white/40 hover:text-rose-400">移除分组</button>
-                        </div>
-                      </div>
-                    ))}
-                    {(config.storyline.lines || []).length === 0 && <p className="text-xs text-white/30">尚无分组；现有节点仍可正常推进。</p>}
-                  </div>
-
-                  {config.storyline.nodes.length === 0 && (
-                    <div className="rounded-2xl border border-dashed border-white/10 py-8 text-center text-white/30 text-xs">
-                      故事线模式至少需要一个节点。第一个节点必须是无前置的主线节点。
-                    </div>
-                  )}
-
-                  {config.storyline.nodes.map((node, index) => (
-                    <div
-                      key={index}
-                      className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-4"
-                    >
-                      <div className="flex flex-wrap items-center gap-3">
-                        <span className="text-[10px] font-mono text-white/30">节点 {index + 1}</span>
-                        <div className="flex-1" />
-                        <button
-                          onClick={() => removeNode(index)}
-                          className="text-[10px] text-white/30 hover:text-rose-400 tracking-[0.15em] uppercase"
-                        >
-                          移除
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <label>
-                          <FieldLabel>节点 ID</FieldLabel>
-                          <input
-                            className={inputClass}
-                            value={node.id}
-                            onChange={(e) => updateNode(index, { id: e.target.value })}
-                            placeholder="arrive"
-                          />
-                        </label>
-                        <label>
-                          <FieldLabel>标题</FieldLabel>
-                          <input
-                            className={inputClass}
-                            value={node.title}
-                            onChange={(e) => updateNode(index, { title: e.target.value })}
-                          />
-                        </label>
-                        <label>
-                          <FieldLabel>类型</FieldLabel>
-                          <select
-                            className={inputClass + ' disabled:opacity-50'}
-                            value={node.kind}
-                            disabled={Boolean(node.line)}
-                            onChange={(e) => updateNode(index, { kind: e.target.value })}
-                          >
-                            {Object.entries(STORY_KIND_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
-                          </select>
-                        </label>
-                      </div>
-                      <label>
-                        <FieldLabel>所属剧情线</FieldLabel>
-                        <select className={inputClass} value={node.line || ''} onChange={(e) => updateNode(index, { line: e.target.value })}>
-                          <option value="">未分组</option>
-                          {(config.storyline.lines || []).map((line) => (
-                            <option key={line.id} value={line.id}>{line.title} · {STORY_KIND_LABELS[line.kind]}{line.enabled ? '' : ' · 已停用'}</option>
-                          ))}
-                        </select>
-                        {node.line && <span className="block mt-2 text-xs text-white/40">节点类型随剧情线同步；单独修改类型前，请先设为未分组。</span>}
-                      </label>
-                      {node.kind === 'side' && <p className="text-xs text-white/40">独立剧情的起点需要进入条件或依赖事件；后续节点可用前置关系串联。</p>}
-                      <label>
-                        <FieldLabel>摘要（叙事参考）</FieldLabel>
-                        <input
-                          className={inputClass}
-                          value={node.summary || ''}
-                          onChange={(e) => updateNode(index, { summary: e.target.value })}
-                        />
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <label>
-                          <FieldLabel>前置节点（逗号分隔）</FieldLabel>
-                          <input
-                            className={inputClass}
-                            value={(node.prereq || []).join(', ')}
-                            onChange={(e) =>
-                              updateNode(index, { prereq: splitList(e.target.value) })
-                            }
-                          />
-                        </label>
-                        <label>
-                          <FieldLabel>需要先触发的事件 ID</FieldLabel>
-                          <input
-                            className={inputClass}
-                            value={node.requires_event || ''}
-                            onChange={(e) => updateNode(index, { requires_event: e.target.value })}
-                          />
-                        </label>
-                      </div>
-                      <div>
-                        <FieldLabel>关联知识（进入该节点后优先载入）</FieldLabel>
-                        <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
-                          {knowledgeOptions.length === 0 && (
-                            <span className="text-xs text-white/30">还没有知识条目</span>
-                          )}
-                          {knowledgeOptions.map((option) => {
-                            const checked = (node.knowledge_ids || []).includes(option.id)
-                            return (
-                              <label
-                                key={option.id}
-                                className={
-                                  'text-[10px] px-2 py-1 rounded-lg border cursor-pointer ' +
-                                  (checked
-                                    ? 'border-white/40 text-white'
-                                    : 'border-white/10 text-white/40 hover:border-white/25')
-                                }
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="hidden"
-                                  checked={checked}
-                                  onChange={() =>
-                                    updateNode(index, {
-                                      knowledge_ids: checked
-                                        ? node.knowledge_ids.filter((id) => id !== option.id)
-                                        : [...(node.knowledge_ids || []), option.id],
-                                    })
-                                  }
-                                />
-                                {option.title}
-                              </label>
-                            )
-                          })}
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <FieldLabel>进入条件</FieldLabel>
-                        {(node.conditions || []).length === 0 && (
-                          <span className="text-xs text-white/30">无额外条件</span>
-                        )}
-                        {(node.conditions || []).map((cond, condIndex) => (
-                          <div key={condIndex} className="flex flex-wrap items-center gap-2">
-                            <select
-                              className={inputClass + ' max-w-[10rem]'}
-                              value={cond.kind}
-                              onChange={(e) =>
-                                updateCondition(index, condIndex, { kind: e.target.value })
-                              }
-                            >
-                              {CONDITION_KINDS.map(([value, label]) => (
-                                <option key={value} value={value}>
-                                  {label}
-                                </option>
-                              ))}
-                            </select>
-                            <input
-                              className={inputClass + ' max-w-[12rem]'}
-                              value={cond.target}
-                              placeholder="目标 id"
-                              onChange={(e) =>
-                                updateCondition(index, condIndex, { target: e.target.value })
-                              }
-                            />
-                            <select
-                              className={inputClass + ' max-w-[8rem]'}
-                              value={cond.op}
-                              onChange={(e) =>
-                                updateCondition(index, condIndex, { op: e.target.value })
-                              }
-                            >
-                              {CONDITION_OPS.map(([value, label]) => (
-                                <option key={value} value={value}>
-                                  {label}
-                                </option>
-                              ))}
-                            </select>
-                            <input
-                              className={inputClass + ' max-w-[8rem]'}
-                              value={showValue(cond.value)}
-                              onChange={(e) =>
-                                updateCondition(index, condIndex, {
-                                  value: parseValue(e.target.value),
-                                })
-                              }
-                            />
-                            <button
-                              onClick={() =>
-                                updateNode(index, {
-                                  conditions: node.conditions.filter((_, i) => i !== condIndex),
-                                })
-                              }
-                              className="text-[10px] text-white/30 hover:text-rose-400"
-                            >
-                              移除
-                            </button>
-                          </div>
-                        ))}
-                        <button
-                          onClick={() =>
-                            updateNode(index, {
-                              conditions: [
-                                ...(node.conditions || []),
-                                { kind: 'flag', target: '', op: 'eq', value: true },
-                              ],
-                            })
-                          }
-                          className="self-start text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
-                        >
-                          添加条件
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-
-                  <button
-                    onClick={addNode}
-                    className="self-start px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white"
-                  >
-                    新增节点
-                  </button>
-                  <fieldset className="rounded-2xl border border-white/10 p-4">
-                    <legend className="px-2 text-xs text-white/60">知识预览：模拟已进入节点</legend>
-                    <p className="mb-3 text-xs text-white/40">先保存配置，再选择节点预览联合排序；此操作不会推进存档或触发事件。</p>
-                    <div className="flex flex-wrap gap-3">
-                      {config.storyline.nodes.filter((node) => node.id).map((node, index) => (
-                        <label key={index} className="flex items-center gap-2 text-xs text-white/60">
-                          <input
-                            type="checkbox"
-                            checked={previewNodes.includes(node.id)}
-                            onChange={(e) => setPreviewNodes((ids) => e.target.checked ? [...ids, node.id] : ids.filter((id) => id !== node.id))}
-                          />
-                          {node.title || node.id}（{node.id}）
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                </div>
-              )}
+              <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/50">
+                故事线节点、分组、停用与 AI 生成已移至「世界工坊 → 故事线」；
+                这里保留运行模式、知识预算与模型预设。
+              </div>
 
               <div className="flex flex-wrap items-end gap-3">
                 <label className="flex-1 min-w-[240px]">
@@ -1200,7 +918,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
           {tab === 'presets' && (
             <div className="flex flex-col gap-5">
               <p className="text-xs text-white/40 leading-relaxed">
-                预设只调整叙事采样参数（温度与长度），不会绕过规则判定。内置预设可以编辑但不能删除。
+                预设参考 SillyTavern 的采样器：温度、top_p/top_k、min_p、重复与存在惩罚、停止词和系统提示。所有参数只影响生成，不会绕过规则判定。
               </p>
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-4">
@@ -1222,6 +940,8 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                     >
                       <option value="narrator">叙事</option>
                       <option value="intent">意图解析</option>
+                      <option value="dialogue">对话</option>
+                      <option value="summary">摘要</option>
                       <option value="judge">判定</option>
                       <option value="any">通用</option>
                     </select>
@@ -1267,6 +987,58 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                       onChange={(e) =>
                         setPresetDraft({ ...presetDraft, max_tokens: Number(e.target.value) })
                       }
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  {[
+                    ['top_p', 'top_p（0-1）', 0, 1, 0.05],
+                    ['top_k', 'top_k（0-1000）', 0, 1000, 1],
+                    ['min_p', 'min_p（0-1）', 0, 1, 0.01],
+                    ['repetition_penalty', '重复惩罚（0-3）', 0, 3, 0.05],
+                    ['presence_penalty', '存在惩罚（-2~2）', -2, 2, 0.1],
+                    ['frequency_penalty', '频率惩罚（-2~2）', -2, 2, 0.1],
+                    ['seed', '随机种子', 0, 2147483647, 1],
+                    ['context_window', '上下文窗口', 0, 2000000, 1024],
+                  ].map(([key, label, min, max, step]) => (
+                    <label key={key}>
+                      <FieldLabel>{label}</FieldLabel>
+                      <input
+                        type="number"
+                        className={inputClass}
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={presetDraft[key] ?? ''}
+                        placeholder="留空跟随默认"
+                        onChange={(e) => setPresetDraft({
+                          ...presetDraft,
+                          [key]: e.target.value === '' ? null : Number(e.target.value),
+                        })}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label>
+                    <FieldLabel>停止词（每行一个）</FieldLabel>
+                    <textarea
+                      className={inputClass + ' min-h-[80px]'}
+                      value={(presetDraft.stop || []).join('\n')}
+                      onChange={(e) => setPresetDraft({
+                        ...presetDraft,
+                        stop: e.target.value.split('\n').map((line) => line.trim()).filter(Boolean),
+                      })}
+                      placeholder={'\nUser:\n###'}
+                    />
+                  </label>
+                  <label>
+                    <FieldLabel>预设系统提示（追加到规则前，不能推翻规则）</FieldLabel>
+                    <textarea
+                      className={inputClass + ' min-h-[80px]'}
+                      value={presetDraft.system_prompt || ''}
+                      onChange={(e) => setPresetDraft({ ...presetDraft, system_prompt: e.target.value })}
+                      placeholder="保持冷峻、短句、第三人称。"
                     />
                   </label>
                 </div>
