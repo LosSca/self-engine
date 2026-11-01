@@ -847,7 +847,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/50">
-                故事线节点、分组、停用与 AI 生成已移至「世界工坊 → 故事线」；
+                故事线节点、分组、停用与 AI 生成已移至独立「故事线工坊」；
                 这里保留运行模式、知识预算与模型预设。
               </div>
 

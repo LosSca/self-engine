@@ -12,6 +12,7 @@ const ScenarioBuilder = lazy(() => import('./components/ScenarioBuilder'))
 const SetupWizard = lazy(() => import('./components/SetupWizard'))
 const KnowledgeStudio = lazy(() => import('./components/KnowledgeStudio'))
 const WorldStudio = lazy(() => import('./components/WorldStudio'))
+const StorylineStudio = lazy(() => import('./components/StorylineStudio'))
 
 // 懒加载期间的占位：同款全屏底色与文案，避免空白闪一下。
 const ChunkFallback = () => (
@@ -50,6 +51,7 @@ function Home() {
   const [studioTab, setStudioTab] = useState('knowledge')
   // 世界工坊：打开时带上情景 id（可为空，表示看全部世界）
   const [worldStudio, setWorldStudio] = useState(null)
+  const [storylineStudio, setStorylineStudio] = useState(null)
 
   useEffect(() => {
     fetchScenarios()
@@ -306,6 +308,14 @@ function Home() {
                         </button>
 
                         <button
+                          onClick={(e) => { e.stopPropagation(); setStorylineStudio(s) }}
+                          className="px-4 py-3 rounded-2xl border border-white/10 hover:border-white/30 text-white/50 hover:text-white transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
+                          title="编辑主线、分支、独立剧情与 AI 生成剧情线"
+                        >
+                          故事线
+                        </button>
+
+                        <button
                           onClick={(e) => { e.stopPropagation(); setStudioScenario(s) }}
                           className="px-4 py-3 rounded-2xl border border-white/10 hover:border-white/30 text-white/50 hover:text-white transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
                           title="编辑知识库、运行模式与模型预设"
@@ -355,6 +365,17 @@ function Home() {
             scenarioId={worldStudio?.scenarioId}
             campaignId={undefined}
             onClose={() => setWorldStudio(null)}
+          />
+        </Suspense>
+      )}
+
+      {storylineStudio && (
+        <Suspense fallback={<ModalFallback />}>
+          <StorylineStudio
+            open
+            scenarioId={storylineStudio?.id}
+            scenarioTitle={storylineStudio?.title}
+            onClose={() => setStorylineStudio(null)}
           />
         </Suspense>
       )}

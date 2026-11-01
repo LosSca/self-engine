@@ -34,10 +34,6 @@ import {
   exportCampaign,
   importCampaign,
   generateWorldFromPrompt,
-  fetchPlayConfig,
-  savePlayConfig,
-  fetchKnowledge,
-  generateStorylineDraft,
 } from '../api'
 import WorldMapGraph from './WorldMapGraph'
 import { WORLD_TEMPLATES } from '../data/worldTemplates'
@@ -112,7 +108,6 @@ const REPEATS = [
 
 const TABS = [
   ['map', '世界地图'],
-  ['storyline', '故事线'],
   ['items', '物品'],
   ['doors', '门'],
   ['entities', '实体'],
@@ -1436,8 +1431,6 @@ const EMPTY_FOR = {
   },
 }
 
-const STORY_KIND_LABELS = { main: '主线', branch: '分支', side: '独立剧情' }
-
 const KIND_LABELS = {
   location: '地点',
   action: '行动',
@@ -1477,12 +1470,6 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [archiveBusy, setArchiveBusy] = useState(false)
   const [archiveMessage, setArchiveMessage] = useState('')
   const [templateKey, setTemplateKey] = useState('demo')
-  const [storyConfig, setStoryConfig] = useState(null)
-  const [storyKnowledge, setStoryKnowledge] = useState([])
-  const [storyEditing, setStoryEditing] = useState(null)
-  const [storyBusy, setStoryBusy] = useState(false)
-  const [storyPrompt, setStoryPrompt] = useState('')
-  const [storyWarnings, setStoryWarnings] = useState([])
   const [aiWorldPrompt, setAiWorldPrompt] = useState('')
   const [aiWorldBusy, setAiWorldBusy] = useState(false)
   const [builtinActions, setBuiltinActions] = useState([])
@@ -1577,22 +1564,6 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     }
   }, [open, tab, campaignId, debugNonce])
 
-  useEffect(() => {
-    if (!open || tab !== 'storyline' || !scenarioId) return undefined
-    let cancelled = false
-    setStoryBusy(true)
-    setErrors([])
-    Promise.all([fetchPlayConfig(scenarioId), fetchKnowledge(scenarioId)])
-      .then(([config, entries]) => {
-        if (cancelled) return
-        setStoryConfig(config)
-        setStoryKnowledge(entries || [])
-      })
-      .catch((err) => { if (!cancelled) report(err) })
-      .finally(() => { if (!cancelled) setStoryBusy(false) })
-    return () => { cancelled = true }
-  }, [open, tab, scenarioId, report])
-
   const selectWorld = async (id) => {
     setErrors([])
     setNotice('')
@@ -1651,70 +1622,6 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       setNotice('已创建世界：' + definition.name)
     } catch (err) {
       report(err)
-    }
-  }
-
-  const updateStoryline = (patch) =>
-    setStoryConfig((prev) => ({
-      ...prev,
-      storyline: { ...(prev.storyline || {}), ...patch },
-    }))
-
-  const updateStoryNode = (index, patch) =>
-    setStoryConfig((prev) => ({
-      ...prev,
-      storyline: {
-        ...(prev.storyline || {}),
-        nodes: (prev.storyline?.nodes || []).map((node, i) =>
-          i === index ? { ...node, ...patch } : node
-        ),
-      },
-    }))
-
-  const saveStoryline = async () => {
-    if (!scenarioId || !storyConfig) return
-    setStoryBusy(true)
-    setErrors([])
-    setNotice('')
-    try {
-      const saved = await savePlayConfig(scenarioId, {
-        mode: storyConfig.mode,
-        storyline: storyConfig.storyline,
-        max_depth: storyConfig.max_depth,
-        context_budget_chars: storyConfig.context_budget_chars ?? 0,
-        model_preset_id: storyConfig.model_preset_id || '',
-        intent_preset_id: storyConfig.intent_preset_id || '',
-        dialogue_preset_id: storyConfig.dialogue_preset_id || '',
-        summary_preset_id: storyConfig.summary_preset_id || '',
-        narrator_prompt: storyConfig.narrator_prompt || '',
-      })
-      setStoryConfig(saved)
-      setNotice('故事线已保存')
-    } catch (err) {
-      report(err)
-    } finally {
-      setStoryBusy(false)
-    }
-  }
-
-  const runAiStoryline = async () => {
-    if (!scenarioId || !storyPrompt.trim() || storyBusy) return
-    setStoryBusy(true)
-    setErrors([])
-    setNotice('')
-    setStoryWarnings([])
-    try {
-      const result = await generateStorylineDraft(scenarioId, {
-        prompt: storyPrompt,
-        nodeCount: 6,
-      })
-      setStoryConfig((prev) => ({ ...prev, storyline: result.storyline }))
-      setStoryWarnings(result.warnings || [])
-      setNotice('AI 故事线草稿已载入，尚未保存')
-    } catch (err) {
-      report(err)
-    } finally {
-      setStoryBusy(false)
     }
   }
 
@@ -2329,291 +2236,6 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     {JSON.stringify(sim.result, null, 2)}
                   </pre>
                 </div>
-              )}
-            </div>
-          )}
-
-          {tab === 'storyline' && (
-            <div className="flex flex-col gap-5">
-              {!scenarioId && (
-                <SectionNote>故事线属于情景配置：请从情景档案打开世界工坊。</SectionNote>
-              )}
-              {scenarioId && !storyConfig && storyBusy && <SectionNote>读取故事线中……</SectionNote>}
-              {scenarioId && storyConfig && (
-                <>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="text-sm font-bold text-white">运行模式与故事线</span>
-                    <select
-                      className={inputClass + ' max-w-[12rem]'}
-                      value={storyConfig.mode}
-                      onChange={(e) => setStoryConfig({ ...storyConfig, mode: e.target.value })}
-                    >
-                      <option value="storyline">故事线模式</option>
-                      <option value="free">自由模式</option>
-                    </select>
-                    <button onClick={saveStoryline} disabled={storyBusy} className={primaryButton}>
-                      {storyBusy ? '保存中…' : '保存故事线'}
-                    </button>
-                    <span className="text-[10px] text-white/30">
-                      节点只由前置、条件和事件推进；模型不能自行跳转。
-                    </span>
-                  </div>
-
-                  <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4 flex flex-col gap-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className="text-sm font-bold text-cyan-100">AI 生成剧情线草稿</span>
-                      <span className="text-[10px] text-white/35">覆盖当前编辑中的节点，保存前不会写入</span>
-                    </div>
-                    <textarea
-                      className={inputClass + ' min-h-[70px]'}
-                      value={storyPrompt}
-                      onChange={(e) => setStoryPrompt(e.target.value)}
-                      placeholder="例如：玩家追查失踪的渡船，在旅店、档案室和地窖之间推进，最后揭开镇长的秘密。"
-                    />
-                    <div className="flex flex-wrap items-center gap-3">
-                      <button
-                        onClick={runAiStoryline}
-                        disabled={storyBusy || !storyPrompt.trim()}
-                        className="px-4 py-2 rounded-xl bg-cyan-400 text-black text-xs font-bold hover:bg-cyan-300 disabled:opacity-40"
-                      >
-                        {storyBusy ? '生成中…' : '生成剧情线'}
-                      </button>
-                      {storyWarnings.length > 0 && (
-                        <span className="text-[11px] text-amber-300">
-                          {storyWarnings.length} 条校验提示，保存前需修正
-                        </span>
-                      )}
-                    </div>
-                    {storyWarnings.length > 0 && (
-                      <ul className="text-[11px] text-amber-200/80 list-disc pl-5 space-y-1">
-                        {storyWarnings.slice(0, 6).map((warning, index) => <li key={index}>{warning}</li>)}
-                      </ul>
-                    )}
-                  </div>
-
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 flex flex-col gap-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="text-sm font-bold text-white">剧情线分组</span>
-                      <button
-                        onClick={() => updateStoryline({
-                          lines: [
-                            ...(storyConfig.storyline?.lines || []),
-                            { id: `line_${(storyConfig.storyline?.lines || []).length + 1}`, title: '新剧情线', kind: 'main', description: '', enabled: true },
-                          ],
-                        })}
-                        className={ghostButton}
-                      >
-                        新增剧情线
-                      </button>
-                    </div>
-                    {(storyConfig.storyline?.lines || []).length === 0 && (
-                      <p className="text-xs text-white/30">尚无分组；节点仍可正常推进。</p>
-                    )}
-                    {(storyConfig.storyline?.lines || []).map((line, index) => (
-                      <div key={index} className="rounded-xl border border-white/10 p-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
-                        <label>
-                          <FieldLabel>名称</FieldLabel>
-                          <input
-                            className={inputClass}
-                            value={line.title}
-                            onChange={(e) => updateStoryline({
-                              lines: (storyConfig.storyline.lines || []).map((row, i) => i === index ? { ...row, title: e.target.value } : row),
-                            })}
-                          />
-                        </label>
-                        <label>
-                          <FieldLabel>类型</FieldLabel>
-                          <select
-                            className={inputClass}
-                            value={line.kind}
-                            onChange={(e) => updateStoryline({
-                              lines: (storyConfig.storyline.lines || []).map((row, i) => i === index ? { ...row, kind: e.target.value } : row),
-                              nodes: (storyConfig.storyline.nodes || []).map((node) => node.line === line.id ? { ...node, kind: e.target.value } : node),
-                            })}
-                          >
-                            {Object.entries(STORY_KIND_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                          </select>
-                        </label>
-                        <label>
-                          <FieldLabel>说明</FieldLabel>
-                          <input
-                            className={inputClass}
-                            value={line.description || ''}
-                            onChange={(e) => updateStoryline({
-                              lines: (storyConfig.storyline.lines || []).map((row, i) => i === index ? { ...row, description: e.target.value } : row),
-                            })}
-                          />
-                        </label>
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-white/50 pt-5">
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={line.enabled !== false}
-                              onChange={(e) => updateStoryline({
-                                lines: (storyConfig.storyline.lines || []).map((row, i) => i === index ? { ...row, enabled: e.target.checked } : row),
-                              })}
-                            />
-                            启用
-                          </label>
-                          <span className="text-white/25">{line.id} · {(storyConfig.storyline.nodes || []).filter((node) => node.line === line.id).length} 节点</span>
-                          <button
-                            onClick={() => updateStoryline({
-                              lines: (storyConfig.storyline.lines || []).filter((_, i) => i !== index),
-                              nodes: (storyConfig.storyline.nodes || []).map((node) => node.line === line.id ? { ...node, line: '' } : node),
-                            })}
-                            className={dangerButton + ' ml-auto'}
-                          >
-                            移除
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 flex flex-col gap-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="text-sm font-bold text-white">故事线节点</span>
-                      <button
-                        onClick={() => {
-                          const nodes = [...(storyConfig.storyline?.nodes || []), {
-                            id: '', title: '', kind: 'main', line: '', summary: '',
-                            prereq: [], conditions: [], requires_event: null, knowledge_ids: [],
-                          }]
-                          updateStoryline({ nodes })
-                          setStoryEditing(nodes.length - 1)
-                        }}
-                        className={ghostButton}
-                      >
-                        新增节点
-                      </button>
-                    </div>
-
-                    {(storyConfig.storyline?.nodes || []).map((node, index) => (
-                      <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-bold text-white">{node.title || node.id || '未命名节点'}</span>
-                          <Badge>{node.id || '—'}</Badge>
-                          <Badge>{STORY_KIND_LABELS[node.kind] || node.kind}</Badge>
-                          {node.line && <Badge>{node.line}</Badge>}
-                          {node.prereq.length > 0 && <Badge>前置 {node.prereq.length}</Badge>}
-                          {node.conditions.length > 0 && <Badge>条件 {node.conditions.length}</Badge>}
-                          {node.knowledge_ids.length > 0 && <Badge>知识 {node.knowledge_ids.length}</Badge>}
-                          <div className="flex-1" />
-                          <button onClick={() => setStoryEditing(index)} className="text-[10px] text-white/50 hover:text-white uppercase tracking-[0.15em]">编辑</button>
-                          <button
-                            onClick={() => {
-                              updateStoryline({ nodes: (storyConfig.storyline.nodes || []).filter((_, i) => i !== index) })
-                              setStoryEditing(null)
-                            }}
-                            className={dangerButton}
-                          >
-                            移除
-                          </button>
-                        </div>
-                        {node.summary && <p className="text-xs text-white/40">{node.summary}</p>}
-                        {storyEditing === index && (
-                          <div className="rounded-xl border border-white/10 bg-black/20 p-3 flex flex-col gap-3">
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                              <label>
-                                <FieldLabel>节点 ID</FieldLabel>
-                                <input className={inputClass} value={node.id} onChange={(e) => updateStoryNode(index, { id: e.target.value })} />
-                              </label>
-                              <label>
-                                <FieldLabel>标题</FieldLabel>
-                                <input className={inputClass} value={node.title} onChange={(e) => updateStoryNode(index, { title: e.target.value })} />
-                              </label>
-                              <label>
-                                <FieldLabel>所属剧情线</FieldLabel>
-                                <select
-                                  className={inputClass}
-                                  value={node.line || ''}
-                                  onChange={(e) => {
-                                    const line = (storyConfig.storyline.lines || []).find((row) => row.id === e.target.value)
-                                    updateStoryNode(index, { line: e.target.value, ...(line ? { kind: line.kind } : {}) })
-                                  }}
-                                >
-                                  <option value="">未分组</option>
-                                  {(storyConfig.storyline.lines || []).map((line) => (
-                                    <option key={line.id} value={line.id}>{line.title} · {STORY_KIND_LABELS[line.kind]}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <label>
-                                <FieldLabel>类型（未分组时可改）</FieldLabel>
-                                <select
-                                  className={inputClass}
-                                  value={node.kind}
-                                  disabled={Boolean(node.line)}
-                                  onChange={(e) => updateStoryNode(index, { kind: e.target.value })}
-                                >
-                                  {Object.entries(STORY_KIND_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                                </select>
-                              </label>
-                              <label>
-                                <FieldLabel>前置节点（逗号分隔）</FieldLabel>
-                                <input
-                                  className={inputClass}
-                                  value={(node.prereq || []).join(', ')}
-                                  onChange={(e) => updateStoryNode(index, { prereq: splitList(e.target.value) })}
-                                />
-                              </label>
-                            </div>
-                            <label>
-                              <FieldLabel>摘要</FieldLabel>
-                              <input className={inputClass} value={node.summary || ''} onChange={(e) => updateStoryNode(index, { summary: e.target.value })} />
-                            </label>
-                            <label>
-                              <FieldLabel>需要先触发的事件 ID</FieldLabel>
-                              <input
-                                className={inputClass}
-                                value={node.requires_event || ''}
-                                onChange={(e) => updateStoryNode(index, { requires_event: e.target.value || null })}
-                              />
-                            </label>
-                            <div>
-                              <FieldLabel>进入条件（全部满足）</FieldLabel>
-                              <ConditionRows
-                                value={node.conditions || []}
-                                onChange={(conditions) => updateStoryNode(index, { conditions })}
-                                world={world}
-                              />
-                            </div>
-                            <div>
-                              <FieldLabel>关联知识（进入后优先载入）</FieldLabel>
-                              <div className="flex flex-wrap gap-2 max-h-36 overflow-auto">
-                                {storyKnowledge.length === 0 && <span className="text-xs text-white/30">没有知识条目</span>}
-                                {storyKnowledge.map((entry) => {
-                                  const checked = (node.knowledge_ids || []).includes(entry.id)
-                                  return (
-                                    <label key={entry.id} className={'text-[10px] px-2 py-1 rounded-lg border cursor-pointer ' + (checked ? 'border-white/40 text-white' : 'border-white/10 text-white/40')}>
-                                      <input
-                                        type="checkbox"
-                                        className="hidden"
-                                        checked={checked}
-                                        onChange={() => updateStoryNode(index, {
-                                          knowledge_ids: checked
-                                            ? node.knowledge_ids.filter((id) => id !== entry.id)
-                                            : [...(node.knowledge_ids || []), entry.id],
-                                        })}
-                                      />
-                                      {entry.title}
-                                    </label>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <button onClick={() => setStoryEditing(null)} className={primaryButton}>完成编辑</button>
-                              <span className="text-[10px] text-white/30">节点修改在“保存故事线”时统一提交</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </>
               )}
             </div>
           )}
