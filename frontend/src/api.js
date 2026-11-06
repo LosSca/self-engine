@@ -969,11 +969,11 @@ export async function exportCampaign(campaignId) {
   return jsonOrThrow(r, '导出存档失败')
 }
 
-export async function importCampaign(campaignId, state, reset = true) {
+export async function importCampaign(campaignId, state, reset = true, events = []) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ state, reset }),
+    body: JSON.stringify({ state, reset, events }),
   })
   return jsonOrThrow(r, '导入存档失败')
 }

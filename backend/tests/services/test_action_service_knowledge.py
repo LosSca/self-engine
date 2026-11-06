@@ -234,10 +234,23 @@ async def test_accepted_and_refused_narration_share_entered_node_context(
         ["main", "branch", "side", "global", "future"] if mode == "storyline"
         else ["global", "main", "branch", "side", "future"]
     )
-    expected_ids = [multi_node_knowledge[name] for name in expected_names] + [history["id"]]
+    longterm_id = "longterm:camp-1"
+    expected_ids = (
+        [longterm_id]
+        + [multi_node_knowledge[name] for name in expected_names]
+        + [history["id"]]
+    )
     assert accepted.context_entries == refused.context_entries == expected_ids
-    assert narrator.calls[0]["knowledge"] == narrator.calls[1]["knowledge"]
-    assert [b["kind"] for b in narrator.calls[0]["knowledge"]] == ["canon"] * 5 + ["history"]
+    accepted_blocks = narrator.calls[0]["knowledge"]
+    refused_blocks = narrator.calls[1]["knowledge"]
+    assert accepted_blocks[0]["id"] == refused_blocks[0]["id"] == longterm_id
+    assert accepted_blocks[1:] == refused_blocks[1:]
+    assert [b["kind"] for b in accepted_blocks] == (
+        ["history"] + ["canon"] * 5 + ["history"]
+    )
+    assert [b["kind"] for b in refused_blocks] == (
+        ["history"] + ["canon"] * 5 + ["history"]
+    )
     assert narrator.calls[0]["knowledge"][-1] == dict(history, kind="history")
     assert narrator.calls[0]["options"] == narrator.calls[1]["options"] == {
         "temperature": 0.3, "max_tokens": 240,

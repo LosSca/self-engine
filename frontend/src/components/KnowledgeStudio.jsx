@@ -411,14 +411,26 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
     if (valid.length === 0 || aiBusy) return
     setAiBusy(true)
     setErrors([])
+    const pending = [...valid]
+    let written = 0
     try {
-      for (const item of valid) await createKnowledge(scenarioId, item)
+      for (const item of valid) {
+        await createKnowledge(scenarioId, item)
+        pending.shift()
+        written += 1
+        setAiDrafts([...pending])
+      }
       setAiDrafts([])
       setAiPrompt('')
-      setNotice(`已写入 ${valid.length} 条知识`)
+      setNotice(`已写入 ${written} 条知识`)
       await loadAll()
     } catch (err) {
+      setAiDrafts(pending)
       reportError(err)
+      if (written > 0) {
+        setNotice(`已写入 ${written} 条，剩余草稿保留；可直接重试`)
+        await loadAll()
+      }
     } finally {
       setAiBusy(false)
     }
@@ -1104,6 +1116,16 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                           model: preset.model,
                           temperature: preset.temperature,
                           max_tokens: preset.max_tokens,
+                          top_p: preset.top_p ?? null,
+                          top_k: preset.top_k ?? null,
+                          min_p: preset.min_p ?? null,
+                          repetition_penalty: preset.repetition_penalty ?? null,
+                          presence_penalty: preset.presence_penalty ?? null,
+                          frequency_penalty: preset.frequency_penalty ?? null,
+                          seed: preset.seed ?? null,
+                          stop: preset.stop || [],
+                          system_prompt: preset.system_prompt || '',
+                          context_window: preset.context_window ?? 0,
                           notes: preset.notes || '',
                         })
                       }}

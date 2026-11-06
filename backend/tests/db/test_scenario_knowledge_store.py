@@ -236,3 +236,9 @@ def test_model_preset_extras_roundtrip(tmp_path):
         )
         assert updated.top_p == 0.8 and updated.stop == ["###"]
         assert updated.top_k == 50
+
+        cleared = store.update_model_preset(
+            preset.id, ModelPresetPatch(top_p=None, stop=None)
+        )
+        assert cleared.top_p is None and cleared.stop == []
+        assert cleared.top_k == 50

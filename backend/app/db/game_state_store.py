@@ -228,9 +228,34 @@ class GameStateStore:
             return None
         return GameState.model_validate_json(row["state_json"])
 
-    def bind_campaign(self, state: GameState) -> None:
-        """Create or reset the campaign state (used when a world is bound)."""
+    def bind_campaign(
+        self,
+        state: GameState,
+        *,
+        clear_history: bool = False,
+        events: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Create or reset the campaign state (used when a world is bound).
+
+        ``clear_history`` is for restoring a save over an existing campaign:
+        the old request/event/snapshot timeline must not leak into the restored
+        world. Exported domain events can be written back in the same
+        transaction so the debug log survives the restore.
+        """
         with self._lock, self._conn:
+            if clear_history:
+                self._conn.execute(
+                    "DELETE FROM action_requests WHERE campaign_id = ?",
+                    (state.campaign_id,),
+                )
+                self._conn.execute(
+                    "DELETE FROM domain_events WHERE campaign_id = ?",
+                    (state.campaign_id,),
+                )
+                self._conn.execute(
+                    "DELETE FROM campaign_snapshots WHERE campaign_id = ?",
+                    (state.campaign_id,),
+                )
             self._conn.execute(
                 "INSERT INTO campaign_state (campaign_id, world_id, version, state_json, updated_at)"
                 " VALUES (?, ?, ?, ?, ?)"
@@ -248,6 +273,32 @@ class GameStateStore:
                 ),
             )
             self._insert_snapshot(state, request_id="")
+            for event in events or []:
+                if not isinstance(event, dict) or not event.get("event_type"):
+                    continue
+                try:
+                    event_version = int(
+                        event["state_version"]
+                        if event.get("state_version") is not None
+                        else state.version
+                    )
+                except (TypeError, ValueError):
+                    event_version = state.version
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO domain_events"
+                    " (id, campaign_id, request_id, event_type, payload_json,"
+                    "  state_version, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        event.get("id") or str(uuid.uuid4()),
+                        state.campaign_id,
+                        event.get("request_id") or "",
+                        str(event["event_type"]),
+                        json.dumps(event.get("payload") or {}, sort_keys=True),
+                        event_version,
+                        event.get("created_at") or _now(),
+                    ),
+                )
 
     # --------------------------------------------------------------- requests
     def get_request(self, request_id: str) -> Optional[Dict[str, Any]]:

@@ -264,6 +264,17 @@ def test_budget_truncates_and_reports_the_overflow():
     assert [b.entry_id for b in unlimited.blocks] == ["first", "second"]
 
 
+def test_budget_never_drops_always_on_entries():
+    entries = [
+        _entry("anchor", layer="global", always_on=True, title="A", content="x" * 50),
+        _entry("optional", layer="global", title="B", content="y" * 50),
+    ]
+    context = knowledge_service.build_context(entries, mode="free", budget_chars=1)
+    assert [block.entry_id for block in context.blocks] == ["anchor"]
+    assert [item.entry_id for item in context.stats.excluded] == ["optional"]
+    assert "预算" in context.stats.excluded[0].reason
+
+
 def test_audience_entries_need_their_npc_in_focus():
     entries = [
         _entry("public", layer="global"),

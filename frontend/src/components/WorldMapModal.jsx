@@ -465,7 +465,10 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
                     key={merchant.id + ':' + item.id}
                     type="button"
                     disabled={busy || pending}
-                    onClick={() => runAction('buy', item.id, `购买 ${item.name}（${item.price}）`)}
+                    onClick={() => runAction(
+                      'buy', item.id, `购买 ${item.name}（${item.price}）`,
+                      { merchant_id: merchant.id },
+                    )}
                     className="px-2.5 py-1 rounded-lg text-[11px] text-amber-200 bg-amber-500/15 border border-amber-400/30 hover:bg-amber-500/25 disabled:opacity-40"
                   >
                     {item.name} · {item.price}

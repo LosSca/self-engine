@@ -38,6 +38,39 @@ def test_state_round_trips_and_binding_is_idempotent(store):
     assert store.get_state("camp-1").version == 0
 
 
+def test_reset_binding_clears_old_history_and_imports_exported_events(store):
+    world = village_world()
+    store.save_world(world)
+    state = build_initial_state(world, "camp-1")
+    store.bind_campaign(state)
+    store.record_request(
+        campaign_id="camp-1",
+        request_id="old-request",
+        request_payload={"action": "look"},
+        status="rejected",
+        result_payload={"status": "rejected"},
+        state_version=0,
+    )
+
+    store.bind_campaign(
+        state,
+        clear_history=True,
+        events=[{
+            "id": "imported-event",
+            "event_type": "imported.event",
+            "payload": {"ok": True},
+            "state_version": 2,
+            "created_at": "2026-01-01T00:00:00",
+        }],
+    )
+
+    assert store.get_request("old-request") is None
+    assert store.narrative_history("camp-1") == []
+    assert [event["event_type"] for event in store.list_events("camp-1")] == [
+        "imported.event"
+    ]
+
+
 def test_schema_migration_is_idempotent_across_instances(tmp_path):
     path = str(tmp_path / "game_state.db")
     first = GameStateStore(path)

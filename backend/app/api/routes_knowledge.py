@@ -38,6 +38,38 @@ def _store() -> ScenarioStore:
     return ScenarioStore(path)
 
 
+def _scenario_event_ids(scenario_id: str) -> Optional[set[str]]:
+    """World event ids available to this scenario, if a world is bound.
+
+    Storyline saves without a world keep the previous behaviour (no event
+    validation). Once a world exists, a stale requires_event is an authoring
+    error rather than a node that silently never fires.
+    """
+    from app.db.game_state_store import GameStateStore
+
+    path = os.environ.get(
+        "GAME_STATE_DB_PATH", os.path.join(_BACKEND_DIR, "game_state.db")
+    )
+    if not os.path.exists(path):
+        return None
+    store = GameStateStore(path)
+    try:
+        worlds = [
+            item for item in store.list_worlds()
+            if item.get("scenario_id") == scenario_id
+        ]
+        if not worlds:
+            return None
+        known: set[str] = set()
+        for item in worlds:
+            world = store.get_world(item["world_id"])
+            if world is not None:
+                known.update(event.id for event in world.events)
+        return known
+    finally:
+        store.close()
+
+
 class ValidateResponse(BaseModel):
     valid: bool
     errors: List[str] = Field(default_factory=list)
@@ -199,7 +231,9 @@ def put_play_config(scenario_id: str, body: PlayConfigUpdate):
                     detail=[f"unknown model preset '{preset_id}'"],
                 )
         errors = knowledge_service.validate_play_config(
-            config, store.list_knowledge(scenario_id)
+            config,
+            store.list_knowledge(scenario_id),
+            event_ids=_scenario_event_ids(scenario_id),
         )
         if errors:
             raise HTTPException(status_code=400, detail=errors)
@@ -217,7 +251,9 @@ def validate_knowledge(scenario_id: str):
         _require_scenario(store, scenario_id)
         config = store.get_play_config(scenario_id)
         errors = knowledge_service.validate_play_config(
-            config, store.list_knowledge(scenario_id)
+            config,
+            store.list_knowledge(scenario_id),
+            event_ids=_scenario_event_ids(scenario_id),
         )
         return ValidateResponse(valid=not errors, errors=errors)
     finally:
@@ -311,12 +347,14 @@ async def generate_storyline(
                 detail="未配置可用模型：请先设置供应商密钥或本地模型",
             )
         knowledge_ids = [entry.id for entry in store.list_knowledge(scenario_id)]
+        event_ids = _scenario_event_ids(scenario_id)
         try:
             draft = await ai_generator.generate_storyline(
                 router,
                 body.prompt,
                 body.node_count,
                 knowledge_ids=knowledge_ids,
+                event_ids=sorted(event_ids) if event_ids is not None else None,
                 language=body.language,
             )
         except ai_generator.GenerationError as exc:

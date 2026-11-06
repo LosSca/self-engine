@@ -43,8 +43,10 @@ const PowerIcon = () => (
 )
 
 function Home() {
-  const { scenarios, setScenarios, setActiveScenario, setActiveCampaignId, clearMessages } =
-    useGameStore()
+  const {
+    scenarios, setScenarios, setActiveScenario, setActiveCampaignId,
+    activeCampaignId, clearMessages,
+  } = useGameStore()
   const navigate = useNavigate()
   const [campaignsMap, setCampaignsMap] = useState({})
   const [studioScenario, setStudioScenario] = useState(null)
@@ -94,9 +96,11 @@ function Home() {
       await warnIfNeo4jDown()
       const campaigns = campaignsMap[scenario.id] || []
       if (campaigns.length > 0) {
-        // 继续最近一次冒险
+        // 继续最近一次冒险；切到另一段冒险时必须丢弃上一段的聊天缓存。
+        const campaign = campaigns[0]
         setActiveScenario(scenario)
-        setActiveCampaignId(campaigns[0].id)
+        if (campaign.id !== activeCampaignId) clearMessages()
+        setActiveCampaignId(campaign.id)
         navigate('/play')
       } else {
         const campaign = await createCampaign(scenario.id)
@@ -441,7 +445,7 @@ function PlayGate() {
   }
   return (
     <Suspense fallback={<ChunkFallback />}>
-      <GameCanvas />
+      <GameCanvas key={activeCampaignId || 'unbound'} />
     </Suspense>
   )
 }

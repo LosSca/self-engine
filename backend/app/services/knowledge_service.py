@@ -209,9 +209,10 @@ def build_context(
     if budget_chars and budget_chars > 0:
         kept: List[KnowledgeBlock] = []
         used = 0
+        always_on_ids = {entry.id for entry in entries if entry.always_on}
         for block in blocks:
             cost = len(block.title) + len(block.content)
-            if used + cost > budget_chars:
+            if used + cost > budget_chars and block.entry_id not in always_on_ids:
                 excluded.append(
                     ExcludedEntry(
                         entry_id=block.entry_id,

@@ -5,9 +5,12 @@ import pytest
 
 from app.db.game_state_store import GameStateStore
 from app.models.game import (
-    ActionRequest, Condition, Effect, GameEventDef, NarrativeResult,
-    ObjectiveDef, QuestDef, RuleOutcome,
+    ActionRequest, Condition, Effect, ExitDef, GameEventDef, ItemDef,
+    LocationDef, NarrativeResult, ObjectiveDef, QuestDef, RuleOutcome,
 )
+from app.models.knowledge import PlayConfig, ScenarioPlayContext
+from app.engines.event_engine import apply_effects
+from app.engines.rules_engine import RulesEngine
 from app.services.action_service import ActionService
 from app.services.world_service import bind_world, save_world
 from tests.support import bound_world, village_world
@@ -599,6 +602,75 @@ async def test_long_term_summary_accumulates_and_reaches_context(store):
     assert "[T2]" in second.state.summary
     assert f"longterm:camp-summary" in second.context_entries
     assert len(second.state.summary) <= 2000
+
+
+def test_removing_last_equipped_copy_clears_slot_and_bonus(store):
+    world, state = bound_world(store)
+    world.items.append(
+        ItemDef(
+            id="test_blade", name="Test Blade", slot="weapon",
+            bonus={"attack": 5},
+        )
+    )
+    state.inventory["test_blade"] = 1
+    state.equipment["weapon"] = "test_blade"
+    state.flags["player_attack"] = 4
+    assert RulesEngine._player_stats(world, state)[0] == 9
+
+    applied = apply_effects(
+        state, world, [Effect(kind="remove_item", target="test_blade")]
+    )
+
+    assert applied[0].ok
+    assert "weapon" not in state.equipment
+    assert RulesEngine._player_stats(world, state)[0] == 4
+
+
+async def test_multi_step_move_settles_events_at_each_intermediate_location(store):
+    world, _state = bound_world(store)
+    world.locations.append(LocationDef(id="shrine", name="Shrine"))
+    forest = next(location for location in world.locations if location.id == "forest_edge")
+    forest.exits.append(ExitDef(target_id="shrine"))
+    world.events.append(
+        GameEventDef(
+            id="forest_ambush", name="Forest ambush", trigger="state_change",
+            conditions=[Condition(kind="at_location", target="forest_edge")],
+            effects=[Effect(kind="set_flag", target="forest_reached", value=True)],
+        )
+    )
+    save_world(store, world)
+
+    result = await ActionService(store).execute(
+        _request(
+            "req-route", "move", "shrine",
+            params={"path": ["forest_edge", "shrine"]},
+        )
+    )
+
+    assert result.status == "applied"
+    assert result.state.location_id == "shrine"
+    assert result.state.flags["forest_reached"] is True
+    assert [effect.target for effect in result.effects_applied] == [
+        "forest_edge", "shrine",
+    ]
+
+
+async def test_long_term_summary_survives_a_play_context(store):
+    world = village_world().model_copy(update={"scenario_id": "scenario-summary"})
+    save_world(store, world)
+    bind_world(store, "camp-1", world.world_id, reset=True)
+    context = ScenarioPlayContext(
+        scenario_id="scenario-summary",
+        config=PlayConfig(scenario_id="scenario-summary"),
+    )
+    service = ActionService(
+        store, context_provider=lambda _scenario_id, _campaign_id="": context,
+    )
+
+    await service.execute(_request("play-s1", "look", narrate=True))
+    second = await service.execute(_request("play-s2", "look", narrate=True))
+
+    assert "longterm:camp-1" in second.context_entries
 
 
 async def test_inline_event_choices_queue_and_resolve(store):

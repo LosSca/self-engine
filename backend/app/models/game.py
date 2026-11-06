@@ -215,6 +215,8 @@ class Effect(_ConfigModel):
     target: str = ""
     value: Any = None
     amount: int = 1
+    #: give_item: keep an existing ground placement (a purchase is not a pickup).
+    keep_ground: bool = Field(default=False, exclude=True)
 
 
 class CustomActionDef(_ConfigModel):

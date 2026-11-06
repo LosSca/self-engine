@@ -570,15 +570,20 @@ class RulesEngine:
             effects=[Effect(kind="unequip_item", target=slot)],
         )
 
-    def _merchant_here(self, world: WorldDefinition, state: GameState):
-        return next(
-            (
-                entity
-                for entity in self._entities_present(world, state)
-                if entity.shop_items
-            ),
-            None,
-        )
+    def _merchant_here(
+        self, world: WorldDefinition, state: GameState, merchant_id: str = ""
+    ):
+        merchants = [
+            entity
+            for entity in self._entities_present(world, state)
+            if entity.shop_items
+        ]
+        if merchant_id:
+            return next(
+                (entity for entity in merchants if entity.id == merchant_id),
+                None,
+            )
+        return merchants[0] if merchants else None
 
     def _buy(
         self,
@@ -596,11 +601,17 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False, code="unknown_item", message=f"There is no item '{target_id}'."
             )
-        merchant = self._merchant_here(world, state)
-        if merchant is None or target_id not in merchant.shop_items:
+        merchant_id = str((params or {}).get("merchant_id") or "")
+        merchant = self._merchant_here(world, state, merchant_id)
+        if merchant is None:
+            return RuleOutcome(
+                ok=False, code="merchant_absent",
+                message="That merchant is not here.",
+            )
+        if target_id not in merchant.shop_items:
             return RuleOutcome(
                 ok=False, code="not_for_sale",
-                message=f"Nobody here sells the {item.name}.",
+                message=f"The {merchant.name} does not sell the {item.name}.",
             )
         if item.price <= 0:
             return RuleOutcome(
@@ -617,7 +628,7 @@ class RulesEngine:
             message=f"You buy the {item.name} for {item.price}.",
             effects=[
                 Effect(kind="remove_currency", amount=item.price),
-                Effect(kind="give_item", target=item.id, amount=1),
+                Effect(kind="give_item", target=item.id, amount=1, keep_ground=True),
             ],
         )
 

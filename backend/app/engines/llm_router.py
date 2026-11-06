@@ -721,6 +721,10 @@ class LLMRouter:
         reasoning = kwargs.pop("reasoning", True)
         api_base = self._get_api_base(self.config.primary_provider)
         call_kwargs = {**kwargs}
+        # Authored sampler presets may contain fields a provider rejects
+        # (top_k on OpenAI, repetition_penalty, ...). Let litellm drop the
+        # unsupported ones instead of failing the whole narrated turn.
+        call_kwargs.setdefault("drop_params", True)
         call_kwargs.update(_reasoning_kwargs(self.config.primary_provider, reasoning))
         if self.config.primary_provider == LLMProvider.ANTHROPIC:
             messages = self._sanitize_messages_for_anthropic(messages)
@@ -765,6 +769,7 @@ class LLMRouter:
                 )
                 fb_api_base = self._get_api_base(self.config.fallback_provider)
                 fb_kwargs = {**kwargs}
+                fb_kwargs.setdefault("drop_params", True)
                 fb_kwargs.update(_reasoning_kwargs(self.config.fallback_provider, reasoning))
                 if fb_api_base:
                     fb_kwargs["api_base"] = fb_api_base
@@ -792,6 +797,7 @@ class LLMRouter:
         reasoning = kwargs.pop("reasoning", True)
         api_base = self._get_api_base(self.config.primary_provider)
         call_kwargs = {**kwargs}
+        call_kwargs.setdefault("drop_params", True)
         call_kwargs.update(_reasoning_kwargs(self.config.primary_provider, reasoning))
         if self.config.primary_provider == LLMProvider.ANTHROPIC:
             messages = self._sanitize_messages_for_anthropic(messages)

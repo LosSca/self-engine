@@ -220,6 +220,15 @@ def condition_holds(
     return False
 
 
+def _unequip_missing_item(state: GameState, item_id: str) -> None:
+    """A sold, given-away or consumed last copy cannot stay equipped."""
+    if state.inventory.get(item_id, 0) > 0:
+        return
+    for slot, equipped_id in list(state.equipment.items()):
+        if equipped_id == item_id:
+            state.equipment.pop(slot, None)
+
+
 def apply_effect(
     state: GameState, world: WorldDefinition, effect: Effect
 ) -> AppliedEffect:
@@ -240,7 +249,8 @@ def apply_effect(
             return AppliedEffect(effect, False, f"unknown item '{effect.target}'")
         amount = max(1, int(effect.amount or 1))
         state.inventory[effect.target] = state.inventory.get(effect.target, 0) + amount
-        state.item_locations.pop(effect.target, None)
+        if not effect.keep_ground:
+            state.item_locations.pop(effect.target, None)
         return AppliedEffect(
             effect, True, facts=[Fact("item_gained", effect.target, amount)]
         )
@@ -259,6 +269,7 @@ def apply_effect(
             state.inventory[effect.target] = remaining
         else:
             state.inventory.pop(effect.target, None)
+        _unequip_missing_item(state, effect.target)
         return AppliedEffect(
             effect, True, facts=[Fact("item_removed", effect.target, amount)]
         )
@@ -473,6 +484,7 @@ def apply_effect(
                 False,
                 f"cannot give {amount} x '{item_id}': not held and not on the ground here",
             )
+        _unequip_missing_item(state, item_id)
         record = entity_state_for(state, world, entity)
         record.inventory[item_id] = record.inventory.get(item_id, 0) + amount
         return AppliedEffect(

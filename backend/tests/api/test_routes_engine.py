@@ -15,6 +15,8 @@ def client(tmp_path, monkeypatch):
     # The knowledge graph is a real Neo4j instance on the developer's box; a
     # test must never depend on it being up or reachable.
     monkeypatch.setenv("ENGINE_GRAPH_MIRROR", "0")
+    # Never let an HTTP test depend on a locally running model endpoint.
+    monkeypatch.setenv("ENGINE_NARRATOR", "template")
     monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
     from app.main import app
 

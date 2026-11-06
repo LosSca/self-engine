@@ -147,6 +147,44 @@ def test_unknown_model_preset_is_rejected(client, scenario_id):
     assert "unknown model preset 'ghost'" in res.json()["detail"]
 
 
+def test_storyline_requires_event_must_exist_when_a_world_is_bound(client, scenario_id):
+    import os
+
+    from app.db.game_state_store import GameStateStore
+    from app.services.world_service import save_world
+    from tests.support import village_world
+
+    world = village_world().model_copy(update={"scenario_id": scenario_id})
+    store = GameStateStore(os.environ["GAME_STATE_DB_PATH"])
+    try:
+        save_world(store, world)
+    finally:
+        store.close()
+
+    def body(event_id):
+        return {
+            "mode": "storyline",
+            "storyline": {"nodes": [
+                {"id": "main", "title": "Main"},
+                {
+                    "id": "side", "title": "Side", "kind": "side",
+                    "requires_event": event_id,
+                },
+            ]},
+        }
+
+    rejected = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config", json=body("ghost")
+    )
+    assert rejected.status_code == 400
+    assert any("ghost" in error for error in rejected.json()["detail"])
+    accepted = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config",
+        json=body(world.events[0].id),
+    )
+    assert accepted.status_code == 200, accepted.text
+
+
 def test_validation_reports_broken_storyline(client, scenario_id):
     body = {
         "mode": "storyline",

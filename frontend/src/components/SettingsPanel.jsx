@@ -25,6 +25,9 @@ export default function SettingsPanel({ onClose }) {
   const [combat, setCombat] = useState(combatEnabled)
   const [saved, setSaved] = useState(false)
   const [theme, setTheme] = useState(currentTheme())
+  const [apiToken, setApiToken] = useState(
+    () => localStorage.getItem('lunar_api_token') || '',
+  )
 
   const currentProviderModels = PROVIDERS.find((p) => p.id === provider)?.models || []
 
@@ -35,6 +38,9 @@ export default function SettingsPanel({ onClose }) {
   }
 
   const handleSave = async () => {
+    const token = apiToken.trim()
+    if (token) localStorage.setItem('lunar_api_token', token)
+    else localStorage.removeItem('lunar_api_token')
     updateSettings({
       llmProvider: provider,
       llmModel: model,
@@ -179,6 +185,24 @@ export default function SettingsPanel({ onClose }) {
               <span>标准</span>
               <span>扩展</span>
             </div>
+          </div>
+
+          {/* Optional API token */}
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
+              API 访问令牌（可选）
+            </label>
+            <input
+              type="password"
+              value={apiToken}
+              onChange={(e) => setApiToken(e.target.value)}
+              placeholder="后端未启用 API_TOKEN 时留空"
+              autoComplete="off"
+              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/40 focus:bg-white/[0.05] transition-all"
+            />
+            <p className="text-[10px] text-white/40 leading-relaxed mt-2">
+              仅当后端以 API_TOKEN 启动时填写；令牌只保存在本机浏览器，不会上传。
+            </p>
           </div>
 
           {/* 战斗模式 */}

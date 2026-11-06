@@ -2474,7 +2474,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                             const text = await file.text()
                             const parsed = JSON.parse(text)
                             const state = parsed.state || parsed
-                            await importCampaign(campaignId, state, true)
+                            await importCampaign(
+                              campaignId, state, true, parsed.events || [],
+                            )
                             setArchiveMessage('已导入，请刷新状态')
                             setDebugNonce((value) => value + 1)
                           } catch (err) {

@@ -232,22 +232,33 @@ export default function GameCanvas() {
     }
   }, [activeCampaignId])
 
-  // Restore chat history from backend when campaign has no local messages
+  // Restore chat history from backend when campaign has no local messages.
+  // The same effect runs twice under StrictMode, so every async result is
+  // canceled by its cleanup before the second pass can append it.
   useEffect(() => {
-    if (!activeCampaignId || messages.length > 0) return
-    fetchHistory(activeCampaignId)
-      .then(({ messages: history }) => {
-        if (history && history.length > 0) {
-          history.forEach((msg) => appendMessage(msg))
-        }
+    if (!activeCampaignId) return undefined
+    let cancelled = false
+    if (messages.length === 0) {
+      fetchHistory(activeCampaignId)
+        .then(({ messages: history }) => {
+          if (cancelled) return
+          if (history && history.length > 0) {
+            history.forEach((msg) => appendMessage(msg))
+          }
+        })
+        .catch(() => {})
+    }
+    fetchInventoryApi(activeCampaignId)
+      .then((items) => {
+        if (!cancelled) setInventory(items)
       })
       .catch(() => {})
-    fetchInventoryApi(activeCampaignId)
-      .then((items) => setInventory(items))
-      .catch(() => {})
     fetchJournal(activeCampaignId)
-      .then((entries) => setJournal(entries))
+      .then((entries) => {
+        if (!cancelled) setJournal(entries)
+      })
       .catch(() => {})
+    return () => { cancelled = true }
   }, [activeCampaignId])
 
   const loadPlayerCharacter = async () => {

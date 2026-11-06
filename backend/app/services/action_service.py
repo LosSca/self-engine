@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from app.db.game_state_store import GameStateStore, StateConflictError
 from app.engines.event_engine import (
+    Fact,
     apply_effects,
     condition_holds,
     entity_location,
@@ -238,9 +239,13 @@ class ActionService:
                     budget_chars=play.config.context_budget_chars,
                     query=query,
                 )
-                blocks = [dict(block, kind="canon") for block in context.prompt_blocks()]
+                blocks.extend(
+                    dict(block, kind="canon") for block in context.prompt_blocks()
+                )
             except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
-                blocks = []
+                # Keep the long-term summary already collected above; a broken
+                # authored context must not erase memory from the prompt.
+                pass
         #: Committed history is a separate channel from authored canon: it is
         #: written by the engine after each turn, never by the player or an editor,
         #: and the narrator is told it is a record rather than an instruction.
@@ -682,58 +687,63 @@ class ActionService:
             )
         return narrative, context_entries
 
-    async def _apply(
+    def _reject_effects(
         self,
         request: ActionRequest,
         payload: Dict[str, Any],
         state: GameState,
-        world: WorldDefinition,
-        outcome: RuleOutcome,
-        record_rejection: bool = True,
+        failed,
+        record_rejection: bool,
     ) -> tuple[ActionResult, GameState, List[Dict[str, Any]]]:
-        new_state = state.model_copy(deep=True)
-        applied = apply_effects(new_state, world, outcome.effects)
-        failed = [item for item in applied if not item.ok]
-        if failed:
-            result = ActionResult(
-                **self._base(request),
-                status="rejected",
-                ok=False,
-                code="effect_failed",
-                message=failed[0].error,
-                state_version=state.version,
-                state=state,
-            )
-            if record_rejection:
-                try:
-                    self.store.record_request(
-                        campaign_id=request.campaign_id,
-                        request_id=request.request_id,
-                        request_payload=payload,
-                        status="rejected",
-                        result_payload=result.model_dump(mode="json"),
-                        state_version=state.version,
-                    )
-                except sqlite3.IntegrityError:
-                    raced = self._replay(request, payload)
-                    if raced is None:
-                        raise
-                    return raced, state, []
-            return result, state, []
+        result = ActionResult(
+            **self._base(request),
+            status="rejected",
+            ok=False,
+            code="effect_failed",
+            message=failed[0].error,
+            state_version=state.version,
+            state=state,
+        )
+        if record_rejection:
+            try:
+                self.store.record_request(
+                    campaign_id=request.campaign_id,
+                    request_id=request.request_id,
+                    request_payload=payload,
+                    status="rejected",
+                    result_payload=result.model_dump(mode="json"),
+                    state_version=state.version,
+                )
+            except sqlite3.IntegrityError:
+                raced = self._replay(request, payload)
+                if raced is None:
+                    raise
+                return raced, state, []
+        return result, state, []
 
-        facts = [fact for item in applied for fact in item.facts]
-        combat_round = self._combat_round(request, state, new_state, applied)
-        processed: set[str] = set()
-        forced: set[str] = set()
-        origins: dict = {}
-        attempted_quests: set[str] = set()
-        new_state, executions, event_facts = run_triggered_events(
+    def _settle_facts(
+        self,
+        world: WorldDefinition,
+        new_state: GameState,
+        request: ActionRequest,
+        facts: List[Fact],
+        processed: set[str],
+        forced: set[str],
+        origins: dict,
+        attempted_quests: set[str],
+    ):
+        """Run events and quests for one settled movement/action step."""
+        executions = []
+        quest_updates = []
+        new_state, first_executions, event_facts = run_triggered_events(
             world, new_state, request.action, request.target_id, facts,
             processed=processed, forced=forced, origins=origins,
         )
-        new_state, quest_updates, reward_facts = advance_quests(
+        executions.extend(first_executions)
+        new_state, updates, reward_facts = advance_quests(
             world, new_state, facts + event_facts, attempted=attempted_quests
         )
+        quest_updates.extend(updates)
         for _ in range(len(world.events) + len(world.quests) + 1):
             if not reward_facts:
                 break
@@ -749,6 +759,108 @@ class ActionService:
                 world, new_state, event_facts, attempted=attempted_quests
             )
             quest_updates.extend(more_updates)
+        return new_state, executions, quest_updates
+
+    async def _apply(
+        self,
+        request: ActionRequest,
+        payload: Dict[str, Any],
+        state: GameState,
+        world: WorldDefinition,
+        outcome: RuleOutcome,
+        record_rejection: bool = True,
+    ) -> tuple[ActionResult, GameState, List[Dict[str, Any]]]:
+        new_state = state.model_copy(deep=True)
+        processed: set[str] = set()
+        forced: set[str] = set()
+        origins: dict = {}
+        attempted_quests: set[str] = set()
+        executions = []
+        quest_updates = []
+
+        raw_path = (
+            request.params.get("path") if isinstance(request.params, dict) else None
+        )
+        multi_path = (
+            request.action == "move"
+            and isinstance(raw_path, list)
+            and len(raw_path) > 1
+        )
+        if multi_path:
+            applied = []
+            stopped = ""
+            for step in raw_path:
+                segment = self.rules.evaluate(world, new_state, "move", step)
+                if not segment.ok:
+                    if not applied:
+                        refused = await self._reject(
+                            request, payload, state, world, segment
+                        )
+                        return refused, state, []
+                    stopped = segment.message
+                    break
+                segment_applied = apply_effects(new_state, world, segment.effects)
+                failed = [item for item in segment_applied if not item.ok]
+                if failed:
+                    return self._reject_effects(
+                        request, payload, state, failed, record_rejection
+                    )
+                applied.extend(segment_applied)
+                step_facts = [
+                    fact for item in segment_applied for fact in item.facts
+                ]
+                new_state, step_executions, step_updates = self._settle_facts(
+                    world, new_state, request, step_facts,
+                    processed, forced, origins, attempted_quests,
+                )
+                executions.extend(step_executions)
+                quest_updates.extend(step_updates)
+                if (
+                    new_state.combat.get("active")
+                    or new_state.flags.get("combat_active")
+                    or new_state.flags.get("player_defeated")
+                ):
+                    stopped = "Combat interrupts the journey."
+                    break
+            if not applied:  # pragma: no cover - the full path was validated above
+                refused = await self._reject(request, payload, state, world, outcome)
+                return refused, state, []
+            if stopped:
+                here = next(
+                    (loc for loc in world.locations if loc.id == new_state.location_id),
+                    None,
+                )
+                message = f"You stop at {here.name}. {stopped}" if here else stopped
+            else:
+                here = next(
+                    (loc for loc in world.locations if loc.id == new_state.location_id),
+                    None,
+                )
+                message = (
+                    f"You end up at {here.name}."
+                    if here is not None and here.id != request.target_id
+                    else outcome.message
+                )
+            outcome = outcome.model_copy(
+                update={
+                    "effects": [item.effect for item in applied],
+                    "message": message,
+                }
+            )
+        else:
+            applied = apply_effects(new_state, world, outcome.effects)
+            failed = [item for item in applied if not item.ok]
+            if failed:
+                return self._reject_effects(
+                    request, payload, state, failed, record_rejection
+                )
+            facts = [fact for item in applied for fact in item.facts]
+            new_state, executions, quest_updates = self._settle_facts(
+                world, new_state, request, facts,
+                processed, forced, origins, attempted_quests,
+            )
+
+        combat_round = self._combat_round(request, state, new_state, applied)
         play = self._load_play_context(world, state.campaign_id)
         story_status: Optional[StoryStatus] = None
         story_entered: List[str] = []

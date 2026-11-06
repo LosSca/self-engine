@@ -979,10 +979,18 @@ class ScenarioStore:
     def update_model_preset(
         self, preset_id: str, patch: ModelPresetPatch
     ) -> "ModelPreset | None":
-        fields = patch.model_dump(exclude_none=True)
+        # exclude_unset keeps the difference between "omitted" and an explicit
+        # null, so a caller can clear an optional sampler instead of silently
+        # keeping the old value.
+        raw = patch.model_dump(exclude_unset=True)
+        fields = {
+            key: value
+            for key, value in raw.items()
+            if key not in self._PRESET_EXTRA_FIELDS and value is not None
+        }
         extras = {
-            key: fields.pop(key)
-            for key in list(fields)
+            key: value
+            for key, value in raw.items()
             if key in self._PRESET_EXTRA_FIELDS
         }
         if fields or extras:
@@ -995,7 +1003,11 @@ class ScenarioStore:
                     if current is not None
                     else {}
                 )
-                merged.update(extras)
+                for key, value in extras.items():
+                    if value is None:
+                        merged.pop(key, None)
+                    else:
+                        merged[key] = value
                 sets.append("extras_json=?")
                 values.append(json.dumps(merged))
             values.append(preset_id)

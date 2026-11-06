@@ -22,15 +22,44 @@ const CONDITION_KINDS = [
   ['entity_alert', '实体警戒'],
   ['skill', '角色技能'],
   ['combatant_hp', '实体生命值'],
+  ['combatant_alive', '实体战斗存活'],
+  ['currency', '货币数量'],
+  ['level', '角色等级'],
 ]
 const OPS = [
   ['eq', '等于'], ['ne', '不等于'], ['gte', '大于等于'],
   ['lte', '小于等于'], ['gt', '大于'], ['lt', '小于'],
 ]
+// These compare condition.count; item_count/combatant_hp compare condition.value.
 const COUNT_KINDS = new Set([
-  'item_count', 'entity_item_count', 'entity_relation',
-  'entity_alert', 'skill', 'combatant_hp',
+  'entity_item_count', 'entity_relation', 'entity_alert',
+  'skill', 'currency', 'level',
 ])
+const VALUE_UNUSED = new Set(['entity_alert', 'skill', 'currency', 'level'])
+const TARGET_UNUSED = new Set(['currency', 'level'])
+const VALUE_HINTS = {
+  flag: '期望值',
+  has_item: 'true / false',
+  item_count: '数量阈值',
+  door_open: 'true / false',
+  at_location: 'true / false',
+  quest_status: 'inactive / active / completed / failed',
+  entity_at: '地点 ID',
+  entity_alive: 'true / false',
+  entity_item_count: '物品 ID',
+  entity_relation: '对方实体 ID',
+  combatant_hp: '生命值阈值',
+  combatant_alive: 'true / false',
+}
+const COUNT_HINTS = {
+  entity_item_count: '数量阈值',
+  entity_relation: '关系阈值',
+  entity_alert: '警戒阈值',
+  skill: '技能等级阈值',
+  currency: '货币阈值',
+  level: '等级阈值',
+}
+const RESTRICTED_OPS = new Set(['has_item', 'item_count'])
 
 const inputClass =
   'w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30'
@@ -39,6 +68,15 @@ const tinyInput =
 
 function splitList(text) {
   return String(text || '').split(',').map((value) => value.trim()).filter(Boolean)
+}
+
+function nextLineId(lines) {
+  let highest = 0
+  for (const line of lines) {
+    const match = /^line_(\d+)$/.exec(line.id || '')
+    if (match) highest = Math.max(highest, Number(match[1]))
+  }
+  return `line_${highest + 1}`
 }
 
 function showValue(value) {
@@ -72,28 +110,35 @@ function ConditionRows({ value, onChange }) {
           <select className={tinyInput} value={row.kind} onChange={(e) => update(index, { kind: e.target.value })}>
             {CONDITION_KINDS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
-          <input
-            className={tinyInput + ' w-40'}
-            value={row.target || ''}
-            onChange={(e) => update(index, { target: e.target.value })}
-            placeholder="目标 ID"
-          />
+          {!TARGET_UNUSED.has(row.kind) && (
+            <input
+              className={tinyInput + ' w-40'}
+              value={row.target || ''}
+              onChange={(e) => update(index, { target: e.target.value })}
+              placeholder="目标 ID"
+            />
+          )}
           <select className={tinyInput} value={row.op || 'eq'} onChange={(e) => update(index, { op: e.target.value })}>
-            {OPS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            {(RESTRICTED_OPS.has(row.kind)
+              ? OPS.filter(([id]) => id === 'eq' || id === 'gte')
+              : OPS
+            ).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
-          <input
-            className={tinyInput + ' w-28'}
-            value={showValue(row.value)}
-            onChange={(e) => update(index, { value: parseValue(e.target.value) })}
-            placeholder="值"
-          />
+          {!VALUE_UNUSED.has(row.kind) && (
+            <input
+              className={tinyInput + ' w-28'}
+              value={showValue(row.value)}
+              onChange={(e) => update(index, { value: parseValue(e.target.value) })}
+              placeholder={VALUE_HINTS[row.kind] || '值'}
+            />
+          )}
           {COUNT_KINDS.has(row.kind) && (
             <input
-              className={tinyInput + ' w-20'}
+              className={tinyInput + ' w-24'}
               type="number"
               value={row.count ?? 1}
               onChange={(e) => update(index, { count: Number(e.target.value) })}
-              placeholder="阈值"
+              placeholder={COUNT_HINTS[row.kind] || '阈值'}
             />
           )}
           <button
@@ -140,6 +185,8 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
     setNotice('')
     setEditing(null)
     setWarnings([])
+    setConfig(null)
+    setEntries([])
     Promise.all([fetchPlayConfig(scenarioId), fetchKnowledge(scenarioId)])
       .then(([playConfig, knowledge]) => {
         if (cancelled) return
@@ -191,6 +238,7 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
 
   const generate = async () => {
     if (!prompt.trim() || saving) return
+    if (nodes.length > 0 && !confirm('AI 将替换当前故事线的全部节点，是否继续？')) return
     setSaving(true)
     setErrors([])
     setNotice('')
@@ -282,7 +330,7 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                   <span className="text-sm font-bold text-white">剧情线分组</span>
                   <button
                     onClick={() => updateStoryline({
-                      lines: [...lines, { id: `line_${lines.length + 1}`, title: '新剧情线', kind: 'main', description: '', enabled: true }],
+                      lines: [...lines, { id: nextLineId(lines), title: '新剧情线', kind: 'main', description: '', enabled: true }],
                     })}
                     className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:text-white"
                   >

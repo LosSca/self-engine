@@ -259,6 +259,7 @@ class RepairRequest(BaseModel):
 
 class ImportCampaignRequest(BaseModel):
     state: Dict[str, Any]
+    events: List[Dict[str, Any]] = Field(default_factory=list)
     reset: bool = False
 
 
@@ -675,7 +676,11 @@ def import_campaign(campaign_id: str, body: ImportCampaignRequest):
                 status_code=400,
                 detail=f"unknown world '{state.world_id}'",
             )
-        store.bind_campaign(state)
+        store.bind_campaign(
+            state,
+            clear_history=body.reset,
+            events=body.events,
+        )
         return state
     finally:
         store.close()

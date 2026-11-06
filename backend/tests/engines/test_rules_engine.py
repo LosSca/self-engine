@@ -399,3 +399,34 @@ def test_buy_and_sell_use_currency_and_merchant_stock():
     state.currency = 2
     poor = RulesEngine().evaluate(world, state, "buy", "iron_key")
     assert not poor.ok and poor.code == "insufficient_funds"
+
+
+def test_buy_can_target_a_specific_merchant():
+    world, state = _setup()
+    from app.models.game import ItemDef
+
+    world.items.append(ItemDef(id="tonic", name="Tonic", price=5))
+    world.entities.extend([
+        EntityDef(
+            id="first_merchant", name="First", location_id=state.location_id,
+            shop_items=["iron_key"],
+        ),
+        EntityDef(
+            id="second_merchant", name="Second", location_id=state.location_id,
+            shop_items=["tonic"],
+        ),
+    ])
+    state.currency = 20
+    state.item_locations["tonic"] = "forest_edge"
+
+    wrong = RulesEngine().evaluate(world, state, "buy", "tonic")
+    assert not wrong.ok and wrong.code == "not_for_sale"
+
+    targeted = RulesEngine().evaluate(
+        world, state, "buy", "tonic", {"merchant_id": "second_merchant"}
+    )
+    assert targeted.ok
+    apply_effects(state, world, targeted.effects)
+    assert state.currency == 15 and state.inventory["tonic"] == 1
+    # Buying one copy must not erase a different copy lying elsewhere.
+    assert state.item_locations["tonic"] == "forest_edge"

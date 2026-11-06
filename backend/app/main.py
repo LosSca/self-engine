@@ -51,6 +51,10 @@ async def api_token_guard(request: Request, call_next):
     supervisors and load balancers can check liveness without a secret.
     """
     token = os.environ.get("API_TOKEN", "").strip()
+    if request.method == "OPTIONS":
+        # CORS preflight never carries an application token; let the CORS
+        # middleware answer it instead of returning 401 to the browser.
+        return await call_next(request)
     if (
         token
         and request.url.path.startswith("/api")
