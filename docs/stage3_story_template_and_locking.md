@@ -77,3 +77,14 @@ class StoryNode(_Strict):
 - 锁定不记录「谁在何时锁定」，也没有解锁审计；需要时再叠加事件记录。
 - 事件包目前没有单独的锁定开关（可整体随剧情线版本管理）。
 - 模板只有两个节点，不含事件、知识或事件包示例；示例世界仍放在 `frontend/src/data/worldTemplates.js`。
+
+## 第 5 步：玩家侧进度（frontend/src/components/StoryProgressPanel.jsx）
+
+`/story` 的数据之前只有一个徽标在用。现在徽标可点击，打开只读侧栏：
+
+- 按剧情线分组列出全部节点，状态取自 `entered / active / pending / locked`，停用线的节点显示「已停用」与 `reasons` 里引擎给的原因（例如「需要先触发事件包 'pack_xxx' 中的事件」）。
+- 小事件包区显示每个包是「已启用 / 已触发 / 未启用」，以及事件数量、一次性或可重复、是否停用。
+- 打开时刷新一次；面板不提供任何推进操作——进度只由 `ActionService` 在提交后写入 `state.story_nodes`。
+- 未绑定世界或自由模式时显示说明，而不是空白。
+
+前端构建：`✓ built in 1.90s`（GameCanvas 79.79 kB / gzip 21.40）。
