@@ -441,8 +441,24 @@ export default function GameCanvas() {
     const narrative = result?.narrative
     const text = narrative?.text?.trim()
     const parts = []
+    const fallback = []
+    if (result?.ok) {
+      ;(result.effects_applied || []).forEach((effect) => {
+        if (effect.kind === 'give_item') fallback.push(`获得 ${effect.target}。`)
+        else if (effect.kind === 'open_door') fallback.push(`${effect.target} 打开了。`)
+        else if (effect.kind === 'move_player') fallback.push(`你来到了 ${effect.target}。`)
+      })
+      ;(result.events_fired || []).forEach((execution) => {
+        if (execution?.name) fallback.push(`（触发了事件：${execution.name}）`)
+      })
+    }
     if (text) {
       parts.push(text)
+      if (result?.narrative?.model === 'fallback') {
+        // Say it out loud: the model was unavailable, this text is the
+        // deterministic description of what the engine actually committed.
+        parts.push('（叙事模型不可用，以上为规则结果的机器描述，状态已提交。）')
+      }
     } else if (result?.status === 'rejected') {
       parts.push(`（${result.message || result.code || '行动被规则拒绝'}）`)
     } else if (result?.status === 'conflict') {
@@ -450,7 +466,12 @@ export default function GameCanvas() {
     } else if (result?.status === 'duplicate') {
       parts.push('（这条行动之前已经处理过，本次没有产生新的变化。）')
     } else if (narrative?.status === 'failed') {
-      parts.push(`（叙事生成失败：${narrative.error || '未知错误'}。行动结果与状态已经提交，当前状态版本 ${result.state_version}。）`)
+      if (result?.ok && fallback.length > 0) {
+        parts.push(fallback.join(' '))
+        parts.push('（叙事模型不可用，以上为规则结果的机器描述，状态已提交。）')
+      } else {
+        parts.push(`（叙事生成失败：${narrative.error || '未知错误'}。行动结果与状态已经提交，当前状态版本 ${result.state_version}。）`)
+      }
     }
     if (parts.length === 0) parts.push('（无叙事输出）')
     appendMessage({ role: 'assistant', content: parts.join('\n\n') })

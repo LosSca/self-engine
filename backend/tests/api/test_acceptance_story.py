@@ -151,7 +151,11 @@ def test_acceptance_narrative_failure_keeps_committed_state(client, monkeypatch)
 
     result = _act(client, "camp-nofx", "nofx-take", "take", "iron_key")
     assert result["status"] == "applied"
-    assert result["narrative"]["status"] == "failed"
+    # The model is gone, the turn is not: the prose degrades to a deterministic
+    # description and the reason is kept for debugging.
+    assert result["narrative"]["status"] == "ok"
+    assert result["narrative"]["model"] == "fallback"
+    assert result["narrative"]["text"]
     assert "narrator unavailable" in result["narrative"]["error"]
 
     state = client.get(f"{API}/campaigns/camp-nofx/state").json()

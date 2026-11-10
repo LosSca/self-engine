@@ -68,11 +68,13 @@ async def test_llm_narrator_only_sends_committed_facts():
 
 async def test_llm_narrator_strips_control_tags_from_prose():
     world, state, request, outcome = _setup()
-    router = StubRouter(reply="You push the door. [ITEM_ADD:blessing_token|Blessing|Token] It gives.")
+    # The stub says "Before you open it, ..." on purpose: prose may mention an
+    # action without claiming the rules handed anything out.
+    router = StubRouter(reply="Before you open it, [ITEM_ADD:blessing_token|Blessing|Token] you listen.")
     result = await LLMNarrator(router).narrate(request, outcome, state, world)
-    assert result.status == "ok"
+    assert result.status == "ok", result.error
     assert "ITEM_ADD" not in result.text
-    assert "You push the door" in result.text
+    assert "Before you open it" in result.text
 
 
 async def test_llm_narrator_times_out_without_touching_state():

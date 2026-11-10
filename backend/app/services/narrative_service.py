@@ -13,7 +13,7 @@ import json
 import re
 from collections import deque
 from collections.abc import Mapping
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from app.models.game import (
     ActionRequest,
@@ -129,6 +129,143 @@ def describe_effects(
     return sentences
 
 
+#: Words a model uses when it announces a reward the rules did not award.
+#: Written without a leading word boundary: on this interpreter a leading \b
+#: before a *lowercase* literal fails to match a capitalised sentence opener
+#: ("\byou" misses "You"), and these patterns only ever start a clause anyway.
+#: A cheap trigger; the precise clause check happens in _reward_announcements.
+#: Only the literal opener lives in a pattern: on this interpreter a longer
+#: pattern (lookbehind or alternation included) silently stops matching
+#: "You take the key and gain", so the verbs are checked in Python instead.
+_REWARD_SCAN = re.compile(r"(?:you)\s+(?:now\s+)?", re.IGNORECASE)
+_REWARD_SCAN_ZH = re.compile(r"(?:你)?(?:获得|得到|拿到|拾取|捡到|收下)(?:了)?|入手了?")
+_REWARD_WORDS = (
+    "gain", "gained", "get", "got", "receive", "received", "obtain", "obtained",
+    "acquire", "acquired", "find", "found", "pick up", "picked up", "loot",
+    "looted", "earn", "earned",
+)
+
+
+def _issued_things(world: WorldDefinition, effects: Sequence[Effect]) -> List[str]:
+    """Names/ids an accepted action actually hands over or unlocks."""
+    issued: List[str] = []
+    for effect in effects:
+        if effect.kind in ("give_item", "add_currency", "add_xp", "skill_change"):
+            if effect.target:
+                issued.append(_item_name(world, effect.target).lower())
+                issued.append(str(effect.target).lower())
+        elif effect.kind in ("open_door", "unequip_item", "equip_item"):
+            if effect.target:
+                issued.append(_door_name(world, effect.target).lower())
+                issued.append(str(effect.target).lower())
+    return [name for name in issued if name]
+
+
+def _reward_claims(text: str) -> List[Tuple[str, int]]:
+    """Where the prose claims the player gained something: (phrase, offset).
+
+    English is checked in plain Python (find the opener, then look at the words
+    right after it) rather than with one large regex: see the note on
+    _REWARD_SCAN for why.
+    """
+    body = text or ""
+    claims: List[Tuple[str, int]] = []
+    for match in _REWARD_SCAN.finditer(body):
+        if match.start() and (body[match.start() - 1].isalnum() or body[match.start() - 1] == "_"):
+            # "bayou you" style false positives: only a whole word counts.
+            continue
+        # A verb is "the player gained" only in the first few words after "you";
+        # later in the clause it is ordinary narration of what they did.
+        tail = body[match.end(): match.end() + 40].lower()  # match already eats "now "
+        for word in _REWARD_WORDS:
+            if word in tail.split()[:8]:
+                claims.append(((body[match.start(): match.end()] + word).strip(), match.start()))
+                break
+    claims += [(m.group(0), m.start()) for m in _REWARD_SCAN_ZH.finditer(body)]
+    return claims
+
+
+def _reward_announcements(text: str) -> List[str]:
+    """The phrases in which the prose claims the player gained something."""
+    return [phrase for phrase, _ in _reward_claims(text)]
+
+
+def _unbacked_reward(text: str, issued: Sequence[str]) -> bool:
+    """True when the prose announces a reward the engine did not award.
+
+    The model is told not to invent item gains, and this is the check that the
+    instruction actually held. Each claim is judged where it stands: "You take
+    the key and gain 50 gold" is backed for the key and unbacked for the gold,
+    so the invented gold is rejected even though the key was real.
+    """
+    body = text or ""
+    lowered = body.lower()
+    for phrase, offset in _reward_claims(body):
+        if any(ord(ch) > 127 for ch in phrase):
+            # Chinese names are not spaced out; judge the whole paragraph.
+            if any(name in lowered for name in issued):
+                continue
+            return True
+        window = body[offset: offset + 60].lower()
+        if any(name and name in window for name in issued):
+            continue
+        return True
+    return False
+
+
+def _verified(
+    world: WorldDefinition,
+    outcome: RuleOutcome,
+    text: str,
+    executions_effects: Optional[Sequence[Effect]] = None,
+) -> NarrativeResult:
+    """Accept prose only if it does not claim a reward the engine did not give.
+
+    This is the model-output check the design asks for: the engine decides, the
+    model describes, and a description that invents a gain is rejected rather
+    than shown. The turn is committed either way, so the caller substitutes a
+    deterministic description of what really happened.
+    """
+    legitimate = list(executions_effects or ())
+    if outcome.ok:
+        legitimate += list(outcome.effects)
+    if _unbacked_reward(text, _issued_things(world, legitimate)):
+        return NarrativeResult(
+            status="failed",
+            error=(
+                "narrator announced a reward the rules did not award "
+                "(state is unaffected)"
+            ),
+        )
+    return NarrativeResult(status="ok", text=text, model="llm")
+
+
+def render_fallback(
+    world: WorldDefinition,
+    state: GameState,
+    outcome: RuleOutcome,
+    executions: Sequence[EventExecution] = (),
+) -> str:
+    """A deterministic description of what the turn really did.
+
+    Used when the model is unavailable or its answer was rejected. The prose is
+    plain on purpose: it must be exactly as true as the committed state, which
+    is why it is assembled from effects and event executions rather than
+    written freely.
+    """
+    if not outcome.ok:
+        return outcome.message or f"The {outcome.code.replace('_', ' ')}."
+    sentences = describe_effects(world, state, outcome.effects)
+    for execution in executions:
+        if execution.status == "fired" and execution.name:
+            sentences.append(f"({execution.name})")
+        elif execution.status == "failed" and execution.reason:
+            sentences.append(f"({execution.name}: {execution.reason})")
+    if not sentences:
+        return ""
+    return " ".join(sentences)
+
+
 def _effect_noun(world: WorldDefinition, effect: Effect) -> str:
     """The named thing an effect mentions, so prose does not repeat itself."""
     if effect.kind in ("give_item", "remove_item"):
@@ -218,12 +355,11 @@ class TemplateNarrator:
         quest_updates: Sequence[str] = (),
         knowledge: Optional[Sequence[dict]] = None,
         options: Optional[dict] = None,
+        executions_effects: Optional[Sequence[Effect]] = None,
     ) -> NarrativeResult:
         if not outcome.ok:
-            return NarrativeResult(
-                status="ok",
-                text=outcome.message or "That does not work.",
-                model="template",
+            return _verified(
+                world, outcome, outcome.message or "That does not work.", executions_effects
             )
         parts: List[str] = []
         if outcome.message:
@@ -439,6 +575,7 @@ class LLMNarrator:
         quest_updates: Sequence[str] = (),
         knowledge: Optional[Sequence[dict]] = None,
         options: Optional[dict] = None,
+        executions_effects: Optional[Sequence[Effect]] = None,
     ) -> NarrativeResult:
         language = (options or {}).get("language")
         language = language.strip() if isinstance(language, str) else None
@@ -485,7 +622,7 @@ class LLMNarrator:
         cleaned = _CONTROL_TAG.sub("", text or "").strip()
         if not cleaned:
             return NarrativeResult(status="failed", error="narrator returned empty text")
-        return NarrativeResult(status="ok", text=cleaned, model="llm")
+        return _verified(world, outcome, cleaned, executions_effects)
 
 
 def build_narrator(router=None, **kwargs) -> "TemplateNarrator | LLMNarrator":

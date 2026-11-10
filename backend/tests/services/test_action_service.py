@@ -153,7 +153,10 @@ async def test_narrative_failure_does_not_roll_back_committed_state(store):
 
     result = await service.execute(_request("req-take", "take", "iron_key"))
     assert result.status == "applied"
-    assert result.narrative.status == "failed"
+    # Degraded narration is still a turn: the prose describes what the rules did.
+    assert result.narrative.status == "ok"
+    assert result.narrative.model == "fallback"
+    assert result.narrative.text
     assert "narrator unavailable" in result.narrative.error
     assert narrator.calls == 1
 
@@ -231,7 +234,8 @@ async def test_narrator_exception_still_commits_the_turn(store):
 
     assert result.status == "applied"
     assert result.state_version == 1
-    assert result.narrative.status == "failed"
+    assert result.narrative.status == "ok"
+    assert result.narrative.model == "fallback"
     assert "TimeoutError" in result.narrative.error
     stored = store.get_state("camp-1")
     assert stored.version == 1
@@ -249,7 +253,9 @@ async def test_narrator_exception_on_a_rejected_action_is_reported_not_raised(st
 
     assert result.status == "rejected"
     assert result.code == "door_locked"
-    assert result.narrative.status == "failed"
+    assert result.narrative.status == "ok"
+    assert result.narrative.model == "fallback"
+    assert "TimeoutError" in result.narrative.error
     assert store.get_state("camp-1").version == 0
 
 

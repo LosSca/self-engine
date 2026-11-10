@@ -12,11 +12,12 @@ Order of operations for one request:
      a compare-and-set on the version the turn was decided from
 
 The narrator runs before the commit but has no write access: it receives the
-settled state, it cannot mutate it, and any exception it raises is converted
-into NarrativeResult(status="failed"). The turn therefore still commits, the
-failure is recorded as a narrative.failed domain event next to the change it
-failed to describe, and a crash can never leave prose describing a change that
-was not stored.
+settled state and cannot mutate it. If it raises, times out, or invents a reward
+the rules did not award, the prose is replaced by a deterministic description of
+what actually happened (NarrativeResult.model == "fallback") and the reason is
+kept in .error. The turn therefore always commits, the failure is recorded as a
+narrative.failed domain event next to the change it failed to describe, and a
+crash can never leave prose describing a change that was not stored.
 """
 from __future__ import annotations
 
@@ -49,7 +50,7 @@ from app.models.game import (
 )
 from app.models.knowledge import ScenarioPlayContext
 from app.services.knowledge_service import build_context
-from app.services.narrative_service import TemplateNarrator, preset_router
+from app.services.narrative_service import TemplateNarrator, preset_router, render_fallback
 from app.services.summary_service import SUMMARY_EVERY_TURNS, summarize
 
 
@@ -513,6 +514,15 @@ class ActionService:
                 narrative = NarrativeResult(
                     status="failed", error=f"{type(exc).__name__}: {exc}"
                 )
+        if narrative.status != "ok":
+            # A refused action still gets a sentence, and a broken model must
+            # not turn that into an error: the refusal itself is the answer.
+            narrative = NarrativeResult(
+                status="ok",
+                text=outcome.message or outcome.code,
+                model="fallback",
+                error=narrative.error,
+            )
         result = ActionResult(
             **self._base(request),
             status="rejected",
@@ -674,6 +684,9 @@ class ActionService:
                         ],
                     )
                 )
+        event_effects = [
+            effect for execution in executions for effect in getattr(execution, "effects", ())
+        ]
         try:
             narrative = await self.narrator.narrate(
                 request,
@@ -683,15 +696,53 @@ class ActionService:
                 executions,
                 [update.quest_id for update in quest_updates],
                 **self._narrate_options(knowledge, options),
+                executions_effects=event_effects,
             )
+        except TypeError as exc:
+            # A narrator written before event effects were accounted for still
+            # gets the call, without the newer keyword.
+            if "executions_effects" not in str(exc):
+                return (
+                    NarrativeResult(status="failed", error=f"{type(exc).__name__}: {exc}"),
+                    context_entries,
+                )
+            try:
+                narrative = await self.narrator.narrate(
+                    request,
+                    outcome,
+                    new_state,
+                    world,
+                    executions,
+                    [update.quest_id for update in quest_updates],
+                    **self._narrate_options(knowledge, options),
+                )
+            except Exception as inner:  # noqa: BLE001
+                return (
+                    NarrativeResult(status="failed", error=f"{type(inner).__name__}: {inner}"),
+                    context_entries,
+                )
         except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
-            return (
-                NarrativeResult(
-                    status="failed",
-                    error=f"{type(exc).__name__}: {exc}",
-                ),
-                context_entries,
+            narrative = NarrativeResult(
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
             )
+        if narrative.status != "ok":
+            # The model is unavailable or its answer was rejected: describe the
+            # committed result deterministically instead of leaving the player
+            # with an error line. The failure itself is still reported.
+            # A failed narrator never reads as an error to the player: the
+            # engine can describe its own committed result.
+            fallback = render_fallback(world, new_state, outcome, executions)
+            if fallback:
+                return (
+                    NarrativeResult(
+                        status="ok",
+                        text=fallback,
+                        model="fallback",
+                        error=narrative.error,
+                    ),
+                    context_entries,
+                )
         return narrative, context_entries
 
     def _reject_effects(
@@ -994,11 +1045,18 @@ class ActionService:
                     "state_version": new_state.version,
                 }
             )
-        if narrative.status == "failed":
+        if narrative.error:
+            # A degraded turn keeps its prose (a deterministic description of
+            # the committed change) but never hides why the model was skipped:
+            # the reason is the only thing a debugger can act on.
             events.append(
                 {
                     "event_type": "narrative.failed",
-                    "payload": {"error": narrative.error},
+                    "payload": {
+                        "error": narrative.error,
+                        "degraded": narrative.status == "ok",
+                        "model": narrative.model,
+                    },
                     "state_version": new_state.version,
                 }
             )
