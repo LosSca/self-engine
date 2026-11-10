@@ -51,7 +51,65 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["engine"])
 
 
-@router.get("/action-types", response_model=List[Dict[str, Any]])
+class ActionSpecView(BaseModel):
+    """One entry of the action catalogue: what the rules can decide, and the
+    words that map onto it. The catalogue is the source of truth, so a new
+    action shows up here the moment it is registered."""
+
+    name: str
+    label: str = ""
+    target: Literal["none", "optional", "required"] = "none"
+    description: str = ""
+    verbs: List[str] = Field(default_factory=list)
+
+
+class DomainEventView(BaseModel):
+    """One committed domain event (the fact log for a campaign).
+
+    `id` is the store's own row key, kept as an opaque string so it stays
+    meaningful whichever backend wrote it; `state_version` is the number the
+    event is ordered by.
+    """
+
+    id: str = ""
+    campaign_id: str = ""
+    request_id: str = ""
+    event_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    state_version: int = 0
+    created_at: str = ""
+
+
+class SnapshotView(BaseModel):
+    """One retained state snapshot; stored_bytes is cumulative, oldest first."""
+
+    version: int
+    request_id: str = ""
+    created_at: str = ""
+    bytes: int = 0
+    stored_bytes: int = 0
+
+
+class TextActionResponse(BaseModel):
+    """A free-text utterance resolved into the structured lane.
+
+    `parsed` is the interpreter's own account of the match (action, target and
+    how it was found); `result` is the committed ActionResult. A refusal still
+    carries both, so a wrong guess is visible without changing state.
+    """
+
+    request_id: str
+    status: str
+    # An utterance that could not be parsed has no interpretation; the refusal
+    # still carries the raw text in `result` so the player sees what happened.
+    parsed: Optional[Dict[str, Any]] = None
+    result: ActionResult
+
+
+
+
+
+@router.get("/action-types", response_model=List[ActionSpecView])
 def list_action_types():
     """The verbs the rules engine can decide, as declared in the catalogue.
 
@@ -293,8 +351,289 @@ def _require_debug_tools() -> None:
         )
 
 
+# ------------------------------------------------------- response contracts
+# Every route that returns a hand-built dict now says *which* dict. The models
+# below are the wire contract: FastAPI validates the payload on the way out, so
+# a renamed key or a dropped field fails loudly here instead of silently
+# changing what the browser receives. They are intentionally permissive about
+# nested engine payloads (effects, issues, diffs) while pinning the top level.
+
+
+class WorldSummary(BaseModel):
+    """One row of GET /worlds (a saved world, not a campaign)."""
+
+    world_id: str
+    name: str = ""
+    description: str = ""
+    scenario_id: str = ""
+    start_location_id: str = ""
+    locations: int = 0
+    items: int = 0
+    doors: int = 0
+    entities: int = 0
+    events: int = 0
+    quests: int = 0
+    updated_at: str = ""
+    created_at: str = ""
+
+
+class WorldWriteResponse(BaseModel):
+    status: str
+    world_id: str
+    name: str = ""
+    scenario_id: str = ""
+    locations: int = 0
+    items: int = 0
+    doors: int = 0
+    entities: int = 0
+    events: int = 0
+    quests: int = 0
+    updated_at: str = ""
+    created_at: str = ""
+
+
+class _MapRef(BaseModel):
+    id: str
+    name: str = ""
+    known: bool = True
+
+
+class MapExit(BaseModel):
+    target_id: str
+    label: str = ""
+    door: Optional[Dict[str, Any]] = None
+    requires_item: Optional[_MapRef] = None
+
+
+class MapOccupant(BaseModel):
+    id: str
+    name: str = ""
+    kind: str = "npc"
+    known: bool = True
+
+
+class MapRegion(BaseModel):
+    id: str
+    locations: List[str] = Field(default_factory=list)
+
+
+class MapLocation(BaseModel):
+    id: str
+    name: str = ""
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    region: str = ""
+    x: Optional[int] = None
+    y: Optional[int] = None
+    is_start: bool = False
+    exits: List[MapExit] = Field(default_factory=list)
+    items: List[_MapRef] = Field(default_factory=list)
+    npcs: List[MapOccupant] = Field(default_factory=list)
+    doors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class MapCounts(BaseModel):
+    locations: int = 0
+    items: int = 0
+    doors: int = 0
+    entities: int = 0
+    quests: int = 0
+    events: int = 0
+
+
+class WorldMapResponse(BaseModel):
+    """GET /worlds/{id}/map: a projection, never authoritative run-time state."""
+
+    world_id: str
+    scenario_id: str = ""
+    name: str = ""
+    description: str = ""
+    start_location_id: str = ""
+    regions: List[MapRegion] = Field(default_factory=list)
+    locations: List[MapLocation] = Field(default_factory=list)
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    doors: List[Dict[str, Any]] = Field(default_factory=list)
+    entities: List[Dict[str, Any]] = Field(default_factory=list)
+    counts: MapCounts = Field(default_factory=MapCounts)
+
+
+class LaneResponse(BaseModel):
+    """GET /campaigns/{id}/lane: which lane answers this campaign."""
+
+    campaign_id: str
+    lane: Literal["engine", "narrative"]
+    bound: bool
+    world_id: str = ""
+    version: int = 0
+
+
+class CampaignExportResponse(BaseModel):
+    format: str
+    format_version: int
+    exported_at: str
+    state: GameState
+    events: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class StoryNodeView(BaseModel):
+    id: str
+    title: str = ""
+    kind: str = "main"
+    line: str = ""
+    summary: str = ""
+    requires_event_pack: Optional[str] = None
+    locked: bool = False
+
+
+class StoryPayload(BaseModel):
+    name: str = ""
+    nodes: List[StoryNodeView] = Field(default_factory=list)
+    lines: List[Dict[str, Any]] = Field(default_factory=list)
+    packs: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class CampaignStoryResponse(BaseModel):
+    """GET /campaigns/{id}/story: storyline progress, read-only."""
+
+    campaign_id: str
+    mode: Literal["free", "storyline"]
+    entered: List[str] = Field(default_factory=list)
+    active: Optional[str] = None
+    pending: List[str] = Field(default_factory=list)
+    locked: List[str] = Field(default_factory=list)
+    reasons: Dict[str, str] = Field(default_factory=dict)
+    armed_packs: List[str] = Field(default_factory=list)
+    fired_packs: List[str] = Field(default_factory=list)
+    storyline: StoryPayload
+
+
+class NarrationHealth(BaseModel):
+    status: Literal["ok", "degraded", "unreported"]
+    window: int
+    recent_failures: int
+    last_failure: Optional[Dict[str, Any]] = None
+    narrator: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CampaignDiagnosticsResponse(BaseModel):
+    campaign_id: str
+    world_id: str
+    version: int
+    ok: bool
+    errors: int
+    warnings: int
+    issues: List[Dict[str, Any]] = Field(default_factory=list)
+    narration: NarrationHealth
+
+
+class SnapshotPruneResponse(BaseModel):
+    campaign_id: str
+    dropped: int
+    remaining: int
+    bytes: int
+
+
+class StateDiffResponse(BaseModel):
+    campaign_id: str
+    from_version: int
+    to_version: int
+    changed: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RollbackResponse(BaseModel):
+    status: str
+    restored_version: int
+    state: GameState
+
+
+class RepairResponse(BaseModel):
+    status: str
+    applied: List[str] = Field(default_factory=list)
+    remaining: List[Dict[str, Any]] = Field(default_factory=list)
+    issues: List[Dict[str, Any]] = Field(default_factory=list)
+    state: GameState
+
+
+class ActionPreviewResponse(BaseModel):
+    """A dry run: the same rules decided, nothing was written."""
+
+    campaign_id: str
+    state_version: int
+    action: str
+    label: str = ""
+    target_id: Optional[str] = None
+    ok: bool
+    code: str = ""
+    message: str = ""
+    effects: List[Dict[str, Any]] = Field(default_factory=list)
+    changed: bool = False
+
+
+class QuestObjectiveView(BaseModel):
+    id: str
+    kind: str
+    target: str = ""
+    description: str = ""
+    required_count: int = 1
+    count: int = 0
+    done: bool = False
+
+
+class QuestProgressView(BaseModel):
+    quest_id: str
+    title: str = ""
+    description: str = ""
+    enabled: bool = True
+    status: str = "inactive"
+    objectives: List[QuestObjectiveView] = Field(default_factory=list)
+    completed_objectives: int = 0
+    total_objectives: int = 0
+    rewards: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class QuestProgressResponse(BaseModel):
+    campaign_id: str
+    world_id: str
+    version: int
+    quests: List[QuestProgressView] = Field(default_factory=list)
+    active: List[str] = Field(default_factory=list)
+    completed: List[str] = Field(default_factory=list)
+    failed: List[str] = Field(default_factory=list)
+
+
+class EventExecutionView(BaseModel):
+    event_id: str = ""
+    name: str = ""
+    status: str = ""
+    reason: str = ""
+    effects: List[Any] = Field(default_factory=list)
+    branch: str = ""
+    parent_event_id: str = ""
+    depth: int = 0
+    state_version: int = 0
+    request_id: str = ""
+    created_at: str = ""
+
+
+class RequestRecordResponse(BaseModel):
+    """GET /actions/{request_id}: one recorded turn, as the store saw it.
+
+    The request and result payloads stay opaque on purpose - they are whatever
+    the caller sent and the service returned for that turn, including the
+    refusal code, the applied effects and the narrative outcome.
+    """
+
+    request_id: str
+    campaign_id: str = ""
+    request: Dict[str, Any] = Field(default_factory=dict)
+    status: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    state_version: int = 0
+    created_at: str = ""
+
+
 # --------------------------------------------------------------------- worlds
-@router.post("/worlds", response_model=Dict[str, Any])
+@router.post("/worlds", response_model=WorldWriteResponse)
 def create_world(world: WorldDefinition):
     store = _get_store()
     try:
@@ -306,7 +645,7 @@ def create_world(world: WorldDefinition):
     return {"status": "saved", **summary}
 
 
-@router.get("/worlds", response_model=List[Dict[str, Any]])
+@router.get("/worlds", response_model=List[WorldSummary])
 def list_worlds(scenario_id: Optional[str] = Query(None)):
     store = _get_store()
     try:
@@ -324,7 +663,7 @@ def validate_world_definition(world: WorldDefinition):
     return ValidateResponse(valid=not errors, errors=errors)
 
 
-@router.post("/worlds/generate", response_model=Dict[str, Any])
+@router.post("/worlds/generate", response_model=WorldWriteResponse)
 async def generate_world(body: GenerateWorldRequest):
     """Draft and save a new validated world from a prompt."""
     from uuid import uuid4
@@ -409,7 +748,7 @@ def _world_or_404_detail(world_id: str):
         store.close()
 
 
-@router.get("/worlds/{world_id}/map", response_model=Dict[str, Any])
+@router.get("/worlds/{world_id}/map", response_model=WorldMapResponse)
 def get_world_map(world_id: str, campaign_id: Optional[str] = None):
     """Navigation graph for one world (locations, exits, doors, occupants).
 
@@ -570,7 +909,7 @@ def get_world_map(world_id: str, campaign_id: Optional[str] = None):
     }
 
 
-@router.get("/worlds/{world_id}/events", response_model=List[Dict[str, Any]])
+@router.get("/worlds/{world_id}/events", response_model=List[GameEventDef])
 def list_world_events(world_id: str):
     store = _get_store()
     try:
@@ -600,7 +939,7 @@ def bind_world(campaign_id: str, body: BindWorldRequest):
         store.close()
 
 
-@router.get("/campaigns/{campaign_id}/lane", response_model=Dict[str, Any])
+@router.get("/campaigns/{campaign_id}/lane", response_model=LaneResponse)
 def get_campaign_lane(campaign_id: str):
     """Which engine answers this campaign: 'engine' (rules) or 'narrative' (LLM).
 
@@ -629,7 +968,7 @@ def get_campaign_lane(campaign_id: str):
     }
 
 
-@router.get("/campaigns/{campaign_id}/export", response_model=Dict[str, Any])
+@router.get("/campaigns/{campaign_id}/export", response_model=CampaignExportResponse)
 def export_campaign(campaign_id: str):
     """Download the authoritative snapshot and its domain events."""
     store = _get_store()
@@ -701,7 +1040,7 @@ def get_campaign_state(campaign_id: str):
     return state
 
 
-@router.get("/campaigns/{campaign_id}/story", response_model=Dict[str, Any])
+@router.get("/campaigns/{campaign_id}/story", response_model=CampaignStoryResponse)
 def get_campaign_story(campaign_id: str):
     """Story progress for one campaign (read-only; storyline mode only)."""
     game_store = _get_store()
@@ -811,7 +1150,7 @@ def _narration_health(game_store, campaign_id: str, limit: int = 50) -> Dict[str
     }
 
 
-@router.get("/campaigns/{campaign_id}/diagnostics", response_model=Dict[str, Any])
+@router.get("/campaigns/{campaign_id}/diagnostics", response_model=CampaignDiagnosticsResponse)
 def campaign_diagnostics(campaign_id: str):
     game_store = _get_store()
     scenario_store = _get_scenario_store()
@@ -837,7 +1176,7 @@ def campaign_diagnostics(campaign_id: str):
         scenario_store.close()
 
 
-@router.get("/campaigns/{campaign_id}/snapshots", response_model=List[Dict[str, Any]])
+@router.get("/campaigns/{campaign_id}/snapshots", response_model=List[SnapshotView])
 def campaign_snapshots(campaign_id: str, limit: int = Query(100, ge=1, le=500)):
     store = _get_store()
     try:
@@ -846,7 +1185,7 @@ def campaign_snapshots(campaign_id: str, limit: int = Query(100, ge=1, le=500)):
         store.close()
 
 
-@router.get("/campaigns/{campaign_id}/snapshots/prune", response_model=Dict[str, Any])
+@router.get("/campaigns/{campaign_id}/snapshots/prune", response_model=SnapshotPruneResponse)
 def campaign_snapshots_prune(campaign_id: str):
     """Drop old snapshots by hand (same policy the commit path applies)."""
     store = _get_store()
@@ -879,7 +1218,7 @@ def campaign_snapshot(campaign_id: str, version: int):
     return snapshot
 
 
-@router.get("/campaigns/{campaign_id}/state-diff", response_model=Dict[str, Any])
+@router.get("/campaigns/{campaign_id}/state-diff", response_model=StateDiffResponse)
 def campaign_state_diff(
     campaign_id: str,
     from_version: int = Query(..., ge=0),
@@ -909,7 +1248,7 @@ def campaign_state_diff(
     }
 
 
-@router.post("/campaigns/{campaign_id}/rollback", response_model=Dict[str, Any])
+@router.post("/campaigns/{campaign_id}/rollback", response_model=RollbackResponse)
 def campaign_rollback(campaign_id: str, body: RollbackRequest):
     _require_debug_tools()
     game_store = _get_store()
@@ -954,7 +1293,7 @@ def campaign_rollback(campaign_id: str, body: RollbackRequest):
         game_store.close()
 
 
-@router.post("/campaigns/{campaign_id}/repair", response_model=Dict[str, Any])
+@router.post("/campaigns/{campaign_id}/repair", response_model=RepairResponse)
 def campaign_repair(campaign_id: str, body: RepairRequest):
     _require_debug_tools()
     game_store = _get_store()
@@ -1051,7 +1390,7 @@ class ActionPreviewBody(BaseModel):
 
 
 @router.post(
-    "/campaigns/{campaign_id}/actions/preview", response_model=Dict[str, Any]
+    "/campaigns/{campaign_id}/actions/preview", response_model=ActionPreviewResponse
 )
 def preview_action(campaign_id: str, request: ActionPreviewBody):
     """Decide one action against the committed state without committing it.
@@ -1096,7 +1435,7 @@ def preview_action(campaign_id: str, request: ActionPreviewBody):
         store.close()
 
 
-@router.get("/actions", response_model=List[Dict[str, Any]])
+@router.get("/actions", response_model=List[ActionSpecView])
 def list_actions():
     """The catalogue the rules engine can decide, with the words it parses.
 
@@ -1131,7 +1470,7 @@ class TextActionBody(BaseModel):
     narrate: bool = True
 
 
-@router.post("/campaigns/{campaign_id}/text-actions", response_model=Dict[str, Any])
+@router.post("/campaigns/{campaign_id}/text-actions", response_model=TextActionResponse)
 async def run_text_action(campaign_id: str, request: TextActionBody):
     """Parse, decide and commit one utterance through the same rules lane.
 
@@ -1159,7 +1498,7 @@ async def run_text_action(campaign_id: str, request: TextActionBody):
         service.scenario_store.close()
 
 
-@router.get("/campaigns/{campaign_id}/events", response_model=List[Dict[str, Any]])
+@router.get("/campaigns/{campaign_id}/events", response_model=List[DomainEventView])
 def list_campaign_events(
     campaign_id: str,
     limit: int = Query(50, ge=1, le=500),
@@ -1173,7 +1512,7 @@ def list_campaign_events(
 
 
 @router.get(
-    "/campaigns/{campaign_id}/quest-progress", response_model=Dict[str, Any]
+    "/campaigns/{campaign_id}/quest-progress", response_model=QuestProgressResponse
 )
 def get_quest_progress(campaign_id: str):
     """Quest definitions joined with this campaign's committed progress.
@@ -1237,7 +1576,7 @@ def get_quest_progress(campaign_id: str):
 
 @router.get(
     "/campaigns/{campaign_id}/event-executions",
-    response_model=List[Dict[str, Any]],
+    response_model=List[EventExecutionView],
 )
 def list_event_executions(
     campaign_id: str,
@@ -1288,7 +1627,7 @@ def list_event_executions(
     return executions
 
 
-@router.get("/actions/{request_id}", response_model=Dict[str, Any])
+@router.get("/actions/{request_id}", response_model=RequestRecordResponse)
 def get_action(request_id: str):
     store = _get_store()
     try:
