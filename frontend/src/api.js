@@ -79,8 +79,8 @@ export function streamAction({
   action,
   openingNarrative,
   maxTokens,
-  provider,
-  model,
+  provider = null,
+  model = null,
   temperature,
   combatEnabled,
   onChunk,
@@ -107,8 +107,10 @@ export function streamAction({
       action,
       opening_narrative: openingNarrative || '',
       max_tokens: maxTokens || 2000,
-      provider: provider || 'deepseek',
-      model: model || 'deepseek-v4-flash',
+      // Do not invent a model here: an empty value lets the server use its
+      // configured provider. Hardcoding a model made every turn fall back.
+      provider: provider || '',
+      model: model || '',
       temperature: temperature ?? 0.85,
       combat_enabled: combatEnabled,
     }),

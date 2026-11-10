@@ -425,10 +425,22 @@ def _unified_service(req: PlayerActionRequest):
     try:
         service = TextActionService(game_store, scenario_store=scenario_store)
         state = game_store.get_state(req.campaign_id)
-        if state is not None:
-            world = game_store.get_world(state.world_id)
-        else:
-            world = service.bindable_world(req.campaign_id)
+        try:
+            if state is not None:
+                world = game_store.get_world(state.world_id)
+            else:
+                # Binds an authored world for the scenario, or creates a
+                # validated starter one, so a new campaign never leaves the
+                # rules lane (the legacy session cannot see this state).
+                world = service.bindable_world(req.campaign_id)
+        except LookupError:
+            world = None
+        if world is None and state is not None:
+            # The campaign keeps its progress; only the world document went away.
+            try:
+                world = service._world_for_state(state, req.campaign_id)
+            except LookupError:
+                world = None
         if world is None:
             game_store.close()
             scenario_store.close()

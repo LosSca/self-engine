@@ -24,10 +24,19 @@ from app.models.game import ActionRequest, ActionResult, Condition, GameState, W
 import logging
 import sqlite3
 
-from app.services import intent_advisor, world_service
+from app.services import intent_advisor, starter_worlds, world_service
 from app.services.action_service import ActionService
 
 logger = logging.getLogger(__name__)
+
+
+def _first_sentence(text: str, limit: int = 160) -> str:
+    """First non-empty line of an opening narrative, trimmed for a summary."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line:
+            return line[:limit]
+    return ""
 
 #: The parser accepts exactly the actions the rule catalogue declares, and the
 #: verb table is read from the same place, so the two can never drift apart.
@@ -93,6 +102,25 @@ def _verb_prefix(text: str, verb: str) -> bool:
     )
 
 
+#: Verbs that some authors bake into a name ("Open Door", "打开的门").
+_VERB_PREFIXES = (
+    "open", "unlock", "take", "pick", "use", "talk", "move", "go", "attack",
+    "defend", "flee", "buy", "sell", "equip", "unequip", "choose", "look",
+    "investigate", "inspect", "examine",
+)
+
+
+def _door_verb(name: str) -> str:
+    """'Open Door' -> 'open door'; 'Inner Door' -> '' (no verb baked in)."""
+    lowered = " ".join((name or "").lower().split())
+    for verb in _VERB_PREFIXES:
+        if lowered == verb:
+            return ""
+        if lowered.startswith(verb + " "):
+            return lowered
+    return ""
+
+
 def _clean_target(text: str) -> str:
     value = text.strip().strip("，,、:：")
     for suffix in ("这个", "那个"):
@@ -125,12 +153,16 @@ def _aliases(names: Sequence[str]) -> List[str]:
 
 
 class _Candidate:
-    __slots__ = ("id", "names", "kind")
+    __slots__ = ("id", "names", "kind", "verb")
 
-    def __init__(self, item_id: str, names: Sequence[str], kind: str):
+    def __init__(self, item_id: str, names: Sequence[str], kind: str, verb: str = ""):
         self.id = item_id
         self.names = _aliases(names)
         self.kind = kind
+        #: Names that describe the action as well as the object ("Open Door").
+        #: Ordinary matching would strip the verb from the utterance, so these
+        #: names are compared against the whole lowered utterance instead.
+        self.verb = verb.strip().lower()
 
     def match(self, fragment: str) -> int:
         fragment = fragment.strip().lower().replace("_", " ")
@@ -174,7 +206,7 @@ class TextActionParser:
                     return self._resolve_custom(custom[0], custom[1], world, state)
             guessed = self._guess_without_verb(lowered, world, state)
             return guessed if guessed and (mode == "DO" or guessed.action == "talk") else None
-        parsed = self._resolve(action, fragment, world, state)
+        parsed = self._resolve(action, fragment, world, state, utterance=text)
         if parsed is not None:
             return parsed
         return ParsedAction(
@@ -297,7 +329,12 @@ class TextActionParser:
         )
 
     def _resolve(
-        self, action: str, fragment: str, world: WorldDefinition, state: GameState
+        self,
+        action: str,
+        fragment: str,
+        world: WorldDefinition,
+        state: GameState,
+        utterance: str = "",
     ) -> Optional[ParsedAction]:
         if action == "look":
             if fragment in ("", "around", "周围", "四周"):
@@ -390,7 +427,7 @@ class TextActionParser:
             rules = ("talk", self._talk_candidates(world, state))
         else:
             return None
-        matched = self._best(fragment, rules[1])
+        matched = self._best(fragment, rules[1], whole=utterance or fragment)
         if matched is None:
             return None
         return ParsedAction(
@@ -402,10 +439,24 @@ class TextActionParser:
 
     @staticmethod
     def _best(
-        fragment: str, candidates: List[_Candidate], exact_only: bool = False
+        fragment: str,
+        candidates: List[_Candidate],
+        exact_only: bool = False,
+        whole: str = "",
     ) -> Optional[_Candidate]:
+        def score(candidate: "_Candidate") -> int:
+            best = candidate.match(fragment)
+            if whole and candidate.verb:
+                # The authored name already contains the verb, so the verb was
+                # stripped from the utterance before matching; compare against
+                # the full sentence instead.
+                if _norm(whole) == _norm(candidate.verb) or _norm(whole).startswith(candidate.verb + " "):
+                    if not fragment or fragment in candidate.verb or candidate.verb.endswith(fragment):
+                        best = max(best, 900)
+            return best
+
         ranked = sorted(
-            ((candidate.match(fragment), candidate) for candidate in candidates),
+            ((score(candidate), candidate) for candidate in candidates),
             key=lambda pair: pair[0],
             reverse=True,
         )
@@ -510,7 +561,7 @@ class TextActionParser:
     @staticmethod
     def _door_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
         return [
-            _Candidate(door.id, [door.name, door.id], "door")
+            _Candidate(door.id, [door.name, door.id], "door", verb=_door_verb(door.name))
             for door in world.doors
             if door.location_id == state.location_id
         ]
@@ -570,6 +621,17 @@ class TextActionService:
 
     # ---------------------------------------------------------------- binding
     def bindable_world(self, campaign_id: str) -> Optional[WorldDefinition]:
+        """Return the world for a campaign, binding (or creating) one if needed.
+
+        Resolution order, all deterministic:
+        1. an already bound campaign keeps its world (never rebound here);
+        2. a world authored for the campaign's scenario, in creation order;
+        3. a starter world generated from the scenario itself.
+
+        Step 3 is what keeps a brand new campaign inside the rules lane: without
+        it the caller fell back to the legacy LLM session, whose state this
+        store cannot see, so the two systems disagreed about the same player.
+        """
         if self.game_store.get_state(campaign_id) is not None:
             return None
         if self.scenario_store is None:
@@ -584,7 +646,95 @@ class TextActionService:
             if world is not None:
                 world_service.bind_world(self.game_store, campaign_id, world.world_id)
                 return world
+        return self._provision_starter_world(campaign_id, campaign)
+
+    def _scenario_record(self, scenario_id: str):
+        if self.scenario_store is None or not hasattr(self.scenario_store, "get_scenario"):
+            return None
+        try:
+            return self.scenario_store.get_scenario(scenario_id)
+        except Exception:  # noqa: BLE001 - a missing scenario falls back to defaults
+            logger.warning("could not read scenario %s", scenario_id, exc_info=True)
+            return None
+
+    def _provision_starter_world(self, campaign_id: str, campaign) -> Optional[WorldDefinition]:
+        """Create and bind a starter world for a campaign that has none.
+
+        The document is generated as plain data and validated with the same
+        `validate_world` any authored world goes through; an invalid document is
+        never saved. A world id that already exists is skipped (never
+        overwritten), and a campaign that already has state is left alone.
+        """
+        scenario = self._scenario_record(getattr(campaign, "scenario_id", ""))
+        language = getattr(scenario, "language", "") or ""
+        title = getattr(scenario, "title", "") or ""
+        summary = (
+            getattr(scenario, "description", "")
+            or _first_sentence(getattr(scenario, "opening_narrative", ""))
+            or ""
+        )
+        world_type = getattr(scenario, "world_type", "") or ""
+        base_id = starter_worlds.starter_world_id(campaign_id)
+        for attempt in range(0, 6):
+            world_id = starter_worlds.alternate_world_id(base_id, attempt)
+            if self.game_store.get_world(world_id) is not None:
+                continue
+            document = starter_worlds.build_world_document(
+                scenario_id=getattr(campaign, "scenario_id", ""),
+                world_id=world_id,
+                title=title,
+                summary=summary,
+                language=language,
+                world_type=world_type,
+            )
+            try:
+                world = WorldDefinition(**document)
+            except Exception:  # noqa: BLE001 - never bind an invalid generated world
+                logger.error(
+                    "generated starter world for campaign %s failed model validation",
+                    campaign_id, exc_info=True,
+                )
+                return None
+            errors = world_service.validate_world(world)
+            if errors:
+                logger.error(
+                    "generated starter world for campaign %s is invalid: %s",
+                    campaign_id, "; ".join(errors),
+                )
+                return None
+            world_service.save_world(self.game_store, world)
+            state = world_service.bind_world(self.game_store, campaign_id, world.world_id)
+            logger.info(
+                "campaign %s auto-bound generated starter world %s (%s)",
+                campaign_id, world.world_id, world.name,
+            )
+            del state
+            return world
+        logger.error("no free starter world id for campaign %s", campaign_id)
         return None
+
+    def _world_for_state(self, state: GameState, campaign_id: str) -> WorldDefinition:
+        """The world a bound state points at; a starter world if it went missing.
+
+        A state can outlive its world document (a world deleted while a campaign
+        still points at it). Rather than failing the turn, the campaign keeps its
+        progress and gets a freshly generated starter world of the same shape.
+        """
+        try:
+            return world_service.get_world(self.game_store, state.world_id)
+        except LookupError:
+            logger.error(
+                "campaign %s points at missing world %s; provisioning a starter",
+                campaign_id, state.world_id,
+            )
+        campaign = (
+            self.scenario_store.get_campaign(campaign_id)
+            if self.scenario_store is not None else None
+        )
+        world = self._provision_starter_world(campaign_id, campaign) if campaign else None
+        if world is None:
+            raise LookupError(f"campaign '{campaign_id}' has no usable world")
+        return world
 
     def ensure_state(self, campaign_id: str) -> GameState:
         state = self.game_store.get_state(campaign_id)
@@ -611,7 +761,7 @@ class TextActionService:
         if replayed is not None:
             return await self._replay_text(campaign_id, text, request_id, narrate, replayed)
         state = self.ensure_state(campaign_id)
-        world = world_service.get_world(self.game_store, state.world_id)
+        world = self._world_for_state(state, campaign_id)
         parsed = self.parser.parse(text, world, state)
         advised = None
         if parsed is None or not parsed.action:
