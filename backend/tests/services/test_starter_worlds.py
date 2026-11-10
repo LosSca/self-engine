@@ -25,6 +25,11 @@ def stores(monkeypatch, tmp_path):
     scenario_store.close()
 
 
+def world_initial_items(world):
+    """Item ids that start somewhere in the world (reachable from some location)."""
+    return {item_id for location in world.locations for item_id in location.item_ids}
+
+
 def _campaign(scenario_store, **kwargs):
     scenario = scenario_store.create_scenario(
         title=kwargs.pop("title", "Mist Inn"),
@@ -183,3 +188,57 @@ def test_chinese_scenario_gets_a_chinese_starter_world(stores):
     names = [location.name for location in world.locations]
     assert names == ["落脚处", "里侧", "旁路"]
     assert [door.name for door in world.doors] == ["倒落的门"]
+
+
+# -- authored presets -------------------------------------------------------
+
+def test_every_preset_is_valid_in_both_languages():
+    for key in starter_worlds.preset_keys():
+        for language in ("zh-CN", "en"):
+            document = starter_worlds.build_world_document(
+                scenario_id="sc-1",
+                world_id="w-preset",
+                title="Title",
+                summary="Summary.",
+                language=language,
+                world_type=key,
+            )
+            world = WorldDefinition(**document)
+            assert world_service.validate_world(world) == [], (key, language)
+            assert world.start_location_id in {loc.id for loc in world.locations}
+            # Every key a locked door names must be a real item that starts in a
+            # reachable place; a preset may be lock-free (wild_camp) but never
+            # reference a key that does not exist.
+            item_ids = {item.id for item in world.items}
+            keys = {door.key_item_id for door in world.doors if door.locked and door.key_item_id}
+            assert keys <= item_ids, (key, language)
+            assert keys <= set(world_initial_items(world)), (key, language)
+
+
+def test_presets_are_selectable_by_world_type_and_alias():
+    assert starter_worlds.preset_for("orbital_station", "en")["name"] == "Orbital Station Incident"
+    for alias in ("Sci-Fi", "space station accident", "科幻", "空间站"):
+        assert starter_worlds.preset_for(alias, "zh")["name"] == "轨道站事故", alias
+    for alias in ("mystery", "fog town", "雾镇"):
+        assert starter_worlds.preset_for(alias, "zh")["name"] == "雾镇档案", alias
+    for alias in ("survival", "荒野生存"):
+        assert starter_worlds.preset_for(alias, "zh")["name"] == "荒野营地", alias
+    # An unknown type must not silently become fantasy.
+    assert starter_worlds.preset_for("deep sea opera", "en") is None
+    assert starter_worlds.preset_for("", "en") is None
+
+
+def test_campaign_of_a_known_world_type_gets_the_authored_preset(stores):
+    game_store, scenario_store = stores
+    campaign, scenario = _campaign(scenario_store, title="Station", world_type="orbital_station")
+    service = TextActionService(game_store, scenario_store=scenario_store)
+
+    world = service.bindable_world(campaign.id)
+
+    assert world is not None
+    assert world.name == "Orbital Station Incident"
+    state = game_store.get_state(campaign.id)
+    assert state.location_id == "dock"
+    # The keycard is reachable from the start and opens the reactor door.
+    assert state.item_locations.get("keycard") == "dock"
+    assert state.doors["reactor_door"] is False

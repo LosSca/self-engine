@@ -15,6 +15,7 @@ API = "/api/v1"
 # Routes that used to smuggle their payload through Dict[str, Any].
 TYPED_PATHS = [
     ("get", "/api/v1/worlds"),
+    ("get", "/api/v1/world-presets"),
     ("post", "/api/v1/worlds"),
     ("get", "/api/v1/worlds/{world_id}/map"),
     ("get", "/api/v1/campaigns/{campaign_id}/lane"),

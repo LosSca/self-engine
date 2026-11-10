@@ -36,7 +36,7 @@ from app.models.game import (
     QuestDef,
     WorldDefinition,
 )
-from app.services import world_service
+from app.services import starter_worlds, world_service
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
 from app.services.knowledge_service import build_context
@@ -107,6 +107,41 @@ class TextActionResponse(BaseModel):
 
 
 
+
+
+class StarterWorldPresetView(BaseModel):
+    """A `world_type` an author can pick to start a campaign inside the rules lane."""
+
+    world_type: str
+    name: str
+    summary: str
+    locations: int
+    items: int
+    doors: int
+    quests: int
+
+
+def _preset_summary(key: str) -> StarterWorldPresetView:
+    document = starter_worlds.build_world_document("", f"preset_{key}", language="en", world_type=key)
+    return StarterWorldPresetView(
+        world_type=key,
+        name=document.get("name", key),
+        summary=document.get("description", ""),
+        locations=len(document.get("locations") or []),
+        items=len(document.get("items") or []),
+        doors=len(document.get("doors") or []),
+        quests=len(document.get("quests") or []),
+    )
+
+
+@router.get("/world-presets", response_model=List[StarterWorldPresetView])
+def list_world_presets() -> List[StarterWorldPresetView]:
+    """The authored starter worlds a scenario's `world_type` can select.
+
+    Read-only: this describes what a campaign *would* start in. Binding still
+    happens through the normal campaign flow, so nothing here creates state.
+    """
+    return [_preset_summary(key) for key in starter_worlds.preset_keys()]
 
 
 @router.get("/action-types", response_model=List[ActionSpecView])
