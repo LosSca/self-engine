@@ -1,29 +1,39 @@
-"""自指引擎启动器 / Self-Reference Engine launcher.
+"""自指引擎统一启动器 / Self-Reference Engine launcher.
 
-由 start.bat 以 UTF-8 控制台调用：start.bat 只做纯 ASCII 的解释器探测，
-所有中文提示与进程编排都在这里完成，避免 cmd.exe 代码页把 .bat 里的
-UTF-8 中文读坏（这是旧版 start.bat 在本机直接报“系统找不到指定的路径”
-并闪退的根本原因）。
+本文件是项目唯一的启动编排器：Windows 入口是 start.bat，Linux/macOS 入口是
+scripts/start.sh，两者都只做纯 ASCII 的解释器探测，然后把命令行参数原样透传
+给这里。旧版的 start_backend.bat / start_frontend.bat / start_debug.bat /
+start-mobile.bat 已删除，它们的能力改由本文件的参数承接（见 --help）。
 
-窗口模式不使用 "cmd /c <含引号的长命令>"：Windows 的 argv 转义会把内部
-引号变成 \"，cmd.exe 会把它当成字面反斜杠引号而报“不是内部或外部命令”。
-改为用本文件自我重启（python launch.py --run-backend），参数以列表传给
-CreateProcess，完全绕开 cmd.exe 的引号解析。
+两条历史教训，改动本文件时请保留：
+
+1) .bat 一律只写 ASCII。cmd.exe 用 OEM 代码页解码批处理文件，.bat 里的 UTF-8
+   中文会被读坏，坏了之后批处理解析器还会错切行，报出 “系统找不到指定的路径”
+   之类与真实原因无关的假错误。所有中文提示都只在 Python 里输出（本文件把
+   stdout/stderr 重设为 UTF-8）。
+2) 窗口模式不使用 "cmd /c <含引号的长命令>"。Windows 的 argv 转义会把内部引号
+   变成 \"，cmd.exe 会把它当成字面反斜杠引号而报“不是内部或外部命令”。改为
+   用本文件自我重启（python launch.py --run-backend），参数以列表传给
+   CreateProcess，完全绕开 cmd.exe 的引号解析。
 
 用法：
-    python launch.py                # 启动后端 + 前端并打开浏览器
-    python launch.py --debug        # 后端 --reload + debug 日志，转储 LLM 调用
-    python launch.py --backend-only
-    python launch.py --frontend-only
-    python launch.py --no-browser
-    python launch.py --no-window    # 不开新窗口，输出写 .logs/（用于自检/CI）
-    python launch.py --run-backend  # 内部使用：在新控制台里跑后端
+    python launch.py                  # 本地开发：后端 8000 + 前端 5173，并打开浏览器
+    python launch.py --mobile         # 手机/局域网访问（等价 --host 0.0.0.0）
+    python launch.py --prod           # 预览生产构建（vite preview 提供 frontend/dist）
+    python launch.py --debug          # 后端 --reload + debug 日志，并转储 LLM 调用
+    python launch.py --backend-only   # 只起后端（旧的 start_backend.bat）
+    python launch.py --frontend-only  # 只起前端（旧的 start_frontend.bat）
+    python launch.py --no-browser     # 不自动打开浏览器
+    python launch.py --no-window      # 不开新窗口，日志写 .logs/，Ctrl+C 停全部（自检/CI）
+
+详细说明见 docs/launch.md。
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -42,12 +52,14 @@ for _stream in (sys.stdout, sys.stderr):
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
+DIST = FRONTEND / "dist"
 LOGS = ROOT / ".logs"
 
 BACKEND_PORT = 8000
 FRONTEND_PORT = 5173
+DEFAULT_HOST = "127.0.0.1"
+WILDCARD_HOSTS = {"0.0.0.0", "::", ""}
 HEALTH_URL = "http://127.0.0.1:%d/api/health" % BACKEND_PORT
-APP_URL = "http://127.0.0.1:%d" % FRONTEND_PORT
 
 CREATE_NEW_CONSOLE = 0x00000010
 
@@ -61,13 +73,80 @@ BANNER = """
 ========================================
 """
 
+EPILOG = """三种典型用法：
+  本地开发      python launch.py                （或双击 start.bat）
+  手机/局域网   python launch.py --mobile       （等价 --host 0.0.0.0，会打印局域网地址）
+  预览构建产物  cd frontend && npm run build    然后  python launch.py --prod
+
+自检/CI 用 --no-window：不开新窗口、日志写 .logs/、Ctrl+C 一并停掉子进程。
+"""
+
 
 def say(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+def check_host(value: str) -> str:
+    """只接受 IP 或主机名：前端命令要经 cmd.exe 解析，参数里不能出现引号/空格。"""
+    host = (value or "").strip()
+    if not host:
+        raise argparse.ArgumentTypeError("--host 不能为空：本机用 127.0.0.1，局域网/手机用 0.0.0.0")
+    if not re.fullmatch(r"[0-9A-Za-z._:\-]+", host):
+        raise argparse.ArgumentTypeError("--host 只接受 IP 或主机名（不能含空格、引号、斜杠）：%r" % value)
+    return host
+
+
+def display_host(host: str) -> str:
+    """通配地址不能直接拿去拼 URL，浏览器里请用回环地址。"""
+    return DEFAULT_HOST if host in WILDCARD_HOSTS else host
+
+
+def frontend_url(host: str) -> str:
+    return "http://%s:%d" % (display_host(host), FRONTEND_PORT)
+
+
+def is_lan_ipv4(ip: str) -> bool:
+    """是否为常见私网段：192.168./10./172.16-31.（与手机同网段才连得上）。"""
+    if ip.startswith("127."):
+        return False
+    if ip.startswith("192.168.") or ip.startswith("10."):
+        return True
+    parts = ip.split(".")
+    if len(parts) == 4 and parts[0] == "172" and parts[1].isdigit():
+        return 16 <= int(parts[1]) <= 31
+    return False
+
+
+def lan_ipv4_addresses() -> list[str]:
+    """枚举本机局域网 IPv4 地址，用于 --mobile 打印手机可访问的地址。"""
+    found: list[str] = []
+
+    # 主出口地址：UDP connect 不会真的发包，只是让系统选出到默认路由的那张网卡。
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            found.append(sock.getsockname()[0])
+    except OSError:
+        pass
+
+    # 兜底：主机名解析，能捡到第二张网卡（虚拟网卡、第二个 WiFi）。
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.append(info[4][0])
+    except OSError:
+        pass
+
+    unique: list[str] = []
+    for ip in found:
+        if is_lan_ipv4(ip) and ip not in unique:
+            unique.append(ip)
+    return unique
+
+
 def find_python() -> str | None:
-    for rel in (".venv/Scripts/python.exe", "venv/Scripts/python.exe", ".venv/bin/python"):
+    # backend 的虚拟环境是 backend/.venv（旧的 install 脚本曾创建 backend/venv，
+    # 两种都认，避免老环境打不开）。
+    for rel in (".venv/Scripts/python.exe", "venv/Scripts/python.exe", ".venv/bin/python", "venv/bin/python"):
         candidate = BACKEND / rel
         if candidate.exists():
             return str(candidate)
@@ -76,7 +155,7 @@ def find_python() -> str | None:
     return None
 
 
-def port_open(port: int, host: str = "127.0.0.1") -> bool:
+def port_open(port: int, host: str = DEFAULT_HOST) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.4)
         return sock.connect_ex((host, port)) == 0
@@ -112,51 +191,131 @@ def child_env(debug: bool) -> dict[str, str]:
     return env
 
 
-def backend_command(py: str, debug: bool) -> list[str]:
+def backend_command(py: str, host: str, debug: bool) -> list[str]:
     level = "debug" if debug else "info"
-    cmd = [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(BACKEND_PORT), "--log-level", level]
+    cmd = [py, "-m", "uvicorn", "app.main:app", "--host", host, "--port", str(BACKEND_PORT), "--log-level", level]
     if debug:
         cmd.insert(3, "--reload")
     return cmd
 
 
-def service_command(kind: str, py: str, debug: bool) -> tuple[list[str], Path]:
+def npm_command(args: list[str]) -> list[str]:
+    """npm 在 Windows 上是 npm.cmd，CreateProcess 不能直接执行 .cmd。
+
+    统一交给 cmd 解析——此处参数里没有引号，也就没有第 2 条教训里的转义陷阱。
+    """
+    if os.name == "nt":
+        return ["cmd", "/c", "npm", *args]
+    return ["npm", *args]
+
+
+def frontend_command(host: str, prod: bool) -> list[str]:
+    """开发模式跑 vite dev；--prod 跑 vite preview 提供 frontend/dist。
+
+    vite.config.js 只声明了 server.proxy，但 vite 的 preview 会回落到
+    server.proxy（vite 7: proxy: preview.proxy ?? server.proxy），所以预览模式
+    下 /api 与 /media 仍然被转发到后端，不需要另建配置。
+    --strictPort：端口被占用时直接失败，避免“等就绪”等到的其实是别人的进程。
+    """
+    script = "preview" if prod else "dev"
+    return npm_command(["run", script, "--", "--host", host, "--port", str(FRONTEND_PORT), "--strictPort"])
+
+
+def service_command(kind: str, py: str, host: str, prod: bool, debug: bool) -> tuple[list[str], Path]:
     """单个服务的启动命令与工作目录。"""
     if kind == "backend":
-        return backend_command(py, debug), BACKEND
-    # npm 是 npm.cmd，CreateProcess 不能直接执行 .cmd，统一交给 cmd 解析（此处无引号，安全）。
-    return ["cmd", "/c", "npm run dev"], FRONTEND
+        return backend_command(py, host, debug), BACKEND
+    return frontend_command(host, prod), FRONTEND
+
+
+def writable_dir(path: Path) -> bool:
+    """目录存在不等于能写：本机 .logs/ 的 ACL 曾只给 Users 读权限，
+    mkdir(exist_ok=True) 会“成功”，随后 open('ab') 才炸。这里先真的试写一次。"""
+    probe = path / ".write-probe"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with open(probe, "ab"):
+            pass
+        probe.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def log_path(kind: str) -> Path:
-    path = LOGS / LOG_NAMES[kind]
-    try:
-        LOGS.mkdir(exist_ok=True)
-    except OSError:
-        path = Path(tempfile.gettempdir()) / "lunar-logs" / LOG_NAMES[kind]
-        path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    """日志文件位置：优先 .logs/，不可写时退到系统临时目录，绝不因为写不了日志而起不来。"""
+    if writable_dir(LOGS):
+        return LOGS / LOG_NAMES[kind]
+    fallback = Path(tempfile.gettempdir()) / "lunar-logs"
+    writable_dir(fallback)
+    return fallback / LOG_NAMES[kind]
 
 
-def spawn_service(kind: str, py: str, debug: bool, no_window: bool) -> subprocess.Popen:
+def spawn_service(
+    kind: str, py: str, host: str, prod: bool, debug: bool, no_window: bool
+) -> subprocess.Popen:
     """启动一个服务进程。默认开独立窗口（关闭窗口即停止该服务），--no-window 时写日志。"""
     label = LABELS[kind]
     env = child_env(debug)
     if no_window:
-        cmd, cwd = service_command(kind, py, debug)
+        cmd, cwd = service_command(kind, py, host, prod, debug)
         path = log_path(kind)
         handle = open(path, "ab", buffering=0)  # noqa: SIM115 - 生命周期交给子进程
         say("  · %s -> %s" % (label, path))
         return subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=handle, stderr=handle, stdin=subprocess.DEVNULL)
 
-    relaunch = [sys.executable, str(Path(__file__).resolve()), "--run-" + kind]
+    # 自我重启：参数以列表传进去，不经过 cmd.exe。
+    relaunch = [sys.executable, str(Path(__file__).resolve()), "--run-" + kind, "--host", host]
+    if prod:
+        relaunch.append("--prod")
     if debug:
         relaunch.append("--debug")
     say("  · %s -> 独立窗口「自指引擎 - %s」" % (label, label))
     return subprocess.Popen(relaunch, cwd=str(ROOT), env=env, creationflags=CREATE_NEW_CONSOLE)
 
 
-def run_service(kind: str, debug: bool) -> int:
+def stop_children(children: list[subprocess.Popen]) -> None:
+    """停掉本进程启动的子进程（--no-window 的看门狗与失败回滚都用它）。
+
+    Windows 上前端是 cmd.exe -> npm -> node 的进程树，只 terminate cmd 会留下
+    vite 继续占着 5173，所以按 PID 做 taskkill /T（只杀本进程创建的这棵树，
+    不会碰到用户自己开的窗口）。
+    """
+    live = [child for child in children if child.poll() is None]
+    for child in live:
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(child.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                child.terminate()
+        except OSError:
+            pass
+    for child in live:
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                child.kill()
+            except OSError:
+                pass
+
+
+def tail_log(path: Path, max_lines: int = 12) -> list[str]:
+    """失败时把子进程日志的最后几行打出来——否则 --no-window 下用户只看到“超时”。"""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    return lines[-max_lines:]
+
+
+def run_service(kind: str, host: str, prod: bool, debug: bool) -> int:
     """在独立控制台窗口内实际运行一个服务，退出后停住窗口以便查看报错。"""
     label = LABELS[kind]
     try:  # 只在真正的控制台里有效；重定向时会抛异常，忽略即可。
@@ -167,7 +326,7 @@ def run_service(kind: str, debug: bool) -> int:
         pass
 
     py = find_python() or sys.executable
-    cmd, cwd = service_command(kind, py, debug)
+    cmd, cwd = service_command(kind, py, host, prod, debug)
     say("=" * 44)
     say(" 自指引擎 · %s" % label)
     say("=" * 44)
@@ -177,7 +336,7 @@ def run_service(kind: str, debug: bool) -> int:
     code = subprocess.call(cmd, cwd=str(cwd), env=child_env(debug))
     say("")
     say("[%s 已退出，退出码 %s]" % (label, code))
-    say("关闭本窗口不影响其他服务；重新启动请再次双击 start.bat。")
+    say("关闭本窗口不影响其他服务；重新启动请再次运行 start.bat（或 ./scripts/start.sh）。")
     try:
         input("按回车关闭本窗口...")
     except EOFError:
@@ -185,45 +344,135 @@ def run_service(kind: str, debug: bool) -> int:
     return code
 
 
-def print_failure_help(what: str) -> None:
+def python_spec(py: str) -> str:
+    """打印给用户看/复制的解释器路径：在项目内就用相对路径，换台机器也能照抄。"""
+    try:
+        rel = Path(py).resolve().relative_to(ROOT)
+        text = str(rel).replace("/", "\\")
+        return text if os.name == "nt" else str(rel)
+    except (ValueError, OSError):
+        return py
+
+
+def print_failure_help(what: str, kind: str | None = None, show_log: bool = False) -> None:
     say()
     say("[失败] %s 没有在预期时间内就绪。" % what)
+    if show_log and kind:
+        # 子进程多半已经带着真实原因退出了（端口冲突、依赖缺失、spawn EPERM…），
+        # 不给日志的话用户只能看到“超时”这一句，完全无从排查。
+        path = log_path(kind)
+        tail = tail_log(path)
+        if tail:
+            say("  · %s 的最后几行输出（%s）：" % (LABELS[kind], path))
+            for line in tail:
+                say("      %s" % line)
+    py = find_python() or "python"
     if not (FRONTEND / "node_modules").is_dir():
         say("  · frontend/node_modules 不存在：先执行  cd frontend && npm install")
-    say("  · 查看对应窗口里的报错；--no-window 模式见 .logs/")
-    say("  · 依赖缺失时执行  backend\\.venv\\Scripts\\python.exe -m pip install -r backend\\requirements.txt")
+    say("  · 查看对应窗口里的报错；--no-window 模式见 .logs/backend.log / .logs/frontend.log")
+    say("  · 依赖缺失时执行  %s -m pip install -r backend/requirements.txt" % python_spec(py))
     say("  · 端口被占用时用  netstat -ano | findstr :8000  （:5173 同理）排查")
+    say("  · 常见问题见 docs/launch.md")
+
+
+def preflight_prod() -> bool:
+    """--prod 需要已构建好的 frontend/dist，缺失时明确告诉用户先 build。"""
+    if (DIST / "index.html").is_file():
+        return True
+    say("[错误] --prod 需要前端构建产物，但没有找到 frontend/dist/index.html。")
+    say("       请先构建前端，再重试：")
+    say("         cd frontend")
+    say("         npm run build")
+    say("         cd ..")
+    say("         python launch.py --prod")
+    say("       （只想跑源码开发模式的话去掉 --prod 即可，vite dev 不需要 dist。）")
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="自指引擎启动器")
-    parser.add_argument("--backend-only", action="store_true", help="只启动后端")
-    parser.add_argument("--frontend-only", action="store_true", help="只启动前端")
-    parser.add_argument("--debug", action="store_true", help="后端 --reload + debug 日志，且转储 LLM 调用")
-    parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
-    parser.add_argument("--no-window", action="store_true", help="不开新窗口，输出写 .logs/（自检用）")
+    parser = argparse.ArgumentParser(
+        prog="launch.py",
+        description="自指引擎统一启动器：一条命令拉起后端与前端，并等待 /api/health 就绪。",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--host",
+        default=DEFAULT_HOST,
+        type=check_host,
+        metavar="地址",
+        help="绑定地址：默认 127.0.0.1（只有本机能访问）；填 0.0.0.0 允许手机等局域网设备访问，"
+        "并会打印可用的局域网地址。",
+    )
+    parser.add_argument(
+        "--mobile",
+        action="store_true",
+        help="手机/局域网访问的快捷方式，等价于 --host 0.0.0.0（取代已删除的 start-mobile.bat）。",
+    )
+    parser.add_argument(
+        "--prod",
+        action="store_true",
+        help="预览生产构建：用 vite preview 提供 frontend/dist（不再热更新）；dist 不存在时提示先"
+        "执行 npm run build 并以非零退出。默认仍是 vite dev。",
+    )
+    parser.add_argument("--backend-only", action="store_true", help="只启动后端（8000），不起前端。")
+    parser.add_argument("--frontend-only", action="store_true", help="只启动前端（5173），假定后端已就绪。")
+    parser.add_argument(
+        "--debug", action="store_true", help="后端开 --reload 与 debug 日志，并设置 LUNAR_DUMP_LLM_CALLS=1 转储 LLM 调用。"
+    )
+    parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器。")
+    parser.add_argument(
+        "--no-window",
+        action="store_true",
+        help="不开新窗口：两个服务放在本进程前台，日志写 .logs/，Ctrl+C 一并停止（自检/CI/只用一个终端时用）。",
+    )
     parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run-frontend", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
+    # --mobile 只是 --host 0.0.0.0 的别名；显式给了 --host 时以 --host 为准。
+    host = args.host
+    if args.mobile:
+        if args.host == DEFAULT_HOST:
+            host = "0.0.0.0"
+        else:
+            say("[提示] 同时给了 --mobile 与 --host %s，按 --host 处理。" % args.host)
+
     # 内部模式：本进程就是这个服务（由窗口模式自我重启产生）。
     if args.run_backend:
-        return run_service("backend", args.debug)
+        return run_service("backend", host, args.prod, args.debug)
     if args.run_frontend:
-        return run_service("frontend", args.debug)
+        return run_service("frontend", host, args.prod, args.debug)
 
     say(BANNER)
 
     py = find_python()
     if not py:
-        say("[错误] 找不到 Python 解释器，请先运行 install.bat。")
+        say("[错误] 找不到 Python 解释器，请先运行 install.bat（Windows）或 ./install.sh（Linux/macOS）。")
         return 1
     say("[环境] 解释器: %s" % py)
     say("[环境] 后端目录: %s" % BACKEND)
     say("[环境] 前端目录: %s" % FRONTEND)
+    say("[环境] 模式: %s（%s）" % ("预览构建产物" if args.prod else "开发服务器", frontend_url(host) if not args.frontend_only else "-"))
+    say("[环境] 绑定地址: %s" % host)
 
     want_backend = not args.frontend_only
     want_frontend = not args.backend_only
+
+    # ---- 预检：先判定清楚再启动任何进程，避免半途失败留下孤儿进程 ----
+    if want_frontend:
+        if args.prod and not preflight_prod():
+            return 1
+        if not (FRONTEND / "node_modules").is_dir():
+            say("[错误] frontend/node_modules 不存在，请先执行  cd frontend && npm install")
+            print_failure_help("前端")
+            return 1
+    if want_backend and port_open(BACKEND_PORT) and not http_ok(HEALTH_URL):
+        say("[错误] 端口 %d 已被其他进程占用，但它不是本项目的后端。" % BACKEND_PORT)
+        say("       请关闭占用进程后重试：netstat -ano | findstr :%d" % BACKEND_PORT)
+        print_failure_help("后端")
+        return 1
+
     children: list[subprocess.Popen] = []
     started_backend = False
     started_frontend = False
@@ -232,14 +481,9 @@ def main(argv: list[str] | None = None) -> int:
     if want_backend:
         if http_ok(HEALTH_URL):
             say("[1/3] 后端已在运行: %s" % HEALTH_URL)
-        elif port_open(BACKEND_PORT):
-            say("[错误] 端口 %d 已被其他进程占用，但它不是本项目的后端。" % BACKEND_PORT)
-            say("       请关闭占用进程后重试：netstat -ano | findstr :%d" % BACKEND_PORT)
-            print_failure_help("后端")
-            return 1
         else:
-            say("[1/3] 启动后端: %s" % HEALTH_URL)
-            children.append(spawn_service("backend", py, args.debug, args.no_window))
+            say("[1/3] 启动后端: %s（host=%s）" % (HEALTH_URL, host))
+            children.append(spawn_service("backend", py, host, args.prod, args.debug, args.no_window))
             started_backend = True
     else:
         say("[1/3] 跳过后端（--frontend-only）")
@@ -247,14 +491,10 @@ def main(argv: list[str] | None = None) -> int:
     # ---- 前端 ----
     if want_frontend:
         if port_open(FRONTEND_PORT):
-            say("[2/3] 前端已在运行: %s" % APP_URL)
-        elif not (FRONTEND / "node_modules").is_dir():
-            say("[错误] frontend/node_modules 不存在，请先执行  cd frontend && npm install")
-            print_failure_help("前端")
-            return 1
+            say("[2/3] 前端已在运行: %s" % frontend_url(host))
         else:
-            say("[2/3] 启动前端: %s" % APP_URL)
-            children.append(spawn_service("frontend", py, args.debug, args.no_window))
+            say("[2/3] 启动前端: %s（%s，host=%s）" % (frontend_url(host), "vite preview" if args.prod else "vite dev", host))
+            children.append(spawn_service("frontend", py, host, args.prod, args.debug, args.no_window))
             started_frontend = True
     else:
         say("[2/3] 跳过前端（--backend-only）")
@@ -264,33 +504,53 @@ def main(argv: list[str] | None = None) -> int:
     if started_backend:
         say("[3/3] 等待后端就绪")
         if not wait_until(lambda: http_ok(HEALTH_URL), 120):
-            print_failure_help("后端")
+            print_failure_help("后端", "backend", show_log=args.no_window)
             ok = False
-    if started_frontend:
+    if started_frontend and ok:
         say("[3/3] 等待前端就绪")
         if not wait_until(lambda: port_open(FRONTEND_PORT), 120):
-            print_failure_help("前端")
+            print_failure_help("前端", "frontend", show_log=args.no_window)
             ok = False
 
     if not ok:
         say()
         say("服务未能全部就绪，请按上面的提示排查。")
+        if args.no_window:
+            stop_children(children)
+            say("已回滚本次启动的进程。")
         return 1
 
     say()
     say("========================================")
     say("  已就绪：")
     if want_frontend:
-        say("  前端    %s" % APP_URL)
+        say("  前端    %s" % frontend_url(host))
     if want_backend:
-        say("  后端API http://127.0.0.1:%d/docs" % BACKEND_PORT)
+        say("  后端API http://%s:%d/docs" % (display_host(host), BACKEND_PORT))
         say("  健康检查 %s" % HEALTH_URL)
+    if want_frontend and args.prod:
+        say("  说明    --prod 预览的是 frontend/dist 的构建产物；改源码后需重新 npm run build")
+
+    if host not in WILDCARD_HOSTS and host != DEFAULT_HOST:
+        say("  局域网  前端 http://%s:%d  后端 http://%s:%d/docs" % (host, FRONTEND_PORT, host, BACKEND_PORT))
+    elif host in WILDCARD_HOSTS:
+        addrs = lan_ipv4_addresses()
+        say("  局域网/手机访问（同一 WiFi 下）：")
+        if addrs:
+            for ip in addrs:
+                say("    前端    http://%s:%d" % (ip, FRONTEND_PORT))
+            say("    后端API http://%s:%d/docs" % (addrs[0], BACKEND_PORT))
+            say("    手机浏览器打开上面的“前端”地址即可；首次访问若被拦截，")
+            say("    请在 Windows 防火墙里允许 python.exe / node.exe 访问“专用网络”。")
+        else:
+            say("    没有找到 192.168./10./172.16-31 网段的 IPv4 地址，可能是没连局域网。")
+            say("    可先执行 ipconfig 确认本机地址，再用 --host 0.0.0.0 重试。")
     say("========================================")
     say("关闭对应终端窗口即可停止服务。")
     say()
 
     if want_frontend and not args.no_browser and not args.no_window:
-        webbrowser.open(APP_URL)
+        webbrowser.open(frontend_url(host))
 
     if args.no_window:
         # 前台模式：本进程即“看门狗”，Ctrl+C 时一并结束子进程。
@@ -301,9 +561,7 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             pass
         finally:
-            for child in children:
-                if child.poll() is None:
-                    child.terminate()
+            stop_children(children)
             say()
             say("已停止。")
         return 0

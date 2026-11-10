@@ -63,3 +63,25 @@
   display: block;
 }
 .logo-spiral-light { display: none; }
+
+/* ---- 首页 hero 引擎标识尺寸 ----
+   实际尺寸由 CSS 决定，<img> 上的 width/height 只做首帧占位（防止加载前高度跳动）。
+   用 clamp() 做成连续曲线（最小 148px → 中间随视口线性增长 → 最大 220px），
+   不依赖 Tailwind 断点层叠顺序。斜率取 8.4vw：
+   视口 ≤480px 渲染 148px（触底）；640px ≈ 159px；768px ≈ 170px；
+   992px ≈ 188px；1200px ≈ 206px；≥1440px 封顶 220px。 */
+:root {
+  --hero-logo-size: clamp(148px, 8.4vw + 105px, 220px);
+}
+.hero-emblem .hero-logo-img {
+  width: var(--hero-logo-size);
+  height: var(--hero-logo-size);
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+}
+/* 小屏专用间距：标识放大后 header 与下方内容列变紧，
+   用重复类名抬高特异性，稳过 Tailwind 的 .mb-12 / .mb-7。 */
+@media (max-width: 639.98px) {
+  .hero-header.hero-header { margin-bottom: 2rem; }
+  .hero-emblem.hero-emblem-mark { margin-bottom: 1.25rem; }
+}

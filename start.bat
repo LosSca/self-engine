@@ -1,9 +1,22 @@
 @echo off
-REM Self-Reference Engine launcher (ASCII only on purpose).
+REM Self-Reference Engine - the ONE Windows entry point (ASCII only on purpose).
+REM
 REM cmd.exe decodes .bat files with the OEM code page, so Chinese text inside a
 REM batch file is corrupted on GBK consoles and once corrupted the batch parser
 REM mis-splits lines and fails with bogus 'path not found' / 'defined is not recognized'.
 REM All Chinese output therefore lives in launch.py, which prints UTF-8.
+REM
+REM Every argument is forwarded verbatim to launch.py, so the old thin wrappers
+REM (start_backend.bat / start_frontend.bat / start_debug.bat / start-mobile.bat)
+REM are gone. Equivalents:
+REM   start.bat                     local dev  (backend 8000 + frontend 5173)
+REM   start.bat --backend-only      backend only
+REM   start.bat --frontend-only     frontend only
+REM   start.bat --debug             backend --reload + LLM call dump
+REM   start.bat --mobile            LAN / phone access (--host 0.0.0.0)
+REM   start.bat --prod              preview the built frontend/dist
+REM   start.bat --no-window         both services in this console, logs to .logs/
+REM   start.bat --help              all options (printed in Chinese by launch.py)
 setlocal
 title Self-Reference Engine - Launcher
 cd /d "%~dp0"
@@ -24,6 +37,12 @@ if not defined PY (
     exit /b 1
 )
 
+set "RC=0"
 "%PY%" "%~dp0launch.py" %*
-if errorlevel 1 pause
-endlocal
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" (
+    echo.
+    echo [launcher exited with code %RC%] see docslaunch.md
+    pause
+)
+endlocal & exit /b %RC%

@@ -176,15 +176,17 @@ function Home() {
 
       <div className="w-full max-w-5xl px-4 sm:px-8 relative z-10 flex flex-col items-center">
 
-        <header className="mb-12 flex flex-col items-center text-center">
+        <header className="hero-header mb-12 flex flex-col items-center text-center">
           {/* 引擎标识：自指螺旋。深色用白螺旋 / 浅色用黑螺旋，均为透明底 PNG，
-              由 CSS 按 data-theme 切换，不依赖 filter 或混合模式。 */}
-          <div className="hero-emblem mb-7">
+              由 CSS 按 data-theme 切换，不依赖 filter 或混合模式。
+              实际尺寸由 .hero-emblem .hero-logo-img 的 clamp() 决定（桌面 220px / 窄屏 148px），
+              这里的 width/height 属性只用于首帧占位，避免图片加载前的高度跳动。 */}
+          <div className="hero-emblem hero-emblem-mark mb-7">
             <img
               src="/self-reference-logo-dark.png"
               alt="自指引擎"
-              width="112"
-              height="112"
+              width="220"
+              height="220"
               className="hero-logo-img logo-spiral logo-spiral-dark"
               draggable="false"
             />
@@ -192,14 +194,14 @@ function Home() {
               src="/self-reference-logo.png"
               alt=""
               aria-hidden="true"
-              width="112"
-              height="112"
+              width="220"
+              height="220"
               className="hero-logo-img logo-spiral logo-spiral-light"
               draggable="false"
             />
           </div>
 
-          <p className="hero-emblem text-[10px] font-mono tracking-[0.55em] uppercase text-white/40 mb-4">
+          <p className="hero-emblem hero-emblem-kicker text-[10px] font-mono tracking-[0.55em] uppercase text-white/40 mb-4">
             Self-Reference Engine
           </p>
           <h1 className="hero-title text-4xl sm:text-6xl md:text-7xl font-bold text-white mb-5 tracking-tighter drop-shadow-2xl">
