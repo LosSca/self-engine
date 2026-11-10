@@ -22,6 +22,7 @@ import ActionInput from './ActionInput'
 import SuggestionList from './SuggestionList'
 import JournalPanel from './JournalPanel'
 import StoryProgressPanel from './StoryProgressPanel'
+import ActionPreviewPanel from './ActionPreviewPanel'
 import CombatOverlay from './CombatOverlay'
 import SettingsPanel from './SettingsPanel'
 import PlotGeneratorPanel from './PlotGeneratorPanel'
@@ -223,6 +224,7 @@ export default function GameCanvas() {
   // packs. Read-only; the engine advances it, the UI only reports it.
   const [campaignStory, setCampaignStory] = useState(null)
   const [storyOpen, setStoryOpen] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
 
   // Restore session on mount if state is missing
   useEffect(() => {
@@ -630,6 +632,7 @@ export default function GameCanvas() {
                 {engineLane.bound && campaignStory && campaignStory.mode === 'storyline' && (
                   <button
                     onClick={() => setStoryOpen(true)}
+                    data-testid="story-badge"
                     className="normal-case border-l border-white/10 pl-2 text-cyan-300/70 hover:text-cyan-200 cursor-pointer"
                     title={storyTitle(campaignStory)}
                   >
@@ -637,6 +640,15 @@ export default function GameCanvas() {
                     {campaignStory.armed_packs && campaignStory.armed_packs.length > 0
                       ? ` · 事件包 ${campaignStory.armed_packs.length}`
                       : ''}
+                  </button>
+                )}
+                {engineLane.bound && (
+                  <button
+                    onClick={() => setPreviewOpen(true)}
+                    className="normal-case border-l border-white/10 pl-2 text-white/40 hover:text-cyan-300"
+                    title="预演一次行动：规则判定，不提交存档"
+                  >
+                    预演
                   </button>
                 )}
                 {lastUsage && (
@@ -922,6 +934,11 @@ export default function GameCanvas() {
       )}
       <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} engineBound={engineLane.bound} onEngineAction={handleStructuredAction} busy={isStreaming} />
       <JournalPanel open={journalOpen} onClose={() => setJournalOpen(false)} entries={journal} onRefresh={refreshJournal} />
+      <ActionPreviewPanel
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        campaignId={activeCampaignId}
+      />
       <StoryProgressPanel
         open={storyOpen}
         onClose={() => setStoryOpen(false)}

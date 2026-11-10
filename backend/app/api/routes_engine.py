@@ -20,8 +20,9 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.db.game_state_store import GameStateStore
 from app.db.scenario_store import ScenarioStore
-from app.engines.action_registry import all_actions
+from app.engines.action_registry import all_actions, get_action
 from app.engines.event_engine import diff_states, simulate_event, validate_event
+from app.engines.rules_engine import RulesEngine
 from app.models.game import (
     ActionResult,
     ActionRequest,
@@ -1031,6 +1032,78 @@ async def run_combat_action(campaign_id: str, request: CombatActionBody):
     finally:
         service.store.close()
         service.scenario_store.close()
+
+
+class ActionPreviewBody(BaseModel):
+    """A dry run: the same rules decide, nothing is written.
+
+    Preview exists so an author can ask "would this work?" without spending a
+    request id or touching the campaign. It deliberately carries no client
+    request id - a dry run is never recorded, so it cannot collide with a real
+    turn.
+    """
+
+    campaign_id: Optional[str] = Field(None, max_length=64)
+    action: str = Field(..., min_length=1, max_length=64)
+    actor_id: str = "player"
+    target_id: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
+    "/campaigns/{campaign_id}/actions/preview", response_model=Dict[str, Any]
+)
+def preview_action(campaign_id: str, request: ActionPreviewBody):
+    """Decide one action against the committed state without committing it.
+
+    The answer is exactly what the rules would say right now (allowed or the
+    refusal code and message), plus the world's current version so a caller can
+    tell whether the state it previewed is still current.
+    """
+    if request.campaign_id and request.campaign_id != campaign_id:
+        raise HTTPException(
+            status_code=400,
+            detail="campaign_id in the path and in the body must match",
+        )
+    store = _get_store()
+    try:
+        state = store.get_state(campaign_id)
+        if state is None:
+            raise HTTPException(
+                status_code=404, detail=f"campaign '{campaign_id}' has no bound world"
+            )
+        world = world_service.get_world(store, state.world_id)
+        try:
+            spec = get_action(request.action)
+        except Exception:  # noqa: BLE001 - an unknown verb is a client error
+            spec = None
+        outcome = RulesEngine().evaluate(
+            world, state, request.action, request.target_id, request.params
+        )
+        return {
+            "campaign_id": campaign_id,
+            "state_version": state.version,
+            "action": request.action,
+            "label": spec.label if spec is not None else "",
+            "target_id": request.target_id,
+            "ok": outcome.ok,
+            "code": outcome.code,
+            "message": outcome.message,
+            "effects": [effect.model_dump(mode="json") for effect in outcome.effects],
+            "changed": outcome.ok and bool(outcome.effects),
+        }
+    finally:
+        store.close()
+
+
+@router.get("/actions", response_model=List[Dict[str, Any]])
+def list_actions():
+    """The catalogue the rules engine can decide, with the words it parses.
+
+    Authors read this instead of guessing verbs: an action exists when it is
+    registered in app/engines/action_registry.py, never because a world says so.
+    """
+    return [spec.as_dict() for spec in all_actions()]
 
 
 @router.post("/campaigns/{campaign_id}/actions", response_model=ActionResult)

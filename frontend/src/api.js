@@ -696,6 +696,21 @@ export async function deleteModelPreset(presetId) {
   return jsonOrThrow(r, '删除模型预设失败')
 }
 
+export async function fetchActionCatalogue() {
+  const r = await fetch(`${V1}/actions`)
+  return jsonOrThrow(r, '读取行动目录失败')
+}
+
+/** Dry run: the rules decide, nothing is written. */
+export async function previewAction(campaignId, { action, targetId = null, params = {} } = {}) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/actions/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, target_id: targetId, params }),
+  })
+  return jsonOrThrow(r, '预演行动失败')
+}
+
 export async function fetchCampaignStory(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/story`)
   return jsonOrThrow(r, '读取故事线进度失败')
