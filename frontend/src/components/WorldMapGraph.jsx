@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { fetchCampaignEngineState } from '../api'
 
 const NODE_W = 176
 const NODE_H = 74
@@ -122,10 +123,14 @@ export default function WorldMapGraph({
   onEditLocation,
   onDeleteExit,
   onSavePosition,
+  campaignId = '',
 }) {
   const locations = useMemo(() => (mapData && mapData.locations) || [], [mapData])
   const startId = mapData && mapData.start_location_id
   const [overrides, setOverrides] = useState(() => readOverrides(worldId))
+  // Where the selected playthrough actually stands. Read-only: the map shows
+  // the committed state and never writes it.
+  const [cursor, setCursor] = useState(null)
   const [selectedEdge, setSelectedEdge] = useState(null)
   const [selectedNode, setSelectedNode] = useState(null)
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
@@ -133,6 +138,29 @@ export default function WorldMapGraph({
   const panRef = useRef(null)
   const [dragging, setDragging] = useState(null)
   const [panning, setPanning] = useState(false)
+
+  useEffect(() => {
+    if (!campaignId) {
+      setCursor(null)
+      return undefined
+    }
+    let cancelled = false
+    fetchCampaignEngineState(campaignId)
+      .then((state) => {
+        if (cancelled) return
+        setCursor(
+          state && state.location_id
+            ? { locationId: state.location_id, version: state.version ?? 0 }
+            : null,
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setCursor(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [campaignId])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset local layout when the world changes
@@ -271,10 +299,22 @@ export default function WorldMapGraph({
     dragRef.current = null
     setDragging(null)
     if (drag && drag.moved) {
+      let latest = null
       setOverrides((prev) => {
+        latest = prev
         writeOverrides(worldId, prev)
         return prev
       })
+      // A moved node is a layout decision the author made, so it belongs in the
+      // world document, not in this browser's localStorage: persist it (when the
+      // host can) and keep localStorage only as the immediate preview.
+      const placed = latest && latest[drag.id]
+      if (placed && onSavePosition) {
+        onSavePosition(drag.id, {
+          x: Math.max(0, Math.round((placed.x - PAD) / CELL_X)),
+          y: Math.max(0, Math.round((placed.y - PAD) / CELL_Y)),
+        })
+      }
     }
     panRef.current = null
     setPanning(false)
@@ -299,6 +339,11 @@ export default function WorldMapGraph({
   if (locations.length === 0) return null
   const selected = selectedEdge ? edges.find((edge) => edge.key === selectedEdge) : null
   const markerPoint = (node) => ({ x: node.x + NODE_W / 2, y: node.y + NODE_H / 2 })
+  // Where the selected playthrough stands, if it is on this map at all.
+  const cursorNode = cursor ? nodes.get(cursor.locationId) : null
+  const cursorLocation = cursorNode
+    ? locations.find((item) => item.id === cursor.locationId) || null
+    : null
 
   return (
     <div className="rounded-2xl border border-white/10 bg-[#071014] overflow-hidden">
@@ -307,6 +352,11 @@ export default function WorldMapGraph({
         <span className="text-[10px] text-white/25">
           {regions.length} 区域 · {locations.length} 地点 · {edges.length} 路线
         </span>
+        {cursor && cursorLocation && (
+          <span className="text-[10px] text-cyan-300/80">
+            ● 玩家：{cursorLocation.name} · v{cursor.version}
+          </span>
+        )}
         <div className="flex-1" />
         <button onClick={() => zoom(1.15)} className="px-2 py-1 rounded-lg text-xs text-white/60 border border-white/10 hover:text-white" title="放大">＋</button>
         <span className="text-[10px] font-mono text-white/40 w-12 text-center">{Math.round(view.scale * 100)}%</span>
@@ -427,6 +477,19 @@ export default function WorldMapGraph({
                     <circle r={26} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth={1.4} strokeDasharray="3 4" />
                   )}
                   {isSelected && <circle r={22} fill="none" stroke={theme.text} strokeWidth={2} />}
+                  {cursor && cursor.locationId === node.id && (
+                    <g>
+                      <circle r={30} fill="none" stroke="rgba(34,211,238,0.35)" strokeWidth={1.2}>
+                        <animate attributeName="r" values="22;34;22" dur="2.4s" repeatCount="indefinite" />
+                        <animate attributeName="opacity" values="0.9;0.15;0.9" dur="2.4s" repeatCount="indefinite" />
+                      </circle>
+                      <circle r={20} fill="none" stroke="rgba(34,211,238,0.9)" strokeWidth={2} />
+                      <circle r={6} cy={-26} fill="#22d3ee" />
+                      <text textAnchor="middle" y={-23} fill="#04141a" style={{ fontSize: 8, fontWeight: 800 }}>
+                        P
+                      </text>
+                    </g>
+                  )}
                   <circle r={15} fill="rgba(6,14,20,0.96)" stroke={theme.text} strokeWidth={2} />
                   <text textAnchor="middle" y={5} fill={theme.text} style={{ fontSize: 14 }}>
                     {glyph}

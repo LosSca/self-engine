@@ -11,6 +11,7 @@ import {
   saveWorldCustomAction,
   fetchActionTypes,
   fetchCampaignDiagnostics,
+  fetchCampaigns,
   fetchEventExecutions,
   fetchQuestProgress,
   fetchCampaignStory,
@@ -1539,6 +1540,36 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     }
   }, [open, scenarioId, loadWorld, report])
 
+  // A world can be played without the current session: any campaign bound to
+  // it is a valid playthrough to preview. The active campaign wins.
+  const [campaigns, setCampaigns] = useState([])
+  const [playCampaignId, setPlayCampaignId] = useState('')
+
+  useEffect(() => {
+    if (!open || !scenarioId) return undefined
+    let cancelled = false
+    fetchCampaigns(scenarioId)
+      .then((list) => {
+        if (!cancelled) setCampaigns(list || [])
+      })
+      .catch(() => {
+        if (!cancelled) setCampaigns([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, scenarioId])
+
+  const playthroughs = []
+  for (const campaign of campaigns) {
+    const id = campaign.id || campaign.campaign_id
+    if (id) playthroughs.push({ id, label: campaign.player_name || id })
+  }
+  if (campaignId && !playthroughs.some((item) => item.id === campaignId)) {
+    playthroughs.unshift({ id: campaignId, label: '当前冒险' })
+  }
+  const previewCampaignId = playCampaignId || campaignId || (playthroughs[0] ? playthroughs[0].id : '')
+
   useEffect(() => {
     if (!open || tab !== 'debug' || !campaignId) return undefined
     let cancelled = false
@@ -1565,6 +1596,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   }, [open, tab, campaignId, debugNonce])
 
   const selectWorld = async (id) => {
+    setPlayCampaignId('')
     setErrors([])
     setNotice('')
     setEditor(null)
@@ -1629,6 +1661,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     if (!worldId || !world) return
     const source = (world.locations || []).find((item) => item.id === locationId)
     if (!source) return
+    // Only an actual move is worth a write: dragging a node a few pixels must not
+    // churn the world document or the notice line.
+    if (source.x === position.x && source.y === position.y) return
     setErrors([])
     setNotice('')
     try {
@@ -2138,6 +2173,23 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 />
               )}
 
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-[11px] uppercase tracking-[0.2em] text-white/40">游玩进度</span>
+                <select
+                  value={previewCampaignId}
+                  onChange={(event) => setPlayCampaignId(event.target.value)}
+                  className={inputClass + ' max-w-xs'}
+                >
+                  {playthroughs.length === 0 && <option value="">（这个场景还没有冒险）</option>}
+                  {playthroughs.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[11px] text-white/30">地图上的玩家标记来自这份存档的权威状态；不会改变它。</span>
+              </div>
+
               {world.locations.length > 0 && (
                 <WorldMapGraph
                   worldId={worldId}
@@ -2145,6 +2197,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   onEditLocation={editLocationById}
                   onDeleteExit={removeExit}
                   onSavePosition={saveLocationPosition}
+                  campaignId={previewCampaignId}
                 />
               )}
 
