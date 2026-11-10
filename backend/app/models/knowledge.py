@@ -131,8 +131,38 @@ class StoryNode(_Strict):
     conditions: List[Condition] = Field(default_factory=list)
     #: Event id that must have fired for this node to be entered.
     requires_event: Optional[str] = None
+    #: Event pack id whose events must already have fired for this node.
+    requires_event_pack: Optional[str] = None
     #: Knowledge entries that become relevant once the node is entered.
     knowledge_ids: List[str] = Field(default_factory=list)
+
+
+class StoryEventPack(_Strict):
+    """A small self-contained bundle of world events that can be armed or not.
+
+    Packs are the unit an author switches on to sprinkle ambient life into a
+    world (晚市争吵、巡逻队换班). A pack holds no logic of its own: it names
+    events that already exist in the world document, so every consequence is
+    still decided by the validated condition/effect engine. The knowledge a pack
+    carries is injected once the pack is armed and referenced by a story node.
+
+    A pack is never entered by itself. It becomes *armed* when every one of its
+    requires conditions holds and *fired* once one of its events has actually
+    run, which is what story nodes check through requires_event_pack.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    title: str = Field(..., min_length=1, max_length=200)
+    summary: str = ""
+    #: World event ids owned by this pack; they must exist in the world document.
+    event_ids: List[str] = Field(default_factory=list)
+    #: All of them must hold for the pack to be armed. Empty means armed at once.
+    requires: List[Condition] = Field(default_factory=list)
+    #: Knowledge injected while the pack is armed.
+    knowledge_ids: List[str] = Field(default_factory=list)
+    enabled: bool = True
+    #: A once-only pack is not re-armed after one of its events has fired.
+    once: bool = True
 
 
 class Storyline(_Strict):
@@ -141,12 +171,17 @@ class Storyline(_Strict):
     nodes: List[StoryNode] = Field(default_factory=list)
     #: Optional named lines the nodes are grouped into.
     lines: List[StoryLineDef] = Field(default_factory=list)
+    #: Optional ambient event bundles (see StoryEventPack).
+    packs: List[StoryEventPack] = Field(default_factory=list)
 
     def node_map(self) -> Dict[str, StoryNode]:
         return {node.id: node for node in self.nodes}
 
     def line_map(self) -> Dict[str, StoryLineDef]:
         return {line.id: line for line in self.lines}
+
+    def pack_map(self) -> Dict[str, StoryEventPack]:
+        return {pack.id: pack for pack in self.packs}
 
     def roots(self) -> List[StoryNode]:
         return [node for node in self.nodes if not node.prereq]
@@ -274,6 +309,8 @@ class KnowledgeContext(BaseModel):
     #: Every node whose knowledge was boosted for this context, so a debugger can
     #: tell why an entry ranked first.
     story_nodes: List[str] = Field(default_factory=list)
+    #: Armed event packs whose knowledge was boosted for this context.
+    armed_packs: List[str] = Field(default_factory=list)
 
     def prompt_blocks(self) -> List[Dict[str, Any]]:
         """Plain dicts for the narrator prompt (no behaviour attached)."""

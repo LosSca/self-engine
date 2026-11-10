@@ -289,3 +289,139 @@ def test_branch_nodes_require_their_own_prereq():
     status = advance_storyline(storyline, state, world)
     assert status.newly_entered == ["hidden"]
     assert status.active == "open"  # last entered main node
+
+# ------------------------------------------------------------- event packs
+from app.engines.story_engine import pack_status  # noqa: E402
+from app.models.knowledge import StoryEventPack  # noqa: E402
+
+
+def _packed_storyline():
+    return Storyline(
+        name="主线",
+        lines=[StoryLineDef(id="trunk", title="主干", kind="main")],
+        packs=[
+            StoryEventPack(
+                id="pack_marquee",
+                title="集市",
+                event_ids=["ev_marquee"],
+                requires=[Condition(kind="at_location", target="forest_edge")],
+            ),
+            StoryEventPack(
+                id="pack_opening",
+                title="开局",
+                event_ids=["ev_opening"],
+            ),
+        ],
+        nodes=[
+            StoryNode(id="arrive", title="抵达", kind="main", line="trunk"),
+            StoryNode(
+                id="rumour",
+                title="传闻",
+                kind="side",
+                requires_event_pack="pack_marquee",
+            ),
+        ],
+    )
+
+
+def test_pack_with_satisfied_conditions_is_armed():
+    armed, fired = pack_status(
+        _packed_storyline(),
+        GameState(campaign_id="camp-1", world_id="demo_village", location_id="forest_edge"),
+        _world(),
+    )
+    assert "pack_marquee" in armed
+    assert fired == []
+
+
+def test_pack_without_conditions_is_armed_at_the_opening():
+    armed, _fired = pack_status(
+        _packed_storyline(),
+        GameState(campaign_id="camp-1", world_id="demo_village"),
+        _world(),
+    )
+    assert "pack_opening" in armed
+
+
+def test_pack_is_not_armed_when_its_condition_fails():
+    armed, _fired = pack_status(
+        _packed_storyline(),
+        GameState(campaign_id="camp-1", world_id="demo_village", location_id="village_square"),
+        _world(),
+    )
+    assert "pack_marquee" not in armed
+
+
+def test_fired_once_pack_is_spent():
+    state = GameState(
+        campaign_id="camp-1",
+        world_id="demo_village",
+        fired_events=["ev_opening"],
+    )
+    armed, fired = pack_status(_packed_storyline(), state, _world())
+    assert fired == ["pack_opening"]
+    assert "pack_opening" not in armed
+
+
+def test_repeatable_pack_stays_armed_after_firing():
+    storyline = _packed_storyline()
+    storyline.packs[1].once = False
+    state = GameState(
+        campaign_id="camp-1",
+        world_id="demo_village",
+        fired_events=["ev_opening"],
+    )
+    armed, fired = pack_status(storyline, state, _world())
+    assert fired == ["pack_opening"]
+    assert "pack_opening" in armed
+
+
+def test_disabled_pack_is_ignored():
+    storyline = _packed_storyline()
+    storyline.packs[1].enabled = False
+    armed, fired = pack_status(
+        storyline, GameState(campaign_id="camp-1", world_id="demo_village"), _world()
+    )
+    assert "pack_opening" not in armed and "pack_opening" not in fired
+
+
+def test_unknown_pack_reference_is_rejected():
+    storyline = _packed_storyline()
+    storyline.nodes[1].requires_event_pack = "pack_ghost"
+    errors = validate_storyline(storyline, event_ids={"ev_marquee", "ev_opening"})
+    assert any("pack_ghost" in error for error in errors)
+
+
+def test_pack_referencing_unknown_event_is_rejected():
+    storyline = _packed_storyline()
+    storyline.packs[0].event_ids = ["ev_ghost"]
+    errors = validate_storyline(storyline, event_ids={"ev_marquee", "ev_opening"})
+    assert any("ev_ghost" in error for error in errors)
+
+
+def test_empty_pack_is_rejected():
+    storyline = _packed_storyline()
+    storyline.packs[0].event_ids = []
+    errors = validate_storyline(storyline)
+    assert any("pack_marquee" in error for error in errors)
+
+
+def test_duplicate_pack_ids_are_rejected():
+    storyline = _packed_storyline()
+    storyline.packs.append(StoryEventPack(id="pack_marquee", title="重复", event_ids=["ev_marquee"]))
+    errors = validate_storyline(storyline)
+    assert any("pack_marquee" in error for error in errors)
+
+
+def test_side_node_waiting_on_a_pack_is_valid():
+    errors = validate_storyline(_packed_storyline(), event_ids={"ev_marquee", "ev_opening"})
+    assert errors == []
+
+
+def test_side_node_without_any_anchor_is_rejected():
+    storyline = Storyline(
+        name="主线",
+        nodes=[StoryNode(id="floating", title="悬浮", kind="side")],
+    )
+    errors = validate_storyline(storyline)
+    assert any("floating" in error for error in errors)

@@ -79,6 +79,15 @@ function nextLineId(lines) {
   return `line_${highest + 1}`
 }
 
+function nextPackId(packs) {
+  let highest = 0
+  for (const pack of packs) {
+    const match = /^pack_(\d+)$/.exec(pack.id || '')
+    if (match) highest = Math.max(highest, Number(match[1]))
+  }
+  return `pack_${highest + 1}`
+}
+
 function showValue(value) {
   if (typeof value === 'string') return value
   return JSON.stringify(value)
@@ -203,12 +212,16 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
   const story = config?.storyline || { name: '', description: '', lines: [], nodes: [] }
   const lines = story.lines || []
   const nodes = story.nodes || []
+  const packs = story.packs || []
 
   const updateStoryline = (patch) =>
     setConfig((prev) => ({ ...prev, storyline: { ...(prev.storyline || {}), ...patch } }))
 
   const updateNode = (index, patch) =>
     updateStoryline({ nodes: nodes.map((node, i) => (i === index ? { ...node, ...patch } : node)) })
+
+  const updatePack = (index, patch) =>
+    updateStoryline({ packs: packs.map((pack, i) => (i === index ? { ...pack, ...patch } : pack)) })
 
   const save = async () => {
     if (!config || saving) return
@@ -405,6 +418,7 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                       {node.prereq.length > 0 && <span className="text-[10px] text-white/30">前置 {node.prereq.length}</span>}
                       {node.conditions.length > 0 && <span className="text-[10px] text-white/30">条件 {node.conditions.length}</span>}
                       {node.knowledge_ids.length > 0 && <span className="text-[10px] text-white/30">知识 {node.knowledge_ids.length}</span>}
+                      {node.requires_event_pack && <span className="text-[10px] text-amber-300/70">事件包 {node.requires_event_pack}</span>}
                       <div className="flex-1" />
                       <button onClick={() => setEditing(index)} className="text-[10px] text-white/50 hover:text-white uppercase tracking-[0.15em]">编辑</button>
                       <button
@@ -457,6 +471,13 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                           </label>
                         </div>
                         <label>
+                          <FieldLabel>需要先触发的事件包</FieldLabel>
+                          <select className={inputClass} value={node.requires_event_pack || ''} onChange={(e) => updateNode(index, { requires_event_pack: e.target.value || null })}>
+                            <option value="">不依赖事件包</option>
+                            {packs.map((pack) => <option key={pack.id} value={pack.id}>{pack.title || pack.id}</option>)}
+                          </select>
+                        </label>
+                        <label>
                           <FieldLabel>摘要</FieldLabel>
                           <input className={inputClass} value={node.summary || ''} onChange={(e) => updateNode(index, { summary: e.target.value })} />
                         </label>
@@ -502,6 +523,66 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                 ))}
               </div>
 
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.03] p-4 flex flex-col gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-sm font-bold text-amber-100">小事件包</span>
+                  <button
+                    onClick={() => updateStoryline({
+                      packs: [...packs, { id: nextPackId(packs), title: '新事件包', summary: '', event_ids: [], requires: [], knowledge_ids: [], enabled: true, once: true }],
+                    })}
+                    className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:text-white"
+                  >
+                    新增事件包
+                  </button>
+                </div>
+                <p className="text-[11px] text-white/35">事件包由世界里的若干事件组成；触发条件全部满足时启用，一次性包在任一事件触发后不再启用。</p>
+                {packs.length === 0 && <p className="text-xs text-white/30">尚无事件包；节点可用「需要先触发的事件包」等待它们。</p>}
+                {packs.map((pack, index) => (
+                  <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                      <label>
+                        <FieldLabel>ID</FieldLabel>
+                        <input className={inputClass} value={pack.id} onChange={(e) => updatePack(index, { id: e.target.value })} />
+                      </label>
+                      <label>
+                        <FieldLabel>名称</FieldLabel>
+                        <input className={inputClass} value={pack.title} onChange={(e) => updatePack(index, { title: e.target.value })} />
+                      </label>
+                      <label>
+                        <FieldLabel>摘要</FieldLabel>
+                        <input className={inputClass} value={pack.summary || ''} onChange={(e) => updatePack(index, { summary: e.target.value })} />
+                      </label>
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-white/50 pt-5">
+                        <label className="flex items-center gap-2">
+                          <input type="checkbox" checked={pack.enabled !== false} onChange={(e) => updatePack(index, { enabled: e.target.checked })} />
+                          启用
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input type="checkbox" checked={pack.once !== false} onChange={(e) => updatePack(index, { once: e.target.checked })} />
+                          一次性
+                        </label>
+                        <button
+                          onClick={() => updateStoryline({
+                            packs: packs.filter((_, i) => i !== index),
+                            nodes: nodes.map((node) => node.requires_event_pack === pack.id ? { ...node, requires_event_pack: null } : node),
+                          })}
+                          className="ml-auto text-[10px] text-white/30 hover:text-rose-400"
+                        >
+                          移除
+                        </button>
+                      </div>
+                    </div>
+                    <label>
+                      <FieldLabel>包含的事件 ID（逗号分隔）</FieldLabel>
+                      <input className={inputClass} value={(pack.event_ids || []).join(', ')} onChange={(e) => updatePack(index, { event_ids: splitList(e.target.value) })} />
+                    </label>
+                    <div>
+                      <FieldLabel>触发条件（全部满足时启用）</FieldLabel>
+                      <ConditionRows value={pack.requires || []} onChange={(requires) => updatePack(index, { requires })} />
+                    </div>
+                  </div>
+                ))}
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <label>
                   <FieldLabel>故事线名称</FieldLabel>

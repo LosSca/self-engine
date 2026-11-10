@@ -730,7 +730,9 @@ def get_campaign_story(campaign_id: str):
                 "pending": [],
                 "locked": [],
                 "reasons": {},
-                "storyline": {"name": "", "nodes": [], "lines": []},
+                "armed_packs": [],
+                "fired_packs": [],
+                "storyline": {"name": "", "nodes": [], "lines": [], "packs": []},
             }
         status = storyline_status(config.storyline, state, world)
         return {
@@ -741,6 +743,8 @@ def get_campaign_story(campaign_id: str):
             "pending": status.pending,
             "locked": status.locked,
             "reasons": status.reasons,
+            "armed_packs": status.armed_packs,
+            "fired_packs": status.fired_packs,
             "storyline": {
                 "name": config.storyline.name,
                 "nodes": [
@@ -750,10 +754,12 @@ def get_campaign_story(campaign_id: str):
                         "kind": node.kind,
                         "line": node.line,
                         "summary": node.summary,
+                        "requires_event_pack": node.requires_event_pack,
                     }
                     for node in config.storyline.nodes
                 ],
                 "lines": [line.model_dump(mode="json") for line in config.storyline.lines],
+                "packs": [pack.model_dump(mode="json") for pack in config.storyline.packs],
             },
         }
     finally:

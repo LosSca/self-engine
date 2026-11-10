@@ -140,8 +140,8 @@ async def generate_storyline(
 可用知识 id：{known}
 可用事件 id：{event_ids or []}
 
-输出 JSON：{{"name":"...","description":"...","lines":[{{"id":"trunk","title":"主线","kind":"main","description":"","enabled":true}}],"nodes":[{{"id":"snake_case","title":"...","kind":"main|branch|side","line":"trunk","summary":"...","prereq":["..."],"conditions":[],"requires_event":null,"knowledge_ids":[]}}]}}
-要求：至少一个无前置 main 起点；独立 side 节点必须有条件或 requires_event；所有引用必须存在。"""
+输出 JSON：{{"name":"...","description":"...","lines":[{{"id":"trunk","title":"主线","kind":"main","description":"","enabled":true}}],"packs":[{{"id":"pack_snake_case","title":"小事件包","summary":"...","event_ids":["已列出的可用事件 id"],"requires":[],"enabled":true,"once":true}}],"nodes":[{{"id":"snake_case","title":"...","kind":"main|branch|side","line":"trunk","summary":"...","prereq":["..."],"conditions":[],"requires_event":null,"requires_event_pack":null,"knowledge_ids":[]}}]}}
+要求：至少一个无前置 main 起点；独立 side 节点必须有条件、requires_event 或 requires_event_pack；事件包只能引用上面列出的事件 id；所有引用必须存在。"""
     payload = await _ask(router, system, user)
     if not isinstance(payload, dict):
         raise GenerationError("模型没有返回剧情线对象")

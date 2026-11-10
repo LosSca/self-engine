@@ -277,6 +277,9 @@ def preview_context(
     query: Optional[str] = Query(
         None, description="用于稀疏向量相似度的查询文本（通常是玩家这句话）"
     ),
+    campaign_id: Optional[str] = Query(
+        None, description="提供战役 id 时按该战役的权威状态计算已启用的常驻事件包"
+    ),
 ):
     store = _store()
     try:
@@ -285,6 +288,7 @@ def preview_context(
         entries = store.list_knowledge(scenario_id)
         entered = [part.strip() for part in (story_nodes or "").split(",") if part.strip()]
         focused = [part.strip() for part in (focus or "").split(",") if part.strip()]
+        armed = _armed_packs(config.storyline, campaign_id)
         return knowledge_service.build_context(
             entries,
             mode=mode or config.mode,
@@ -296,12 +300,34 @@ def preview_context(
             focus=focused or None,
             budget_chars=config.context_budget_chars,
             query=query or "",
+            armed_packs=armed or None,
         )
     finally:
         store.close()
 
 
 # ------------------------------------------------------- AI drafting
+def _armed_packs(storyline, campaign_id: Optional[str]) -> list:
+    """Armed event packs for one campaign, or [] when it cannot be known."""
+    if not campaign_id or not storyline.packs:
+        return []
+    from app.api.routes_engine import _get_store
+    from app.services import world_service
+
+    game_store = _get_store()
+    try:
+        state = game_store.get_state(campaign_id)
+        if state is None:
+            return []
+        try:
+            world = world_service.get_world(game_store, state.world_id)
+        except LookupError:
+            return []
+        return knowledge_service.armed_pack_ids(storyline, state, world)
+    finally:
+        game_store.close()
+
+
 def _generation_router(store: ScenarioStore, preset_id: str):
     preset = store.get_model_preset(preset_id) if preset_id else None
     if preset_id and preset is None:

@@ -381,3 +381,86 @@ def test_ai_knowledge_generation_returns_editable_drafts(client, scenario_id, mo
     assert res.json()["entries"][0]["title"] == "群岛"
     # Drafts are not saved until the author applies them.
     assert client.get(f"/api/v1/scenarios/{scenario_id}/knowledge").json() == []
+
+
+# ------------------------------------------------- armed event packs (preview)
+def _bind_scenario_world(scenario_id, campaign_id):
+    """Persist the demo village for this scenario and bind one campaign to it."""
+    import os
+
+    from app.db.game_state_store import GameStateStore
+    from app.services.world_service import bind_world, save_world
+    from tests.support import village_world
+
+    world = village_world().model_copy(update={"scenario_id": scenario_id})
+    store = GameStateStore(os.environ["GAME_STATE_DB_PATH"])
+    try:
+        save_world(store, world)
+        state = bind_world(store, campaign_id, world.world_id, reset=True)
+    finally:
+        store.close()
+    return world, state
+
+
+def _pack_config(event_id):
+    return {
+        "mode": "storyline",
+        "storyline": {
+            "nodes": [{"id": "arrive", "title": "抵达"}],
+            "packs": [
+                {
+                    "id": "pack_edge",
+                    "title": "森林的传闻",
+                    "event_ids": [event_id],
+                    "requires": [{"kind": "at_location", "target": "forest_edge"}],
+                }
+            ],
+        },
+    }
+
+
+def test_context_preview_arms_packs_from_the_campaign_state(client, scenario_id):
+    from app.db.game_state_store import GameStateStore
+    from app.services.action_service import ActionService
+    from app.models.game import ActionRequest
+    import asyncio
+    import os
+
+    world, _state = _bind_scenario_world(scenario_id, "camp-packs")
+    event_id = world.events[0].id
+    saved = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config", json=_pack_config(event_id)
+    )
+    assert saved.status_code == 200, saved.text
+    url = f"/api/v1/scenarios/{scenario_id}/context/preview"
+
+    before = client.get(url, params={"campaign_id": "camp-packs"})
+    assert before.status_code == 200, before.text
+    assert before.json()["armed_packs"] == []
+
+    store = GameStateStore(os.environ["GAME_STATE_DB_PATH"])
+    try:
+        service = ActionService(store)
+        asyncio.run(
+            service.execute(
+                ActionRequest(
+                    campaign_id="camp-packs",
+                    request_id="req-move-edge",
+                    action="move",
+                    target_id="forest_edge",
+                )
+            )
+        )
+    finally:
+        store.close()
+
+    after = client.get(url, params={"campaign_id": "camp-packs"}).json()
+    assert after["armed_packs"] == ["pack_edge"]
+
+    # Without a campaign the preview shows the authored picture, never a guess.
+    guest = client.get(url).json()
+    assert guest["armed_packs"] == []
+    # An unknown campaign is reported as empty rather than 500.
+    unknown = client.get(url, params={"campaign_id": "ghost"})
+    assert unknown.status_code == 200
+    assert unknown.json()["armed_packs"] == []

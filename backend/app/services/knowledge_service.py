@@ -8,7 +8,10 @@ The depth chain decides what the narrator is allowed to know for a given turn:
   present in free mode;
 * storyline mode additionally boosts the knowledge referenced by every node the
   player has actually entered (trunk, attached branches and independent side
-  lines alike), so a branch cannot silently lose its own knowledge.
+  lines alike), so a branch cannot silently lose its own knowledge;
+* storyline mode also boosts the knowledge carried by event packs that are
+  currently armed - the ambient events an author switched on for this point of
+  the story.
 
 The result is a validated KnowledgeContext. Rendering it into a prompt is a
 separate, explicit step, so tests can assert exactly what the model would see.
@@ -20,6 +23,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from app.engines.story_engine import validate_storyline
+from app.models.game import GameState, WorldDefinition
 from app.models.knowledge import (
     LAYER_ORDER,
     ContextStats,
@@ -90,6 +94,7 @@ def build_context(
     storyline: Optional[Storyline] = None,
     scenario_id: str = "",
     story_nodes: Optional[Sequence[str]] = None,
+    armed_packs: Optional[Sequence[str]] = None,
     focus: Optional[Sequence[str]] = None,
     budget_chars: int = 0,
     query: str = "",
@@ -123,12 +128,19 @@ def build_context(
     else:
         story_node = None
     boost_ids: set = set()
+    pack_candidates: List[str] = [pack_id for pack_id in (armed_packs or []) if pack_id]
     if storyline is not None and candidates:
         node_map = storyline.node_map()
         for candidate in candidates:
             node = node_map.get(candidate)
             if node is not None:
                 boost_ids.update(node.knowledge_ids)
+    if storyline is not None and pack_candidates:
+        pack_map = storyline.pack_map()
+        for pack_id in pack_candidates:
+            pack = pack_map.get(pack_id)
+            if pack is not None and pack.enabled:
+                boost_ids.update(pack.knowledge_ids)
 
     blocks: List[KnowledgeBlock] = []
     excluded: List[ExcludedEntry] = []
@@ -243,7 +255,25 @@ def build_context(
         ),
         story_node=story_node,
         story_nodes=list(candidates),
+        armed_packs=list(pack_candidates),
     )
+
+def armed_pack_ids(
+    storyline: Optional[Storyline],
+    state: Optional[GameState],
+    world: Optional[WorldDefinition],
+) -> List[str]:
+    """Armed event packs for this state, or [] when there is nothing to arm.
+
+    Kept here so the preview endpoint and the action pipeline answer the same
+    question with the same code.
+    """
+    if storyline is None or state is None or world is None:
+        return []
+    from app.engines.story_engine import pack_status
+
+    armed, _fired = pack_status(storyline, state, world)
+    return armed
 
 
 def validate_play_config(

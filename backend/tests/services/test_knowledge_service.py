@@ -311,3 +311,62 @@ def test_cjk_query_matches_content_bigrams():
     ]
     context = knowledge_service.build_context(entries, mode="free", query="酒馆 故事")
     assert [block.entry_id for block in context.blocks] == ["tavern", "generic"]
+
+
+def test_armed_pack_knowledge_is_boosted_like_an_entered_node():
+    from app.models.knowledge import StoryEventPack
+
+    storyline = Storyline(
+        name="主线",
+        packs=[
+            StoryEventPack(
+                id="pack_marquee", title="集市", event_ids=["ev_marquee"],
+                knowledge_ids=["marquee"],
+            )
+        ],
+        nodes=[StoryNode(id="n1", title="第一节", knowledge_ids=["char1"])],
+    )
+    entries = [
+        _entry("scene1", layer="scene", depth=1),
+        _entry("char1", layer="character", depth=9),
+        _entry("marquee", layer="event", depth=9),
+    ]
+    context = knowledge_service.build_context(
+        entries, mode="storyline", storyline=storyline, story_node="n1",
+        armed_packs=["pack_marquee"],
+    )
+    assert [b.entry_id for b in context.blocks] == ["char1", "marquee", "scene1"]
+    assert context.armed_packs == ["pack_marquee"]
+
+
+def test_unarmed_pack_knowledge_is_not_boosted():
+    entries = [
+        _entry("scene1", layer="scene", depth=1),
+        _entry("marquee", layer="event", depth=9),
+    ]
+    context = knowledge_service.build_context(entries, mode="free", armed_packs=None)
+    # Free mode still injects by layer; the point is that no pack was armed.
+    assert context.stats.included == len(entries)
+    assert context.armed_packs == []
+
+
+def test_armed_pack_ids_reads_the_authoritative_state():
+    from app.models.game import GameState
+    from app.models.knowledge import StoryEventPack
+    from tests.support import village_world
+
+    storyline = Storyline(
+        packs=[
+            StoryEventPack(
+                id="pack_marquee", title="集市", event_ids=["ev_marquee"],
+                requires=[__import__("app.models.game", fromlist=["Condition"]).Condition(
+                    kind="at_location", target="forest_edge")],
+            )
+        ]
+    )
+    here = GameState(campaign_id="c", world_id="demo_village", location_id="forest_edge")
+    elsewhere = GameState(campaign_id="c", world_id="demo_village", location_id="village_square")
+    world = village_world()
+    assert knowledge_service.armed_pack_ids(storyline, here, world) == ["pack_marquee"]
+    assert knowledge_service.armed_pack_ids(storyline, elsewhere, world) == []
+    assert knowledge_service.armed_pack_ids(storyline, None, world) == []

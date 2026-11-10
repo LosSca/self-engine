@@ -198,6 +198,7 @@ class ActionService:
         story_nodes: Optional[List[str]] = None,
         focus: Optional[List[str]] = None,
         query: str = "",
+        armed_packs: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
         provider = self.history_provider
         blocks: List[Dict[str, Any]] = []
@@ -235,6 +236,7 @@ class ActionService:
                     storyline=play.config.storyline,
                     scenario_id=play.scenario_id,
                     story_nodes=story_nodes,
+                    armed_packs=armed_packs,
                     focus=focus,
                     budget_chars=play.config.context_budget_chars,
                     query=query,
@@ -618,6 +620,7 @@ class ActionService:
         quest_updates: List[Any],
         play: Optional[ScenarioPlayContext],
         active_node: Optional[str],
+        armed_packs: Optional[List[str]] = None,
     ) -> tuple[NarrativeResult, List[str]]:
         """Describe a settled turn, never decide it.
 
@@ -631,12 +634,16 @@ class ActionService:
         context_entries: List[str] = []
         options: Optional[Dict[str, Any]] = None
         try:
+            # Every entered node contributes its knowledge, plus the event packs
+            # currently armed for this point of the story.
             blocks, context_entries, options = self._knowledge(
                 play,
                 active_node,
                 new_state,
+                story_nodes=[n for n in (new_state.story_nodes or []) if n],
                 focus=self._focus_tokens(world, new_state, request),
                 query=str(request.params.get("text") or ""),
+                armed_packs=armed_packs or [],
             )
         except Exception as exc:  # noqa: BLE001 - context is advisory only
             return (
@@ -881,7 +888,15 @@ class ActionService:
         # never fail, roll back or rewrite it. A model timeout or a bad payload
         # degrades to status="failed" and the turn still commits.
         narrative, context_entries = await self._narrate_applied(
-            request, outcome, new_state, world, executions, quest_updates, play, active_node
+            request,
+            outcome,
+            new_state,
+            world,
+            executions,
+            quest_updates,
+            play,
+            active_node,
+            list(story_status.armed_packs) if story_status is not None else [],
         )
         self._append_summary(new_state, request, outcome, narrative)
         await self._maybe_llm_summary(new_state, play)

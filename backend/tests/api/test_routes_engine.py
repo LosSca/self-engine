@@ -195,7 +195,8 @@ def test_story_endpoint_reports_free_mode_by_default(client):
     assert body["mode"] == "free"
     assert body["entered"] == []
     assert body["active"] is None
-    assert body["storyline"] == {"name": "", "nodes": [], "lines": []}
+    assert body["storyline"] == {"name": "", "nodes": [], "lines": [], "packs": []}
+    assert body["armed_packs"] == [] and body["fired_packs"] == []
 
 
 def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
@@ -244,15 +245,17 @@ def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
         "name": "Warehouse", "lines": lines,
         "nodes": [
             {key: node.get(key, "") for key in ["id", "title", "kind", "line", "summary"]}
+            | {"requires_event_pack": None}
             for node in nodes
         ],
+        "packs": [],
     }
     assert client.get(f"{API}/campaigns/camp-1/state").json() == before
 
     assert client.put(config_url, json={"mode": "free"}).status_code == 200
     free = client.get(f"{API}/campaigns/camp-1/story").json()
     assert free["mode"] == "free"
-    assert free["storyline"] == {"name": "", "nodes": [], "lines": []}
+    assert free["storyline"] == {"name": "", "nodes": [], "lines": [], "packs": []}
     assert client.get(config_url).json()["storyline"] == stored
 
 
@@ -488,3 +491,63 @@ def test_ai_world_generation_without_model_is_503(client, monkeypatch):
     monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: None)
     res = client.post(f"{API}/worlds/generate", json={"prompt": "小岛"})
     assert res.status_code == 503
+
+
+def test_story_endpoint_reports_armed_and_fired_packs(client):
+    created = client.post("/api/scenarios/", json={"title": "Packs", "language": "zh"})
+    assert created.status_code == 201, created.text
+    scenario_id = created.json()["id"]
+    payload = village_world_data()
+    payload["scenario_id"] = scenario_id
+    assert _create_world(client, payload).status_code == 200
+    world = client.get(f"{API}/worlds/demo_village").json()
+    event_id = world["events"][0]["id"]
+    packs = [
+        {
+            "id": "pack_edge",
+            "title": "Forest rumour",
+            "event_ids": [event_id],
+            "requires": [{"kind": "at_location", "target": "forest_edge"}],
+            "enabled": True,
+            "once": True,
+        }
+    ]
+    config_url = f"{API}/scenarios/{scenario_id}/play-config"
+    saved = client.put(config_url, json={
+        "mode": "storyline",
+        "storyline": {
+            "name": "With packs",
+            "nodes": [
+                {"id": "arrive", "title": "Arrival"},
+                {"id": "rumour", "title": "Rumour", "kind": "side", "requires_event_pack": "pack_edge"},
+            ],
+            "packs": packs,
+        },
+    })
+    assert saved.status_code == 200, saved.text
+    assert client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"}).status_code == 200
+
+    body = client.get(f"{API}/campaigns/camp-1/story").json()
+    assert body["armed_packs"] == []
+    assert body["fired_packs"] == []
+    stored = body["storyline"]["packs"]
+    assert [pack["id"] for pack in stored] == ["pack_edge"]
+    assert stored[0]["event_ids"] == [event_id]
+    assert stored[0]["requires"][0]["kind"] == "at_location"
+    assert stored[0]["requires"][0]["target"] == "forest_edge"
+    assert stored[0]["once"] is True
+    assert body["storyline"]["nodes"][1]["requires_event_pack"] == "pack_edge"
+    assert body["pending"] == ["rumour"]
+    assert "pack_edge" in body["reasons"]["rumour"]
+
+    moved = client.post(f"{API}/campaigns/camp-1/actions", json={
+        "campaign_id": "camp-1",
+        "request_id": "req-move-edge",
+        "action": "move",
+        "target_id": "forest_edge",
+        "narrate": False,
+    })
+    assert moved.status_code == 200, moved.text
+    after = client.get(f"{API}/campaigns/camp-1/story").json()
+    assert after["armed_packs"] == ["pack_edge"]
+    assert after["fired_packs"] == []

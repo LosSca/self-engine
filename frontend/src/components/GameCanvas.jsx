@@ -16,6 +16,7 @@ import {
   fetchTraces,
   deleteTraces,
   fetchCampaignCharacter,
+  fetchCampaignStory,
 } from '../api'
 import ActionInput from './ActionInput'
 import SuggestionList from './SuggestionList'
@@ -146,6 +147,20 @@ function usageTitle(u) {
   ].join('\n')
 }
 
+// Storyline progress is authored data rendered as-is; nothing here decides an outcome.
+function storyNodeTitle(story, nodeId) {
+  if (!nodeId || !story || !story.storyline) return ''
+  const node = (story.storyline.nodes || []).find((item) => item.id === nodeId)
+  return node ? node.title || node.id : nodeId
+}
+
+function storyTitle(story) {
+  const armed = (story.armed_packs || []).join('、') || '无'
+  const fired = (story.fired_packs || []).join('、') || '无'
+  const pending = storyNodeTitle(story, (story.pending || [])[0]) || '无'
+  return `当前剧情线：${story.storyline?.name || '未命名'}\n已启用事件包：${armed}\n已触发事件包：${fired}\n下一步：${pending}`
+}
+
 export default function GameCanvas() {
   const {
     messages,
@@ -203,6 +218,9 @@ export default function GameCanvas() {
   // 'engine' = the campaign has an authoritative world bound, so rules decide
   // every outcome; 'narrative' = the legacy free-form LLM lane.
   const [engineLane, setEngineLane] = useState({ checked: false, bound: false, state: null })
+  // Storyline progress for the bound campaign: entered nodes, armed event
+  // packs. Read-only; the engine advances it, the UI only reports it.
+  const [campaignStory, setCampaignStory] = useState(null)
 
   // Restore session on mount if state is missing
   useEffect(() => {
@@ -408,6 +426,9 @@ export default function GameCanvas() {
     fetchEngineAvailability(activeCampaignId).then((availability) => {
       if (cancelled) return
       setEngineLane({ checked: true, ...availability })
+      if (availability && availability.bound) {
+        fetchCampaignStory(activeCampaignId).then((story) => { if (!cancelled) setCampaignStory(story) }).catch(() => {})
+      }
     })
     return () => { cancelled = true }
   }, [activeCampaignId])
@@ -436,6 +457,9 @@ export default function GameCanvas() {
       setEngineLane((prev) => ({ ...prev, checked: true, bound: true, state: result.state }))
       setCombatMode(Boolean(result.state.combat?.active))
       fetchInventoryApi(activeCampaignId).then(setInventory).catch((err) => console.warn('Inventory refresh failed:', err))
+    }
+    if (engineLane.bound || result?.state_version != null) {
+      fetchCampaignStory(activeCampaignId).then(setCampaignStory).catch(() => {})
     }
     if (result?.events_fired?.length) {
       pushTrace([{
@@ -599,6 +623,17 @@ export default function GameCanvas() {
                     {engineLane.bound
                       ? `规则引擎 v${engineLane.state?.version ?? engineLane.version ?? 0}`
                       : '自由叙事'}
+                  </span>
+                )}
+                {engineLane.bound && campaignStory && campaignStory.mode === 'storyline' && (
+                  <span
+                    className="normal-case border-l border-white/10 pl-2 text-cyan-300/70 cursor-help"
+                    title={storyTitle(campaignStory)}
+                  >
+                    {`剧情 ${storyNodeTitle(campaignStory, campaignStory.active) || '未进入'}`}
+                    {campaignStory.armed_packs && campaignStory.armed_packs.length > 0
+                      ? ` · 事件包 ${campaignStory.armed_packs.length}`
+                      : ''}
                   </span>
                 )}
                 {lastUsage && (
