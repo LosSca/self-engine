@@ -21,6 +21,7 @@ import {
 import ActionInput from './ActionInput'
 import SuggestionList from './SuggestionList'
 import JournalPanel from './JournalPanel'
+import StoryProgressPanel from './StoryProgressPanel'
 import CombatOverlay from './CombatOverlay'
 import SettingsPanel from './SettingsPanel'
 import PlotGeneratorPanel from './PlotGeneratorPanel'
@@ -221,6 +222,7 @@ export default function GameCanvas() {
   // Storyline progress for the bound campaign: entered nodes, armed event
   // packs. Read-only; the engine advances it, the UI only reports it.
   const [campaignStory, setCampaignStory] = useState(null)
+  const [storyOpen, setStoryOpen] = useState(false)
 
   // Restore session on mount if state is missing
   useEffect(() => {
@@ -626,15 +628,16 @@ export default function GameCanvas() {
                   </span>
                 )}
                 {engineLane.bound && campaignStory && campaignStory.mode === 'storyline' && (
-                  <span
-                    className="normal-case border-l border-white/10 pl-2 text-cyan-300/70 cursor-help"
+                  <button
+                    onClick={() => setStoryOpen(true)}
+                    className="normal-case border-l border-white/10 pl-2 text-cyan-300/70 hover:text-cyan-200 cursor-pointer"
                     title={storyTitle(campaignStory)}
                   >
                     {`剧情 ${storyNodeTitle(campaignStory, campaignStory.active) || '未进入'}`}
                     {campaignStory.armed_packs && campaignStory.armed_packs.length > 0
                       ? ` · 事件包 ${campaignStory.armed_packs.length}`
                       : ''}
-                  </span>
+                  </button>
                 )}
                 {lastUsage && (
                   <span
@@ -919,6 +922,13 @@ export default function GameCanvas() {
       )}
       <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} engineBound={engineLane.bound} onEngineAction={handleStructuredAction} busy={isStreaming} />
       <JournalPanel open={journalOpen} onClose={() => setJournalOpen(false)} entries={journal} onRefresh={refreshJournal} />
+      <StoryProgressPanel
+        open={storyOpen}
+        onClose={() => setStoryOpen(false)}
+        story={campaignStory}
+        engineBound={engineLane.bound}
+        onRefresh={refreshStory}
+      />
       <WorldStudio
         open={worldStudioOpen}
         scenarioId={activeScenario?.id}
