@@ -8,7 +8,7 @@ authoritative state untouched.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.models.game import (
     CombatantState,
@@ -236,430 +236,564 @@ def apply_effect(
 
     Returns an AppliedEffect whose ok=False carries a readable error; callers
     must not commit a partially applied effect list.
+
+    Dispatch is a registry lookup: each effect kind is one small function
+    registered with @register_effect, so a new effect never edits this body
+    and an unknown kind fails closed with a readable message.
     """
     kind = effect.kind
-    if kind == "set_flag":
-        if not effect.target:
-            return AppliedEffect(effect, False, "set_flag needs a target flag name")
-        state.flags[effect.target] = effect.value
-        return AppliedEffect(effect, True, facts=[Fact("flag", effect.target, effect.value)])
+    handler = EFFECT_HANDLERS.get(kind)
+    if handler is None:
+        return AppliedEffect(effect, False, f"unsupported effect kind '{kind}'")
+    return handler(kind, state, world, effect)
 
-    if kind == "give_item":
-        if not any(item.id == effect.target for item in world.items):
-            return AppliedEffect(effect, False, f"unknown item '{effect.target}'")
-        amount = max(1, int(effect.amount or 1))
-        state.inventory[effect.target] = state.inventory.get(effect.target, 0) + amount
-        if not effect.keep_ground:
-            state.item_locations.pop(effect.target, None)
-        return AppliedEffect(
-            effect, True, facts=[Fact("item_gained", effect.target, amount)]
-        )
 
-    if kind == "remove_item":
-        amount = max(1, int(effect.amount or 1))
-        held = state.inventory.get(effect.target, 0)
-        if held < amount:
-            return AppliedEffect(
-                effect,
-                False,
-                f"cannot remove {amount} x '{effect.target}': only {held} held",
-            )
-        remaining = held - amount
-        if remaining > 0:
-            state.inventory[effect.target] = remaining
-        else:
-            state.inventory.pop(effect.target, None)
-        _unequip_missing_item(state, effect.target)
-        return AppliedEffect(
-            effect, True, facts=[Fact("item_removed", effect.target, amount)]
-        )
+_EffectHandler = Callable[
+    [str, GameState, WorldDefinition, Effect], AppliedEffect
+]
 
-    if kind == "move_player":
-        if not any(loc.id == effect.target for loc in world.locations):
-            return AppliedEffect(effect, False, f"unknown location '{effect.target}'")
-        state.location_id = effect.target
-        return AppliedEffect(
-            effect, True, facts=[Fact("reach_location", effect.target)]
-        )
+# Adding an effect means registering one function here; nothing in
+# apply_effect() changes and no branch chain grows.
+EFFECT_HANDLERS: Dict[str, _EffectHandler] = {}
 
-    if kind == "open_door":
-        if not any(door.id == effect.target for door in world.doors):
-            return AppliedEffect(effect, False, f"unknown door '{effect.target}'")
-        state.doors[effect.target] = True
-        return AppliedEffect(effect, True, facts=[Fact("door_opened", effect.target)])
 
-    if kind == "close_door":
-        if not any(door.id == effect.target for door in world.doors):
-            return AppliedEffect(effect, False, f"unknown door '{effect.target}'")
-        state.doors[effect.target] = False
-        return AppliedEffect(effect, True, facts=[Fact("door_closed", effect.target)])
+def register_effect(*kinds: str) -> Callable[[_EffectHandler], _EffectHandler]:
+    """Register one handler under every listed effect kind."""
 
-    if kind == "quest_progress":
-        quest = next((q for q in world.quests if q.id == effect.target), None)
-        if quest is None:
-            return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
-        objective_id = effect.value
-        objective = next(
-            (o for o in quest.objectives if o.id == objective_id), None
-        )
-        if objective is None:
-            return AppliedEffect(
-                effect,
-                False,
-                f"quest '{quest.id}' has no objective '{objective_id}'",
-            )
-        if not quest.enabled:
-            return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
-        progress = state.quests.get(quest.id)
-        if progress is None or progress.status != "active":
-            return AppliedEffect(effect, False, f"quest '{quest.id}' is not active")
-        current = progress.objectives.get(objective.id, 0)
-        updated = min(objective.required_count, current + max(1, int(effect.amount or 1)))
-        if updated == current:
-            return AppliedEffect(effect, True)
-        progress.objectives[objective.id] = updated
-        state.quests[quest.id] = progress
+    def decorator(handler: _EffectHandler) -> _EffectHandler:
+        for kind in kinds:
+            if kind in EFFECT_HANDLERS:
+                raise ValueError(f"effect kind '{kind}' is already registered")
+            EFFECT_HANDLERS[kind] = handler
+        return handler
+
+    return decorator
+
+
+def effect_kinds() -> List[str]:
+    """Every effect kind this build can apply, sorted."""
+    return sorted(EFFECT_HANDLERS)
+
+
+@register_effect("set_flag")
+def _effect_set_flag(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `set_flag`."""
+    if not effect.target:
+        return AppliedEffect(effect, False, "set_flag needs a target flag name")
+    state.flags[effect.target] = effect.value
+    return AppliedEffect(effect, True, facts=[Fact("flag", effect.target, effect.value)])
+
+
+
+@register_effect("give_item")
+def _effect_give_item(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `give_item`."""
+    if not any(item.id == effect.target for item in world.items):
+        return AppliedEffect(effect, False, f"unknown item '{effect.target}'")
+    amount = max(1, int(effect.amount or 1))
+    state.inventory[effect.target] = state.inventory.get(effect.target, 0) + amount
+    if not effect.keep_ground:
+        state.item_locations.pop(effect.target, None)
+    return AppliedEffect(
+        effect, True, facts=[Fact("item_gained", effect.target, amount)]
+    )
+
+
+
+@register_effect("remove_item")
+def _effect_remove_item(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `remove_item`."""
+    amount = max(1, int(effect.amount or 1))
+    held = state.inventory.get(effect.target, 0)
+    if held < amount:
         return AppliedEffect(
             effect,
-            True,
-            facts=[Fact("quest_progress", f"{quest.id}:{objective.id}")],
+            False,
+            f"cannot remove {amount} x '{effect.target}': only {held} held",
         )
+    remaining = held - amount
+    if remaining > 0:
+        state.inventory[effect.target] = remaining
+    else:
+        state.inventory.pop(effect.target, None)
+    _unequip_missing_item(state, effect.target)
+    return AppliedEffect(
+        effect, True, facts=[Fact("item_removed", effect.target, amount)]
+    )
 
-    if kind == "quest_complete":
-        from app.engines.quest_engine import complete_quest
 
-        return complete_quest(state, world, effect)
 
-    if kind == "quest_accept":
-        from app.engines.quest_engine import accept_conditions_met, prerequisites_met
+@register_effect("move_player")
+def _effect_move_player(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `move_player`."""
+    if not any(loc.id == effect.target for loc in world.locations):
+        return AppliedEffect(effect, False, f"unknown location '{effect.target}'")
+    state.location_id = effect.target
+    return AppliedEffect(
+        effect, True, facts=[Fact("reach_location", effect.target)]
+    )
 
-        quest = next((q for q in world.quests if q.id == effect.target), None)
-        if quest is None:
-            return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
-        if not quest.enabled:
-            return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
-        progress = state.quests.get(quest.id) or QuestProgress(
-            quest_id=quest.id, status="inactive"
-        )
-        if progress.status in ("completed", "failed"):
-            return AppliedEffect(
-                effect, False, f"quest '{quest.id}' is already {progress.status}"
-            )
-        if not prerequisites_met(state, quest):
-            return AppliedEffect(effect, False, f"quest '{quest.id}' prerequisites are unmet")
-        if not accept_conditions_met(state, world, quest):
-            return AppliedEffect(effect, False, f"quest '{quest.id}' accept conditions are unmet")
-        if progress.status == "active":
-            return AppliedEffect(effect, True)
-        for objective in quest.objectives:
-            progress.objectives.setdefault(objective.id, 0)
-        progress.status = "active"
-        state.quests[quest.id] = progress
-        return AppliedEffect(effect, True, facts=[Fact("quest_accepted", quest.id)])
 
-    if kind == "quest_fail":
-        quest = next((q for q in world.quests if q.id == effect.target), None)
-        if quest is None:
-            return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
-        if not quest.enabled:
-            return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
-        progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
-        if progress.status == "completed":
-            return AppliedEffect(
-                effect, False, f"quest '{quest.id}' is already completed"
-            )
-        if progress.status == "failed":
-            return AppliedEffect(effect, True)
-        progress.status = "failed"
-        state.quests[quest.id] = progress
-        return AppliedEffect(effect, True, facts=[Fact("quest_failed", quest.id)])
 
-    if kind == "combat_hp":
-        entity = next((entry for entry in world.entities if entry.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        try:
-            hp = 0 if effect.value is None else int(effect.value)
-        except (TypeError, ValueError, OverflowError):
-            return AppliedEffect(
-                effect, False, "combat_hp requires a numeric value convertible to an integer"
-            )
-        combatant = state.combatants.get(entity.id)
-        if combatant is None:
-            # Seed the same way the rules engine does, so authored attributes
-            # (max_hp/attack/defense) are the single source of enemy numbers.
-            def _number(key: str, default: float) -> float:
-                value = entity.attributes.get(key, default)
-                return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+@register_effect("open_door")
+def _effect_open_door(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `open_door`."""
+    if not any(door.id == effect.target for door in world.doors):
+        return AppliedEffect(effect, False, f"unknown door '{effect.target}'")
+    state.doors[effect.target] = True
+    return AppliedEffect(effect, True, facts=[Fact("door_opened", effect.target)])
 
-            max_hp = max(1, int(_number("max_hp", _number("hp", 10))))
-            combatant = CombatantState(
-                entity_id=entity.id,
-                name=entity.name,
-                hp=max_hp,
-                max_hp=max_hp,
-                attack=max(1, int(_number("attack", 3))),
-                defense=max(0, int(_number("defense", 1))),
-                flee_chance=min(1.0, max(0.0, _number("flee_chance", 0.5))),
-            )
-        combatant.hp = max(0, min(hp, combatant.max_hp))
-        was_alive = combatant.alive
-        combatant.alive = combatant.hp > 0
-        state.combatants[entity.id] = combatant
-        record = entity_state_for(state, world, entity)
-        record.hp = combatant.hp
-        record.max_hp = combatant.max_hp
-        record.alive = combatant.alive
-        facts = [Fact("combat_hp", entity.id, combatant.hp)]
-        if was_alive and not combatant.alive:
-            facts.append(Fact("combatant_defeated", entity.id))
-            state.combat["active"] = False
-            state.flags["combat_active"] = False
-        return AppliedEffect(effect, True, facts=facts)
 
-    if kind == "player_damage":
-        amount = max(1, int(effect.amount or 1))
-        current = state.flags.get("player_hp")
-        if not isinstance(current, int):
-            current = int(state.flags.get("player_max_hp", 20) or 20)
-        remaining = max(0, current - amount)
-        state.flags["player_hp"] = remaining
-        facts = [Fact("player_damage", "player", amount)]
-        if remaining <= 0 and not state.flags.get("player_defeated"):
-            state.flags["player_defeated"] = True
-            facts.append(Fact("player_defeated", "player", 0))
-        return AppliedEffect(effect, True, facts=facts)
 
-    if kind == "move_entity":
-        entity = next((e for e in world.entities if e.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        if not isinstance(effect.value, str):
-            return AppliedEffect(effect, False, "move_entity requires value = location id (string)")
-        destination = effect.value
-        location = next((l for l in world.locations if l.id == destination), None)
-        if location is None:
-            return AppliedEffect(effect, False, f"unknown location '{destination}'")
-        record = entity_state_for(state, world, entity)
-        origin = record.location_id or entity.location_id
-        record.location_id = location.id
+@register_effect("close_door")
+def _effect_close_door(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `close_door`."""
+    if not any(door.id == effect.target for door in world.doors):
+        return AppliedEffect(effect, False, f"unknown door '{effect.target}'")
+    state.doors[effect.target] = False
+    return AppliedEffect(effect, True, facts=[Fact("door_closed", effect.target)])
+
+
+
+@register_effect("quest_progress")
+def _effect_quest_progress(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `quest_progress`."""
+    quest = next((q for q in world.quests if q.id == effect.target), None)
+    if quest is None:
+        return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
+    objective_id = effect.value
+    objective = next(
+        (o for o in quest.objectives if o.id == objective_id), None
+    )
+    if objective is None:
         return AppliedEffect(
             effect,
-            True,
-            facts=[Fact("entity_moved", entity.id, location.id)],
+            False,
+            f"quest '{quest.id}' has no objective '{objective_id}'",
         )
+    if not quest.enabled:
+        return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
+    progress = state.quests.get(quest.id)
+    if progress is None or progress.status != "active":
+        return AppliedEffect(effect, False, f"quest '{quest.id}' is not active")
+    current = progress.objectives.get(objective.id, 0)
+    updated = min(objective.required_count, current + max(1, int(effect.amount or 1)))
+    if updated == current:
+        return AppliedEffect(effect, True)
+    progress.objectives[objective.id] = updated
+    state.quests[quest.id] = progress
+    return AppliedEffect(
+        effect,
+        True,
+        facts=[Fact("quest_progress", f"{quest.id}:{objective.id}")],
+    )
 
-    if kind == "seed_entity":
-        entity = next((e for e in world.entities if e.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        if entity.id in state.entities:
-            # Already materialised: seeding is idempotent by construction.
-            return AppliedEffect(effect, True)
-        entity_state_for(state, world, entity)
+
+
+@register_effect("quest_complete")
+def _effect_quest_complete(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `quest_complete`."""
+    from app.engines.quest_engine import complete_quest
+
+    return complete_quest(state, world, effect)
+
+
+
+@register_effect("quest_accept")
+def _effect_quest_accept(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `quest_accept`."""
+    from app.engines.quest_engine import accept_conditions_met, prerequisites_met
+
+    quest = next((q for q in world.quests if q.id == effect.target), None)
+    if quest is None:
+        return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
+    if not quest.enabled:
+        return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
+    progress = state.quests.get(quest.id) or QuestProgress(
+        quest_id=quest.id, status="inactive"
+    )
+    if progress.status in ("completed", "failed"):
         return AppliedEffect(
-            effect, True, facts=[Fact("entity_seeded", entity.id, entity.location_id)]
+            effect, False, f"quest '{quest.id}' is already {progress.status}"
         )
+    if not prerequisites_met(state, quest):
+        return AppliedEffect(effect, False, f"quest '{quest.id}' prerequisites are unmet")
+    if not accept_conditions_met(state, world, quest):
+        return AppliedEffect(effect, False, f"quest '{quest.id}' accept conditions are unmet")
+    if progress.status == "active":
+        return AppliedEffect(effect, True)
+    for objective in quest.objectives:
+        progress.objectives.setdefault(objective.id, 0)
+    progress.status = "active"
+    state.quests[quest.id] = progress
+    return AppliedEffect(effect, True, facts=[Fact("quest_accepted", quest.id)])
 
-    if kind == "give_entity":
-        entity = next((e for e in world.entities if e.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        item_id = effect.value if isinstance(effect.value, str) else ""
-        if item_id not in {item.id for item in world.items}:
-            return AppliedEffect(effect, False, f"unknown item '{item_id}'")
-        amount = max(1, int(effect.amount or 1))
-        held = state.inventory.get(item_id, 0)
-        if held >= amount:
-            remaining = held - amount
-            if remaining:
-                state.inventory[item_id] = remaining
-            else:
-                state.inventory.pop(item_id, None)
-        elif state.item_locations.get(item_id) == state.location_id and amount == 1:
-            state.item_locations.pop(item_id, None)
-        else:
-            return AppliedEffect(
-                effect,
-                False,
-                f"cannot give {amount} x '{item_id}': not held and not on the ground here",
-            )
-        _unequip_missing_item(state, item_id)
-        record = entity_state_for(state, world, entity)
-        record.inventory[item_id] = record.inventory.get(item_id, 0) + amount
+
+
+@register_effect("quest_fail")
+def _effect_quest_fail(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `quest_fail`."""
+    quest = next((q for q in world.quests if q.id == effect.target), None)
+    if quest is None:
+        return AppliedEffect(effect, False, f"unknown quest '{effect.target}'")
+    if not quest.enabled:
+        return AppliedEffect(effect, False, f"quest '{quest.id}' is disabled")
+    progress = state.quests.get(quest.id) or QuestProgress(quest_id=quest.id)
+    if progress.status == "completed":
         return AppliedEffect(
-            effect, True, facts=[Fact("entity_item_gained", entity.id, item_id)]
+            effect, False, f"quest '{quest.id}' is already completed"
         )
+    if progress.status == "failed":
+        return AppliedEffect(effect, True)
+    progress.status = "failed"
+    state.quests[quest.id] = progress
+    return AppliedEffect(effect, True, facts=[Fact("quest_failed", quest.id)])
 
-    if kind == "take_entity":
-        entity = next((e for e in world.entities if e.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        item_id = effect.value if isinstance(effect.value, str) else ""
-        if item_id not in {item.id for item in world.items}:
-            return AppliedEffect(effect, False, f"unknown item '{item_id}'")
-        amount = max(1, int(effect.amount or 1))
-        record = entity_state_for(state, world, entity)
-        held = record.inventory.get(item_id, 0)
-        if held < amount:
-            return AppliedEffect(
-                effect,
-                False,
-                f"entity '{entity.id}' holds {held} x '{item_id}', cannot take {amount}",
-            )
+
+
+@register_effect("combat_hp")
+def _effect_combat_hp(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `combat_hp`."""
+    entity = next((entry for entry in world.entities if entry.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    try:
+        hp = 0 if effect.value is None else int(effect.value)
+    except (TypeError, ValueError, OverflowError):
+        return AppliedEffect(
+            effect, False, "combat_hp requires a numeric value convertible to an integer"
+        )
+    combatant = state.combatants.get(entity.id)
+    if combatant is None:
+        # Seed the same way the rules engine does, so authored attributes
+        # (max_hp/attack/defense) are the single source of enemy numbers.
+        def _number(key: str, default: float) -> float:
+            value = entity.attributes.get(key, default)
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+        max_hp = max(1, int(_number("max_hp", _number("hp", 10))))
+        combatant = CombatantState(
+            entity_id=entity.id,
+            name=entity.name,
+            hp=max_hp,
+            max_hp=max_hp,
+            attack=max(1, int(_number("attack", 3))),
+            defense=max(0, int(_number("defense", 1))),
+            flee_chance=min(1.0, max(0.0, _number("flee_chance", 0.5))),
+        )
+    combatant.hp = max(0, min(hp, combatant.max_hp))
+    was_alive = combatant.alive
+    combatant.alive = combatant.hp > 0
+    state.combatants[entity.id] = combatant
+    record = entity_state_for(state, world, entity)
+    record.hp = combatant.hp
+    record.max_hp = combatant.max_hp
+    record.alive = combatant.alive
+    facts = [Fact("combat_hp", entity.id, combatant.hp)]
+    if was_alive and not combatant.alive:
+        facts.append(Fact("combatant_defeated", entity.id))
+        state.combat["active"] = False
+        state.flags["combat_active"] = False
+    return AppliedEffect(effect, True, facts=facts)
+
+
+
+@register_effect("player_damage")
+def _effect_player_damage(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `player_damage`."""
+    amount = max(1, int(effect.amount or 1))
+    current = state.flags.get("player_hp")
+    if not isinstance(current, int):
+        current = int(state.flags.get("player_max_hp", 20) or 20)
+    remaining = max(0, current - amount)
+    state.flags["player_hp"] = remaining
+    facts = [Fact("player_damage", "player", amount)]
+    if remaining <= 0 and not state.flags.get("player_defeated"):
+        state.flags["player_defeated"] = True
+        facts.append(Fact("player_defeated", "player", 0))
+    return AppliedEffect(effect, True, facts=facts)
+
+
+
+@register_effect("move_entity")
+def _effect_move_entity(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `move_entity`."""
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    if not isinstance(effect.value, str):
+        return AppliedEffect(effect, False, "move_entity requires value = location id (string)")
+    destination = effect.value
+    location = next((l for l in world.locations if l.id == destination), None)
+    if location is None:
+        return AppliedEffect(effect, False, f"unknown location '{destination}'")
+    record = entity_state_for(state, world, entity)
+    origin = record.location_id or entity.location_id
+    record.location_id = location.id
+    return AppliedEffect(
+        effect,
+        True,
+        facts=[Fact("entity_moved", entity.id, location.id)],
+    )
+
+
+
+@register_effect("seed_entity")
+def _effect_seed_entity(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `seed_entity`."""
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    if entity.id in state.entities:
+        # Already materialised: seeding is idempotent by construction.
+        return AppliedEffect(effect, True)
+    entity_state_for(state, world, entity)
+    return AppliedEffect(
+        effect, True, facts=[Fact("entity_seeded", entity.id, entity.location_id)]
+    )
+
+
+
+@register_effect("give_entity")
+def _effect_give_entity(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `give_entity`."""
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    item_id = effect.value if isinstance(effect.value, str) else ""
+    if item_id not in {item.id for item in world.items}:
+        return AppliedEffect(effect, False, f"unknown item '{item_id}'")
+    amount = max(1, int(effect.amount or 1))
+    held = state.inventory.get(item_id, 0)
+    if held >= amount:
         remaining = held - amount
         if remaining:
-            record.inventory[item_id] = remaining
+            state.inventory[item_id] = remaining
         else:
-            record.inventory.pop(item_id, None)
-        state.inventory[item_id] = state.inventory.get(item_id, 0) + amount
+            state.inventory.pop(item_id, None)
+    elif state.item_locations.get(item_id) == state.location_id and amount == 1:
+        state.item_locations.pop(item_id, None)
+    else:
         return AppliedEffect(
             effect,
-            True,
-            facts=[
-                Fact("item_gained", item_id, amount),
-                Fact("entity_item_removed", entity.id, item_id),
-            ],
+            False,
+            f"cannot give {amount} x '{item_id}': not held and not on the ground here",
         )
+    _unequip_missing_item(state, item_id)
+    record = entity_state_for(state, world, entity)
+    record.inventory[item_id] = record.inventory.get(item_id, 0) + amount
+    return AppliedEffect(
+        effect, True, facts=[Fact("entity_item_gained", entity.id, item_id)]
+    )
 
-    if kind == "equip_item":
-        item = next((entry for entry in world.items if entry.id == effect.target), None)
-        if item is None:
-            return AppliedEffect(effect, False, f"unknown item '{effect.target}'")
-        if not item.slot:
-            return AppliedEffect(effect, False, f"item '{item.id}' has no slot")
-        if state.inventory.get(item.id, 0) <= 0:
-            return AppliedEffect(effect, False, f"item '{item.id}' is not carried")
-        state.equipment[item.slot] = item.id
+
+
+@register_effect("take_entity")
+def _effect_take_entity(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `take_entity`."""
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    item_id = effect.value if isinstance(effect.value, str) else ""
+    if item_id not in {item.id for item in world.items}:
+        return AppliedEffect(effect, False, f"unknown item '{item_id}'")
+    amount = max(1, int(effect.amount or 1))
+    record = entity_state_for(state, world, entity)
+    held = record.inventory.get(item_id, 0)
+    if held < amount:
         return AppliedEffect(
-            effect, True, facts=[Fact("equipped", item.id, item.slot)]
+            effect,
+            False,
+            f"entity '{entity.id}' holds {held} x '{item_id}', cannot take {amount}",
         )
+    remaining = held - amount
+    if remaining:
+        record.inventory[item_id] = remaining
+    else:
+        record.inventory.pop(item_id, None)
+    state.inventory[item_id] = state.inventory.get(item_id, 0) + amount
+    return AppliedEffect(
+        effect,
+        True,
+        facts=[
+            Fact("item_gained", item_id, amount),
+            Fact("entity_item_removed", entity.id, item_id),
+        ],
+    )
 
-    if kind == "unequip_item":
-        slot = effect.target
-        if slot not in state.equipment:
-            return AppliedEffect(effect, False, f"slot '{slot}' is empty")
-        item_id = state.equipment.pop(slot)
-        return AppliedEffect(
-            effect, True, facts=[Fact("unequipped", item_id, slot)]
-        )
 
-    if kind == "advance_dialogue":
-        entity = next((e for e in world.entities if e.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        record = entity_state_for(state, world, entity)
-        current = record.flags.get("dialogue_index", 0)
-        record.flags["dialogue_index"] = (
-            int(current) + 1 if isinstance(current, (int, float)) else 1
-        )
-        return AppliedEffect(
-            effect, True,
-            facts=[Fact("dialogue_advanced", entity.id, record.flags["dialogue_index"])],
-        )
 
-    if kind in ("add_currency", "remove_currency"):
-        amount = max(1, int(effect.amount or 1))
-        if kind == "remove_currency":
-            if state.currency < amount:
-                return AppliedEffect(
-                    effect, False,
-                    f"cannot spend {amount}, only {state.currency} available",
-                )
-            state.currency -= amount
-        else:
-            state.currency += amount
-        return AppliedEffect(
-            effect, True, facts=[Fact("currency_changed", "player", state.currency)]
-        )
+@register_effect("equip_item")
+def _effect_equip_item(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `equip_item`."""
+    item = next((entry for entry in world.items if entry.id == effect.target), None)
+    if item is None:
+        return AppliedEffect(effect, False, f"unknown item '{effect.target}'")
+    if not item.slot:
+        return AppliedEffect(effect, False, f"item '{item.id}' has no slot")
+    if state.inventory.get(item.id, 0) <= 0:
+        return AppliedEffect(effect, False, f"item '{item.id}' is not carried")
+    state.equipment[item.slot] = item.id
+    return AppliedEffect(
+        effect, True, facts=[Fact("equipped", item.id, item.slot)]
+    )
 
-    if kind == "add_xp":
-        amount = max(1, int(effect.amount or 1))
-        state.xp += amount
-        state.level = 1 + state.xp // 100
-        return AppliedEffect(
-            effect, True,
-            facts=[Fact("xp_changed", "player", state.xp), Fact("level", "player", state.level)],
-        )
 
-    if kind == "offer_choice":
+
+@register_effect("unequip_item")
+def _effect_unequip_item(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `unequip_item`."""
+    slot = effect.target
+    if slot not in state.equipment:
+        return AppliedEffect(effect, False, f"slot '{slot}' is empty")
+    item_id = state.equipment.pop(slot)
+    return AppliedEffect(
+        effect, True, facts=[Fact("unequipped", item_id, slot)]
+    )
+
+
+
+@register_effect("advance_dialogue")
+def _effect_advance_dialogue(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `advance_dialogue`."""
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    record = entity_state_for(state, world, entity)
+    current = record.flags.get("dialogue_index", 0)
+    record.flags["dialogue_index"] = (
+        int(current) + 1 if isinstance(current, (int, float)) else 1
+    )
+    return AppliedEffect(
+        effect, True,
+        facts=[Fact("dialogue_advanced", entity.id, record.flags["dialogue_index"])],
+    )
+
+
+
+@register_effect("add_currency", "remove_currency")
+def _effect_add_currency_or_remove_currency(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `add_currency` / `remove_currency`."""
+    amount = max(1, int(effect.amount or 1))
+    if kind == "remove_currency":
+        if state.currency < amount:
+            return AppliedEffect(
+                effect, False,
+                f"cannot spend {amount}, only {state.currency} available",
+            )
+        state.currency -= amount
+    else:
+        state.currency += amount
+    return AppliedEffect(
+        effect, True, facts=[Fact("currency_changed", "player", state.currency)]
+    )
+
+
+
+@register_effect("add_xp")
+def _effect_add_xp(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `add_xp`."""
+    amount = max(1, int(effect.amount or 1))
+    state.xp += amount
+    state.level = 1 + state.xp // 100
+    return AppliedEffect(
+        effect, True,
+        facts=[Fact("xp_changed", "player", state.xp), Fact("level", "player", state.level)],
+    )
+
+
+
+@register_effect("offer_choice")
+def _effect_offer_choice(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `offer_choice`."""
+    choice = next((c for c in world.choices if c.id == effect.target), None)
+    if choice is None:
+        return AppliedEffect(effect, False, f"unknown choice '{effect.target}'")
+    if len(choice.options) < 2:
+        return AppliedEffect(effect, False, "a choice needs at least two options")
+    state.pending_choice = PendingChoice(
+        choice_id=choice.id,
+        prompt=choice.prompt,
+        options=[{"id": option.id, "label": option.label} for option in choice.options],
+    )
+    return AppliedEffect(
+        effect, True, facts=[Fact("choice_offered", choice.id)]
+    )
+
+
+
+@register_effect("resolve_choice")
+def _effect_resolve_choice(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `resolve_choice`."""
+    pending = state.pending_choice
+    if pending is None or pending.choice_id != effect.target:
+        return AppliedEffect(effect, False, "no matching pending choice")
+    inline_event = next(
+        (e for e in world.events if e.id == effect.target and e.choices), None
+    )
+    if inline_event is not None:
+        options = inline_event.choices
+    else:
         choice = next((c for c in world.choices if c.id == effect.target), None)
         if choice is None:
             return AppliedEffect(effect, False, f"unknown choice '{effect.target}'")
-        if len(choice.options) < 2:
-            return AppliedEffect(effect, False, "a choice needs at least two options")
-        state.pending_choice = PendingChoice(
-            choice_id=choice.id,
-            prompt=choice.prompt,
-            options=[{"id": option.id, "label": option.label} for option in choice.options],
-        )
+        options = choice.options
+    option = next((o for o in options if o.id == effect.value), None)
+    if option is None:
+        return AppliedEffect(effect, False, f"unknown option '{effect.value}'")
+    applied = apply_effects(state, world, option.effects)
+    failed = next((item for item in applied if not item.ok), None)
+    if failed is not None:
         return AppliedEffect(
-            effect, True, facts=[Fact("choice_offered", choice.id)]
+            effect, False, f"choice option failed: {failed.error}"
         )
+    state.pending_choice = None
+    facts = [Fact("choice_resolved", effect.target, option.id)]
+    for item in applied:
+        facts.extend(item.facts)
+    return AppliedEffect(effect, True, facts=facts)
 
-    if kind == "resolve_choice":
-        pending = state.pending_choice
-        if pending is None or pending.choice_id != effect.target:
-            return AppliedEffect(effect, False, "no matching pending choice")
-        inline_event = next(
-            (e for e in world.events if e.id == effect.target and e.choices), None
-        )
-        if inline_event is not None:
-            options = inline_event.choices
-        else:
-            choice = next((c for c in world.choices if c.id == effect.target), None)
-            if choice is None:
-                return AppliedEffect(effect, False, f"unknown choice '{effect.target}'")
-            options = choice.options
-        option = next((o for o in options if o.id == effect.value), None)
-        if option is None:
-            return AppliedEffect(effect, False, f"unknown option '{effect.value}'")
-        applied = apply_effects(state, world, option.effects)
-        failed = next((item for item in applied if not item.ok), None)
-        if failed is not None:
-            return AppliedEffect(
-                effect, False, f"choice option failed: {failed.error}"
-            )
-        state.pending_choice = None
-        facts = [Fact("choice_resolved", effect.target, option.id)]
-        for item in applied:
-            facts.extend(item.facts)
-        return AppliedEffect(effect, True, facts=facts)
 
-    if kind in ("adjust_relation", "adjust_alert", "skill_change"):
-        if kind == "skill_change":
-            if not effect.target:
-                return AppliedEffect(effect, False, "skill_change needs a skill name")
-            value = state.skills.get(effect.target, 0) + int(effect.amount or 0)
-            state.skills[effect.target] = max(0, value)
-            return AppliedEffect(
-                effect, True,
-                facts=[Fact("skill_changed", effect.target, state.skills[effect.target])],
-            )
-        entity = next((e for e in world.entities if e.id == effect.target), None)
-        if entity is None:
-            return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
-        record = entity_state_for(state, world, entity)
-        if kind == "adjust_alert":
-            record.alert = max(0, record.alert + int(effect.amount or 0))
-            return AppliedEffect(
-                effect, True, facts=[Fact("entity_alert", entity.id, record.alert)]
-            )
-        other = effect.value if isinstance(effect.value, str) else ""
-        if not other:
-            return AppliedEffect(effect, False, "adjust_relation needs an actor id")
-        record.relations[other] = record.relations.get(other, 0) + int(effect.amount or 0)
+
+@register_effect("adjust_relation", "adjust_alert", "skill_change")
+def _effect_adjust_relation_or_adjust_alert_or_skill_change(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `adjust_relation` / `adjust_alert` / `skill_change`."""
+    if kind == "skill_change":
+        if not effect.target:
+            return AppliedEffect(effect, False, "skill_change needs a skill name")
+        value = state.skills.get(effect.target, 0) + int(effect.amount or 0)
+        state.skills[effect.target] = max(0, value)
         return AppliedEffect(
             effect, True,
-            facts=[Fact("entity_relation", entity.id, other)],
+            facts=[Fact("skill_changed", effect.target, state.skills[effect.target])],
         )
-
-    if kind == "emit":
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    record = entity_state_for(state, world, entity)
+    if kind == "adjust_alert":
+        record.alert = max(0, record.alert + int(effect.amount or 0))
         return AppliedEffect(
-            effect, True, facts=[Fact("emit", effect.target, effect.value)]
+            effect, True, facts=[Fact("entity_alert", entity.id, record.alert)]
         )
+    other = effect.value if isinstance(effect.value, str) else ""
+    if not other:
+        return AppliedEffect(effect, False, "adjust_relation needs an actor id")
+    record.relations[other] = record.relations.get(other, 0) + int(effect.amount or 0)
+    return AppliedEffect(
+        effect, True,
+        facts=[Fact("entity_relation", entity.id, other)],
+    )
 
-    return AppliedEffect(effect, False, f"unsupported effect kind '{kind}'")
+
+
+@register_effect("emit")
+def _effect_emit(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `emit`."""
+    return AppliedEffect(
+        effect, True, facts=[Fact("emit", effect.target, effect.value)]
+    )
+
 
 
 def apply_effects(
