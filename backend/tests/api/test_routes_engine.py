@@ -223,7 +223,7 @@ def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
     })
     assert saved.status_code == 200, saved.text
     stored = client.get(config_url).json()["storyline"]
-    assert stored["lines"] == lines
+    assert stored["lines"] == [{**line, "locked": False} for line in lines]
     assert [node["line"] for node in stored["nodes"]] == ["trunk", "detour", "independent", ""]
 
     payload = village_world_data()
@@ -242,10 +242,10 @@ def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
     assert body["locked"] == []
     assert "已停用" in body["reasons"]["side"]
     assert body["storyline"] == {
-        "name": "Warehouse", "lines": lines,
+        "name": "Warehouse", "lines": stored["lines"],
         "nodes": [
             {key: node.get(key, "") for key in ["id", "title", "kind", "line", "summary"]}
-            | {"requires_event_pack": None}
+            | {"requires_event_pack": None, "locked": node.get("locked", False)}
             for node in nodes
         ],
         "packs": [],

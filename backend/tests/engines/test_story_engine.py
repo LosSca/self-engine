@@ -3,6 +3,8 @@ import pytest
 
 from app.engines.story_engine import (
     advance_storyline,
+    locked_node_ids,
+    protected_edits,
     storyline_status,
     validate_storyline,
 )
@@ -425,3 +427,95 @@ def test_side_node_without_any_anchor_is_rejected():
     )
     errors = validate_storyline(storyline)
     assert any("floating" in error for error in errors)
+
+
+# ------------------------------------------------------------ locked content
+def _locked_storyline(locked_node=False, locked_line=False):
+    return Storyline(
+        name="主线",
+        lines=[StoryLineDef(id="line_main", title="主线", locked=locked_line)],
+        nodes=[
+            StoryNode(id="arrive", title="抵达", line="line_main"),
+            StoryNode(
+                id="open",
+                title="开门",
+                line="line_main",
+                prereq=["arrive"],
+                locked=locked_node,
+            ),
+        ],
+    )
+
+
+def test_locked_node_ids_collects_nodes_and_lines():
+    storyline = _locked_storyline(locked_node=True)
+    assert locked_node_ids(storyline) == {"open"}
+    locked_line = _locked_storyline(locked_line=True)
+    assert locked_node_ids(locked_line) == {"arrive", "open"}
+
+
+def test_unchanged_locked_content_is_not_an_edit():
+    previous = _locked_storyline(locked_line=True)
+    updated = previous.model_copy(deep=True)
+    updated.nodes.append(StoryNode(id="after", title="之后", prereq=["open"]))
+    assert protected_edits(previous, updated) == []
+
+
+def test_editing_a_locked_node_is_refused():
+    previous = _locked_storyline(locked_node=True)
+    updated = previous.model_copy(deep=True)
+    updated.nodes[1].title = "换一个说法"
+    errors = protected_edits(previous, updated)
+    assert any("'open'" in error and "锁定" in error for error in errors)
+
+
+def test_deleting_a_node_in_a_locked_line_is_refused():
+    previous = _locked_storyline(locked_line=True)
+    updated = previous.model_copy(deep=True)
+    updated.nodes = [updated.nodes[0]]
+    errors = protected_edits(previous, updated)
+    assert any("'open'" in error for error in errors)
+
+
+def test_deleting_or_editing_a_locked_line_is_refused():
+    previous = _locked_storyline(locked_line=True)
+    removed = previous.model_copy(deep=True)
+    removed.lines = []
+    assert any("'line_main'" in error for error in protected_edits(previous, removed))
+    renamed = previous.model_copy(deep=True)
+    renamed.lines[0].title = "改名"
+    assert any("'line_main'" in error for error in protected_edits(previous, renamed))
+
+
+def test_moving_an_unlocked_node_into_a_locked_line_is_refused():
+    previous = Storyline(
+        name="主线",
+        lines=[
+            StoryLineDef(id="line_main", title="主线", locked=True),
+            StoryLineDef(id="line_free", title="草稿", kind="side"),
+        ],
+        nodes=[
+            StoryNode(id="arrive", title="抵达", line="line_main"),
+            StoryNode(
+                id="draft",
+                title="草稿",
+                kind="side",
+                line="line_free",
+                requires_event="ev_marquee",
+            ),
+        ],
+    )
+    updated = previous.model_copy(deep=True)
+    updated.nodes[1].line = "line_main"
+    errors = protected_edits(previous, updated)
+    assert any("'draft'" in error and "line_main" in error for error in errors)
+
+
+def test_locking_never_changes_progression():
+    free = _locked_storyline()
+    locked = _locked_storyline(locked_line=True)
+    state = _state()
+    world = _world()
+    assert storyline_status(locked, state, world).entered == storyline_status(
+        free, state, world
+    ).entered

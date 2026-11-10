@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.db.scenario_store import ScenarioStore
+from app.engines import story_engine
 from app.models.knowledge import (
     LAYER_LABELS,
     LAYER_ORDER,
@@ -234,6 +235,11 @@ def put_play_config(scenario_id: str, body: PlayConfigUpdate):
             config,
             store.list_knowledge(scenario_id),
             event_ids=_scenario_event_ids(scenario_id),
+        )
+        # Settled (locked) content is read-only for the API as well, so a buggy
+        # or scripted client cannot rewrite a story that is already running.
+        errors = errors + story_engine.protected_edits(
+            current.storyline, config.storyline
         )
         if errors:
             raise HTTPException(status_code=400, detail=errors)

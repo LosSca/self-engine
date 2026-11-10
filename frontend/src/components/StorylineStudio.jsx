@@ -352,10 +352,15 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                 </div>
                 {lines.length === 0 && <p className="text-xs text-white/30">尚无分组；节点仍可正常推进。</p>}
                 {lines.map((line, index) => (
-                  <div key={index} className="rounded-xl border border-white/10 p-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div key={index} className={line.locked ? 'rounded-xl border border-amber-400/30 bg-amber-400/[0.03] p-3 grid grid-cols-1 sm:grid-cols-4 gap-3' : 'rounded-xl border border-white/10 p-3 grid grid-cols-1 sm:grid-cols-4 gap-3'}>
+                    {line.locked ? (
+                      <div className="sm:col-span-4 text-[11px] text-amber-200/70">
+                        🔒 这条剧情线已锁定：{line.title}（{line.id}）· {nodes.filter((node) => node.line === line.id).length} 节点。解锁后才能修改。
+                      </div>
+                    ) : null}
                     <label>
                       <FieldLabel>名称</FieldLabel>
-                      <input className={inputClass} value={line.title} onChange={(e) => updateStoryline({ lines: lines.map((row, i) => i === index ? { ...row, title: e.target.value } : row) })} />
+                      <input className={inputClass} value={line.title} disabled={line.locked} onChange={(e) => updateStoryline({ lines: lines.map((row, i) => i === index ? { ...row, title: e.target.value } : row) })} />
                     </label>
                     <label>
                       <FieldLabel>类型</FieldLabel>
@@ -376,19 +381,25 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                     </label>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-white/50 pt-5">
                       <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={line.enabled !== false} onChange={(e) => updateStoryline({ lines: lines.map((row, i) => i === index ? { ...row, enabled: e.target.checked } : row) })} />
+                        <input type="checkbox" checked={line.enabled !== false} disabled={line.locked} onChange={(e) => updateStoryline({ lines: lines.map((row, i) => i === index ? { ...row, enabled: e.target.checked } : row) })} />
                         启用
                       </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={line.locked === true} onChange={(e) => updateStoryline({ lines: lines.map((row, i) => i === index ? { ...row, locked: e.target.checked } : row) })} />
+                        锁定
+                      </label>
                       <span className="text-white/25">{line.id} · {nodes.filter((node) => node.line === line.id).length} 节点</span>
-                      <button
-                        onClick={() => updateStoryline({
-                          lines: lines.filter((_, i) => i !== index),
-                          nodes: nodes.map((node) => node.line === line.id ? { ...node, line: '' } : node),
-                        })}
-                        className="ml-auto text-[10px] text-white/30 hover:text-rose-400"
-                      >
-                        移除
-                      </button>
+                      {line.locked ? null : (
+                        <button
+                          onClick={() => updateStoryline({
+                            lines: lines.filter((_, i) => i !== index),
+                            nodes: nodes.map((node) => node.line === line.id ? { ...node, line: '' } : node),
+                          })}
+                          className="ml-auto text-[10px] text-white/30 hover:text-rose-400"
+                        >
+                          移除
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -408,8 +419,11 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                   </button>
                 </div>
 
-                {nodes.map((node, index) => (
-                  <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3">
+                {nodes.map((node, index) => {
+                  const nodeLine = lines.find((row) => row.id === node.line)
+                  const nodeLocked = node.locked === true || (nodeLine ? nodeLine.locked === true : false)
+                  return (
+                  <div key={index} className={nodeLocked ? 'rounded-xl border border-amber-400/30 bg-amber-400/[0.03] p-3 flex flex-col gap-3' : 'rounded-xl border border-white/10 p-3 flex flex-col gap-3'}>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-bold text-white">{node.title || node.id || '未命名节点'}</span>
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-white/10 text-white/50">{node.id || '—'}</span>
@@ -419,17 +433,24 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                       {node.conditions.length > 0 && <span className="text-[10px] text-white/30">条件 {node.conditions.length}</span>}
                       {node.knowledge_ids.length > 0 && <span className="text-[10px] text-white/30">知识 {node.knowledge_ids.length}</span>}
                       {node.requires_event_pack && <span className="text-[10px] text-amber-300/70">事件包 {node.requires_event_pack}</span>}
+                      {nodeLocked && <span className="text-[10px] text-amber-300/80">🔒 已锁定</span>}
                       <div className="flex-1" />
-                      <button onClick={() => setEditing(index)} className="text-[10px] text-white/50 hover:text-white uppercase tracking-[0.15em]">编辑</button>
-                      <button
-                        onClick={() => {
-                          updateStoryline({ nodes: nodes.filter((_, i) => i !== index) })
-                          setEditing(null)
-                        }}
-                        className="text-[10px] text-white/30 hover:text-rose-400 uppercase tracking-[0.15em]"
-                      >
-                        移除
-                      </button>
+                      <label className="flex items-center gap-1 text-[10px] text-white/40">
+                        <input type="checkbox" checked={node.locked === true} onChange={(e) => updateNode(index, { locked: e.target.checked })} />
+                        锁定
+                      </label>
+                      <button onClick={() => setEditing(index)} disabled={nodeLocked} className="text-[10px] text-white/50 hover:text-white uppercase tracking-[0.15em] disabled:opacity-30">编辑</button>
+                      {nodeLocked ? null : (
+                        <button
+                          onClick={() => {
+                            updateStoryline({ nodes: nodes.filter((_, i) => i !== index) })
+                            setEditing(null)
+                          }}
+                          className="text-[10px] text-white/30 hover:text-rose-400 uppercase tracking-[0.15em]"
+                        >
+                          移除
+                        </button>
+                      )}
                     </div>
                     {node.summary && <p className="text-xs text-white/40">{node.summary}</p>}
                     {editing === index && (
@@ -520,7 +541,8 @@ export default function StorylineStudio({ open, onClose, scenarioId, scenarioTit
                       </div>
                     )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
 
               <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.03] p-4 flex flex-col gap-3">

@@ -755,6 +755,7 @@ def get_campaign_story(campaign_id: str):
                         "line": node.line,
                         "summary": node.summary,
                         "requires_event_pack": node.requires_event_pack,
+                        "locked": node.locked,
                     }
                     for node in config.storyline.nodes
                 ],

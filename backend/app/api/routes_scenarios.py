@@ -13,6 +13,7 @@ from app.models.knowledge import (
     KnowledgeEntryCreate,
     PlayConfig,
     Storyline,
+    default_storyline,
 )
 from app.services.knowledge_service import validate_play_config
 from app.engines.llm_router import LLMRouter, LLMConfig
@@ -149,6 +150,18 @@ def create_scenario(req: CreateScenarioRequest):
             opening_mode=req.opening_mode,
             ai_opening_directive=req.ai_opening_directive,
             world_type=req.world_type,
+        )
+        # New scenarios open in storyline mode with a two-node starter graph, so
+        # an author can press play immediately and still sees where to hook the
+        # first real branch. It is ordinary editable data, not a special case.
+        store.set_play_config(
+            scenario.id,
+            PlayConfig(
+                scenario_id=scenario.id,
+                mode="storyline",
+                storyline=default_storyline(req.language),
+                max_depth=9,
+            ),
         )
     return scenario.__dict__
 

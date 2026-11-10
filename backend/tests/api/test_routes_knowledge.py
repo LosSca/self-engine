@@ -100,19 +100,48 @@ def test_invalid_knowledge_payload_is_rejected(client, scenario_id):
 
 
 # --------------------------------------------------------------- play config
-def test_play_config_defaults_to_free(client, scenario_id):
+def test_new_scenarios_start_with_a_valid_starter_storyline(client, scenario_id):
     res = client.get(f"/api/v1/scenarios/{scenario_id}/play-config")
     assert res.status_code == 200
-    assert res.json()["mode"] == "free"
-    assert res.json()["max_depth"] == 9
+    config = res.json()
+    assert config["mode"] == "storyline"
+    assert config["max_depth"] == 9
+    story = config["storyline"]
+    assert [line["id"] for line in story["lines"]] == ["trunk"]
+    assert [node["id"] for node in story["nodes"]] == ["opening", "first_turn"]
+    # The template is ordinary editable data: it validates and nothing is locked.
+    assert story["lines"][0]["locked"] is False
+    assert all(node["locked"] is False for node in story["nodes"])
+    res = client.post(f"/api/v1/scenarios/{scenario_id}/knowledge/validate")
+    assert res.json() == {"valid": True, "errors": []}
 
 
-def test_storyline_mode_requires_nodes(client, scenario_id):
+def test_starter_storyline_can_be_replaced_with_free_mode(client, scenario_id):
     res = client.put(
-        f"/api/v1/scenarios/{scenario_id}/play-config", json={"mode": "storyline"}
+        f"/api/v1/scenarios/{scenario_id}/play-config", json={"mode": "free"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["mode"] == "free"
+
+
+def test_storyline_mode_rejects_an_empty_storyline(client, scenario_id):
+    res = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config",
+        json={"mode": "storyline", "storyline": {"name": "空", "nodes": []}},
     )
     assert res.status_code == 400
     assert "故事线模式至少需要一个故事线节点" in res.json()["detail"]
+
+
+def test_storyline_mode_without_a_storyline_keeps_the_starter(client, scenario_id):
+    res = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config", json={"mode": "storyline"}
+    )
+    assert res.status_code == 200, res.text
+    assert [node["id"] for node in res.json()["storyline"]["nodes"]] == [
+        "opening",
+        "first_turn",
+    ]
 
 
 def test_storyline_config_roundtrip(client, scenario_id):
@@ -464,3 +493,59 @@ def test_context_preview_arms_packs_from_the_campaign_state(client, scenario_id)
     unknown = client.get(url, params={"campaign_id": "ghost"})
     assert unknown.status_code == 200
     assert unknown.json()["armed_packs"] == []
+
+
+def test_locked_storyline_content_cannot_be_rewritten(client, scenario_id):
+    body = {
+        "mode": "storyline",
+        "storyline": {
+            "name": "主线",
+            "lines": [{"id": "line_main", "title": "主线"}],
+            "nodes": [
+                {"id": "arrive", "title": "抵达", "line": "line_main"},
+                {"id": "open", "title": "开门", "line": "line_main", "prereq": ["arrive"]},
+            ],
+        },
+    }
+    assert (
+        client.put(f"/api/v1/scenarios/{scenario_id}/play-config", json=body).status_code
+        == 200
+    )
+
+    unlocked = {
+        "mode": "storyline",
+        "storyline": {
+            **body["storyline"],
+            "lines": [{"id": "line_main", "title": "主线", "locked": True}],
+            "nodes": [
+                {"id": "arrive", "title": "抵达", "line": "line_main", "locked": True},
+                {"id": "open", "title": "开门", "line": "line_main", "prereq": ["arrive"]},
+            ],
+        },
+    }
+    res = client.put(f"/api/v1/scenarios/{scenario_id}/play-config", json=unlocked)
+    assert res.status_code == 200, res.text
+
+    tampered = {
+        "mode": "storyline",
+        "storyline": {
+            **body["storyline"],
+            "lines": [{"id": "line_main", "title": "主线", "locked": True}],
+            "nodes": [
+                {"id": "arrive", "title": "换了标题", "line": "line_main", "locked": True},
+                {"id": "open", "title": "开门", "line": "line_main", "prereq": ["arrive"]},
+            ],
+        },
+    }
+    res = client.put(f"/api/v1/scenarios/{scenario_id}/play-config", json=tampered)
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert any("arrive" in error and "锁定" in error for error in detail)
+
+    # An unrelated field may still change while the settled content stays put.
+    res = client.put(
+        f"/api/v1/scenarios/{scenario_id}/play-config",
+        json={"mode": "storyline", "max_depth": 3},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["max_depth"] == 3

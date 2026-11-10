@@ -91,7 +91,11 @@ def test_export_scenario(client):
     assert "exported_at" in data
     # Newer exports carry authored knowledge and the play mode, even when empty.
     assert data["knowledge"] == []
-    assert data["play_config"]["mode"] == "free"
+    assert data["play_config"]["mode"] == "storyline"
+    assert [node["id"] for node in data["play_config"]["storyline"]["nodes"]] == [
+        "opening",
+        "first_turn",
+    ]
 
 
 def test_export_scenario_not_found(client):

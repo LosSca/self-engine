@@ -192,6 +192,61 @@ def _pack_fired(pack_id: str, storyline: Storyline, state: GameState) -> bool:
     return any(event_id in state.fired_events for event_id in pack.event_ids)
 
 
+def locked_node_ids(storyline: Storyline) -> set:
+    """Ids of nodes an editor may not change: locked themselves or in a locked line."""
+    locked_lines = {line.id for line in storyline.lines if line.locked}
+    return {
+        node.id
+        for node in storyline.nodes
+        if node.locked or (node.line and node.line in locked_lines)
+    }
+
+
+def protected_edits(previous: Storyline, updated: Storyline) -> List[str]:
+    """Readable errors describing edits to settled (locked) content.
+
+    Locking is an editorial guard, not a gameplay rule: it never changes what a
+    campaign does, it only stops later edits from silently rewriting a story that
+    is already running. Everything here compares two documents, so it stays a
+    pure function and is cheap to test.
+    """
+    errors: List[str] = []
+    if previous is None:
+        return errors
+
+    locked_lines = {line.id for line in previous.lines if line.locked}
+    locked_nodes = locked_node_ids(previous)
+    new_lines = {line.id: line for line in updated.lines}
+    new_nodes = {node.id: node for node in updated.nodes}
+
+    for line in previous.lines:
+        if not line.locked:
+            continue
+        if line.id not in new_lines:
+            errors.append(f"剧情线 '{line.id}' 已锁定，不能删除")
+        elif new_lines[line.id] != line:
+            errors.append(f"剧情线 '{line.id}' 已锁定，不能修改")
+
+    for node in previous.nodes:
+        if node.id not in locked_nodes:
+            continue
+        if node.id not in new_nodes:
+            errors.append(f"故事线节点 '{node.id}' 已锁定，不能删除")
+        elif new_nodes[node.id] != node:
+            errors.append(f"故事线节点 '{node.id}' 已锁定，不能修改")
+
+    # Existing nodes may not be smuggled into a locked line after the fact.
+    for node in previous.nodes:
+        if node.id in locked_nodes or node.id not in new_nodes:
+            continue
+        target = new_nodes[node.id]
+        if target.line and target.line in locked_lines and target.line != node.line:
+            errors.append(
+                f"故事线节点 '{node.id}' 不能加入已锁定的剧情线 '{target.line}'"
+            )
+    return errors
+
+
 def storyline_status(
     storyline: Storyline,
     state: GameState,

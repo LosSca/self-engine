@@ -109,6 +109,10 @@ class StoryLineDef(_Strict):
     #: A disabled line keeps its nodes configured but the engine never enters
     #: them. This is an editorial switch, never a hint sent to the model.
     enabled: bool = True
+    #: A locked line is settled content: the editors refuse to change it and the
+    #: API rejects writes to its nodes. It keeps running, so locking protects a
+    #: finished story instead of freezing the game.
+    locked: bool = False
 
 
 class StoryNode(_Strict):
@@ -135,6 +139,64 @@ class StoryNode(_Strict):
     requires_event_pack: Optional[str] = None
     #: Knowledge entries that become relevant once the node is entered.
     knowledge_ids: List[str] = Field(default_factory=list)
+    #: A locked node is settled content: editors and the API refuse to change or
+    #: delete it. Progression is unaffected - a locked node is still entered by
+    #: the same deterministic rules as any other node.
+    locked: bool = False
+
+
+def default_storyline(language: str = "中文") -> Storyline:
+    """A minimal starter storyline: one settled opening and a free-form tail.
+
+    New scenarios used to start with an empty storyline, so authors had to
+    invent the whole graph (and the trunk-root rule) before they could press
+    "play". The template is deliberately tiny and unlocked: it validates, it can
+    be deleted, and it only demonstrates the shape every scene shares - a first
+    node that is entered at once, and a second node the author is expected to
+    replace with real conditions.
+    """
+    zh = str(language or "").lower().startswith("zh") or language == "中文"
+    return Storyline(
+        name="开场主线" if zh else "Opening",
+        description=(
+            "开场即进入；把「主要冲突」改写为你的世界真正的第一个分支。"
+            if zh
+            else "Entered immediately; rewrite the second node with your first real branch."
+        ),
+        lines=[
+            StoryLineDef(
+                id="trunk",
+                title="主线" if zh else "Trunk",
+                kind="main",
+                description="主干线：按顺序推进。" if zh else "The trunk advances in order.",
+            )
+        ],
+        nodes=[
+            StoryNode(
+                id="opening",
+                title="开场" if zh else "Opening",
+                kind="main",
+                line="trunk",
+                summary=(
+                    "故事开始，玩家已在初始地点。"
+                    if zh
+                    else "The story starts here; the player is at the start location."
+                ),
+            ),
+            StoryNode(
+                id="first_turn",
+                title="第一个转折" if zh else "First turn",
+                kind="main",
+                line="trunk",
+                prereq=["opening"],
+                summary=(
+                    "给这个节点加上条件、需要触发的事件或事件包，它才会真正推进。"
+                    if zh
+                    else "Add conditions, a required event or an event pack for this node to advance."
+                ),
+            ),
+        ],
+    )
 
 
 class StoryEventPack(_Strict):
