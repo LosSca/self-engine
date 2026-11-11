@@ -86,5 +86,6 @@ backend/tests/api/test_settings_content_policy.py     5 项：设置接口往返
 
 ## 未做
 
-- 流式 SSE 消费端目前只在收到 `⚠⚠REFUSAL⚠⚠` 时记录，没有自动改发本地（非流式路径已自动）。
+- ~~流式 SSE 消费端目前只在收到 `⚠⚠REFUSAL⚠⚠` 时记录~~ —— 已补：`NarratorEngine._stream_with_policy_retry()`
+  收到哨兵帧后不再转发，改为整条重发到本地路由；本地也拒绝时该回合没有叙事文本（宁可空，也不把 "REFUSAL" 字样塞进叙事框）。
 - 没有任何「本地不可用时禁止发送敏感内容」的硬闸门；需求只要求路由，没有要求审计。

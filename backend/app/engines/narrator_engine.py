@@ -4,6 +4,7 @@ import re
 from enum import Enum
 from typing import AsyncIterator
 
+from app.engines.llm_router import REFUSAL_SIGNAL
 from app.utils.json_parsing import parse_json_dict
 
 logger = logging.getLogger(__name__)
@@ -559,7 +560,7 @@ class NarratorEngine:
 
         full_response = ""
         try:
-            async for chunk in self._llm.stream(messages=messages, orchestrator=True, reasoning=False):
+            async for chunk in self._stream_with_policy_retry(messages):
                 full_response += chunk
                 yield chunk
         except Exception:
@@ -618,7 +619,7 @@ class NarratorEngine:
 
         full_response = ""
         try:
-            async for chunk in self._llm.stream(messages=messages, orchestrator=True, reasoning=False):
+            async for chunk in self._stream_with_policy_retry(messages):
                 full_response += chunk
                 yield chunk
         except Exception:
@@ -631,6 +632,52 @@ class NarratorEngine:
             len(full_response),
             full_response[:500] + ("..." if len(full_response) > 500 else ""),
         )
+
+    async def _stream_with_policy_retry(self, messages: list[dict]) -> AsyncIterator[str]:
+        """Stream a narrative, re-sending one refusal to the local model.
+
+        The router cannot silently re-route a streamed answer: frames are
+        already on the wire by the time a refusal is visible.  So it flags
+        the stream with REFUSAL_SIGNAL and the decision belongs here.
+        The signal frame is never forwarded -- the caller sees either the
+        local retry's text or nothing at all -- because a literal
+        "REFUSAL" banner in the narration box is worse than a short,
+        honest fallback.
+        """
+        refused = False
+        async for chunk in self._llm.stream(messages=messages, orchestrator=True, reasoning=False):
+            if chunk == REFUSAL_SIGNAL:
+                refused = True
+                continue
+            yield chunk
+
+        if not refused:
+            return
+
+        config = getattr(self._llm, "config", None)
+        if not getattr(config, "local_fallback_on_refusal", False):
+            logger.warning("narrator: upstream refusal, local retry disabled")
+            return
+
+        if not self._llm.local_route_available():
+            logger.warning("narrator: upstream refusal, local model unreachable")
+            return
+
+        logger.warning("narrator: upstream refusal - retrying the turn on the local model")
+        try:
+            retry = self._llm.with_content_policy({"content_policy": "nsfw"})
+        except Exception:
+            logger.exception("narrator: could not build the local route")
+            return
+
+        try:
+            async for chunk in retry.stream(messages=messages, orchestrator=True, reasoning=False):
+                if chunk == REFUSAL_SIGNAL:
+                    logger.warning("narrator: local model refused as well - giving up on the turn")
+                    continue
+                yield chunk
+        except Exception:
+            logger.exception("narrator: local retry failed; turn has no narration")
 
     _SINGLE_CALL_FORMAT = (
         "\n\n=== RESPONSE FORMAT ===\n"
