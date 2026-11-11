@@ -1,10 +1,12 @@
 from __future__ import annotations
+import hashlib
 import json
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from types import SimpleNamespace
 
 from app.db.event_store import EventStore, Event, EventType
 from app.utils.json_parsing import parse_json_dict
@@ -90,6 +92,48 @@ class MemoryCrystal:
     # Every source must be witnessed; an empty audience is narrator/player-only.
     witnessed_by: list[str] = field(default_factory=list)
     audience_resolved: bool = field(default=False, repr=False, compare=False)
+    # ── provenance (why this memory exists and how far to trust it) ──
+    #: Stable id derived from the sources, so a rebuilt crystal keeps its id.
+    memory_id: str = ""
+    #: Where the content came from: "events" (crystallised), "consolidation"
+    #: (merged from lower tiers) or "" for crystals that predate this field.
+    source: str = ""
+    #: Who the memory belongs to: "player" for the shared record, or an NPC
+    #: name for a record only that character witnessed.
+    observer: str = "player"
+    #: 0..1 confidence in the content. Consolidated tiers are less certain
+    #: about wording, never about whose memory it is.
+    confidence: float = 1.0
+    #: 0..1 salience, from the scorer's rank when available.
+    importance: float = 0.0
+    #: "player" (shared) or "npc" (witnessed-only).
+    visibility: str = "player"
+    #: Proper names the content mentions, for scene-scoped retrieval.
+    related_entities: list[str] = field(default_factory=list)
+    #: "candidate" until the tier is settled, "committed" afterwards.
+    status: str = "committed"
+    #: Witness names as written, before case folding. `witnessed_by` is
+    #: normalised for comparison, so the display label needs its own copy.
+    witnessed_names: list[str] = field(default_factory=list, repr=False, compare=False)
+
+    def provenance_label(self) -> str:
+        """Short "(source; whose; trust)" label, or "" for legacy crystals."""
+        if not self.source and not self.witnessed_by:
+            return ""
+        if self.witnessed_by:
+            names = list(self.witnessed_names or self.witnessed_by)[:3]
+            whose = "witnessed by " + ", ".join(names)
+        elif self.observer == "player":
+            whose = "player account"
+        else:
+            whose = f"observed by {self.observer}"
+        if self.confidence < 0.5:
+            trust = "uncertain - a lead, not a fact"
+        elif self.confidence < 0.85:
+            trust = "paraphrased"
+        else:
+            trust = "verbatim record"
+        return f"({self.source or 'record'}; {whose}; {trust})"
 
 
 def _normalized_witnesses(names) -> set[str]:
@@ -101,6 +145,75 @@ def _normalized_witnesses(names) -> set[str]:
 def _common_witnesses(sources) -> list[str]:
     audiences = [_normalized_witnesses(source.witnessed_by) for source in sources]
     return sorted(set.intersection(*audiences)) if audiences else []
+
+
+def _display_witnesses(sources, normalized: list[str]) -> list[str]:
+    """Spell the shared audience the way its witnesses were first written."""
+    wanted = set(normalized)
+    names: list[str] = []
+    for source in sources or ():
+        for name in getattr(source, "witnessed_by", None) or ():
+            if not isinstance(name, str):
+                continue
+            cleaned = name.strip()
+            if cleaned and cleaned.casefold() in wanted and cleaned not in names:
+                names.append(cleaned)
+    return names
+
+
+def _matched_witnesses(sources) -> list[str]:
+    """Witnesses as written, when every source agrees on at least one."""
+    shared = _common_witnesses(sources)
+    return _display_witnesses(sources, shared) if shared else []
+
+
+#: Confidence per tier. Consolidation paraphrases more aggressively the
+#: higher it goes, so a merged memory is worth less as literal wording —
+#: never less as a record of who witnessed it.
+TIER_CONFIDENCE = {
+    "SHORT": 1.0,
+    "MEDIUM": 0.9,
+    "LONG": 0.8,
+    "MEMORY": 0.7,
+}
+
+
+def derive_memory_id(campaign_id: str, tier: str, source_start: str | None, source_end: str | None) -> str:
+    """Idempotent crystal id: the same span in the same campaign is one memory."""
+    raw = "|".join([campaign_id or "", tier or "", source_start or "", source_end or ""])
+    return "mem_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _related_entities(sources) -> list[str]:
+    """Proper names the source events mention, most frequent first."""
+    counts: dict[str, int] = {}
+    for source in sources or ():
+        for name in getattr(source, "entities", None) or ():
+            if not isinstance(name, str) or not name.strip():
+                continue
+            counts[name.strip()] = counts.get(name.strip(), 0) + 1
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+    return [name for name, _ in ordered[:12]]
+
+
+def stamp_provenance(crystal: MemoryCrystal, *, sources=(), source: str = "events", importance: float = 0.0) -> MemoryCrystal:
+    """Fill the provenance fields a caller knows, leaving the rest intact."""
+    tier_name = crystal.tier.value if isinstance(crystal.tier, CrystalTier) else str(crystal.tier)
+    crystal.memory_id = crystal.memory_id or derive_memory_id(
+        crystal.campaign_id, tier_name, crystal.source_start_created_at, crystal.source_end_created_at,
+    )
+    crystal.source = crystal.source or source
+    crystal.observer = crystal.observer or "player"
+    crystal.visibility = "npc" if crystal.witnessed_by else "player"
+    if not crystal.witnessed_names:
+        crystal.witnessed_names = _display_witnesses(sources, crystal.witnessed_by or [])
+    crystal.confidence = TIER_CONFIDENCE.get(tier_name, 1.0)
+    if importance:
+        crystal.importance = round(float(importance), 4)
+    if not crystal.related_entities:
+        crystal.related_entities = _related_entities(sources)
+    crystal.status = "committed"
+    return crystal
 
 
 # ── Compression prompts per tier ────────────────────────────────────
@@ -261,8 +374,19 @@ class MemoryEngine:
             return ""
         parts = ["=== PRMNT_MEM ==="]
         for c in memory_crystals:
-            parts.append(c.ai_content)
+            parts.append(self._with_provenance(c))
         return "\n".join(parts)
+
+    @staticmethod
+    def _with_provenance(crystal: MemoryCrystal) -> str:
+        """Prefix crystal text with one line of provenance.
+
+        Provenance travels with the text so the narrator can distinguish a
+        verbatim record from a twice-consolidated paraphrase. Crystals written
+        before provenance existed render exactly as before.
+        """
+        label = crystal.provenance_label()
+        return f"{label}\n{crystal.ai_content}" if label else crystal.ai_content
 
     def _unconsumed_crystals(self, campaign_id: str, tier: CrystalTier) -> list[MemoryCrystal]:
         """Return crystals of a given tier that haven't been consolidated yet."""
@@ -311,6 +435,7 @@ class MemoryEngine:
             witnessed_by=witnessed_by,
             audience_resolved=True,
         )
+        stamp_provenance(crystal, sources=events, source="events")
         self._crystals.setdefault(campaign_id, []).append(crystal)
         self._persist_crystal(campaign_id, crystal)
         self._last_crystal_cursor[campaign_id] = events[-1].created_at
@@ -375,6 +500,31 @@ class MemoryEngine:
             witnessed_by=_common_witnesses(to_merge),
             audience_resolved=True,
         )
+        stamp_provenance(
+            crystal,
+            sources=to_merge,
+            source="consolidation",
+            importance=max((c.importance for c in to_merge), default=0.0),
+        )
+        # A merge inherits its sources' provenance: the same observers, the
+        # lowest confidence among them, and the union of mentioned names.
+        crystal.witnessed_names = _display_witnesses(
+            [SimpleNamespace(witnessed_by=c.witnessed_names or c.witnessed_by) for c in to_merge],
+            crystal.witnessed_by or [],
+        )
+        crystal.observer = to_merge[0].observer or "player"
+        # A merge is never as trustworthy as its own tier default: it is a
+        # paraphrase of paraphrases, so step down one notch as well.
+        inherited_confidence = min(
+            [TIER_CONFIDENCE.get(crystal.tier.value, 1.0)] + [c.confidence for c in to_merge if c.confidence]
+        )
+        crystal.confidence = round(max(0.0, inherited_confidence - 0.02), 4)
+        inherited = []
+        for source_crystal in to_merge:
+            for name in source_crystal.related_entities:
+                if name not in inherited:
+                    inherited.append(name)
+        crystal.related_entities = inherited[:12]
         self._crystals.setdefault(campaign_id, []).append(crystal)
         self._persist_crystal(campaign_id, crystal)
 
@@ -896,6 +1046,7 @@ class MemoryEngine:
                         and sources[-1].created_at == crystal.source_end_created_at
                     ):
                         crystal.witnessed_by = _common_witnesses(sources)
+                        crystal.witnessed_names = _display_witnesses(sources, crystal.witnessed_by)
             for crystal in legacy:
                 crystal.audience_resolved = True
         except Exception:
@@ -965,6 +1116,16 @@ class MemoryEngine:
                     # cursor instead of jumping to this event's persist time.
                     "source_start_created_at": crystal.source_start_created_at,
                     "source_end_created_at": crystal.source_end_created_at,
+                    # Provenance: why this memory exists, who it belongs to and
+                    # how far to trust the wording.
+                    "memory_id": crystal.memory_id,
+                    "source": crystal.source,
+                    "observer": crystal.observer,
+                    "confidence": crystal.confidence,
+                    "importance": crystal.importance,
+                    "visibility": crystal.visibility,
+                    "related_entities": list(crystal.related_entities or []),
+                    "status": crystal.status,
                 },
                 narrative_time_delta=0,
                 location="memory",

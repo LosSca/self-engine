@@ -455,7 +455,12 @@ class GameSession:
         because consumed is only updated in-memory during consolidation).
         The cursor tracks the last SHORT crystal's timestamp for uncrystallized events.
         """
-        from app.engines.memory_engine import MemoryCrystal, CrystalTier
+        from app.engines.memory_engine import (
+            TIER_CONFIDENCE,
+            CrystalTier,
+            MemoryCrystal,
+            derive_memory_id,
+        )
         crystal_events = self._event_store.get_by_type(
             self.campaign_id, EventType.MEMORY_CRYSTAL,
         )
@@ -485,7 +490,26 @@ class GameSession:
                     # legacy crystals that predate this field.
                     source_end_created_at=ev.payload.get("source_end_created_at") or ev.created_at,
                     witnessed_by=witnesses,
+                    # Legacy crystals predate provenance; rebuild them with a
+                    # derived id and the tier's default confidence rather than
+                    # guessing a source that was never recorded.
+                    memory_id=ev.payload.get("memory_id", ""),
+                    source=ev.payload.get("source", ""),
+                    observer=ev.payload.get("observer", "player"),
+                    confidence=float(ev.payload.get("confidence") or 0.0),
+                    importance=float(ev.payload.get("importance") or 0.0),
+                    visibility=ev.payload.get("visibility", "player"),
+                    related_entities=list(ev.payload.get("related_entities") or []),
+                    status=ev.payload.get("status", "committed"),
                 ))
+                if not crystals[-1].memory_id:
+                    crystals[-1].memory_id = derive_memory_id(
+                        self.campaign_id, tier.value,
+                        crystals[-1].source_start_created_at,
+                        crystals[-1].source_end_created_at,
+                    )
+                if not crystals[-1].confidence:
+                    crystals[-1].confidence = TIER_CONFIDENCE.get(tier.value, 1.0)
             except Exception:
                 continue
 
