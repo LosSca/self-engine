@@ -113,6 +113,7 @@ const REPEATS = [
 
 const TABS = [
   ['map', '世界地图'],
+  ['author', '剧本生成'],
   ['items', '物品'],
   ['doors', '门'],
   ['entities', '实体'],

@@ -10,6 +10,7 @@
   <a href="#核心特性">核心特性</a> &middot;
   <a href="#架构">架构</a> &middot;
   <a href="#api-概览">API</a> &middot;
+  <a href="#测试与质量">测试</a> &middot;
   <a href="#已知限制">已知限制</a>
 </p>
 
@@ -34,19 +35,32 @@
 
 - 当前版本：**0.5.0**（`backend/app/main.py` 与 `frontend/package.json` 一致）
 - 运行时：Python + FastAPI 后端、React + Vite 前端、SQLite 存储
-- 语言：界面与内容均为中文优先；叙事语言跟随场景配置
+- 语言：界面与内容中文优先；**叙事语言跟随世界文档的 `language` 字段**，未声明时为英文
+- 规模：135 个路由，其中 `/api/v1` 引擎链路 80 个，其余为旧聊天链路（24）、情景（14）、角色（7）与全局设置
 - 范围：以规则链路 `/api/v1` 为准；`/api/game` 旧聊天链路仍在维护，用于未绑定世界的冒险
+- 模型：**不配置任何密钥也能完整游玩**——确定性叙事器按世界语言产出文本
+
+### 一句话能做的事
+
+| 你想要的 | 怎么做 | 需要模型吗 |
+|----------|--------|-----------|
+| 一句话生成世界、知识、主线 | 世界工坊「剧本生成」页签，或 `POST /api/v1/scenarios/author` | 需要 |
+| 借用已有作品的世界与角色 | 世界工坊「作品穿越」页签，六部内置作品，也可让模型补写 | 内置作品不需要 |
+| 从零手做一套世界 | 世界工坊十个页签：地图 / 剧本生成 / 物品 / 门 / 实体 / 事件 / 任务 / 行动 / 调试 / 作品穿越 | 不需要 |
+| 换一个起步世界 | `GET /api/v1/world-presets`：奇幻村庄、轨道站、雾镇、荒野营地 | 不需要 |
+| 让模型写得更好 | 设置面板选供应商与预设；上游拒绝时可自动改走本地模型 | 需要 |
 
 ### 代码地图
 
 | 位置 | 内容 |
 |------|------|
 | `backend/app/engines/` | 规则与引擎层：行动目录、规则判定、事件与效果、任务、剧情、战斗、记忆、NPC 心智 |
-| `backend/app/services/` | 编排层：`action_service` 是唯一写入口，另有文本解析、知识、叙事、世界编辑、AI 生成 |
-| `backend/app/api/` | 五个路由模块（规则 / 知识 / 旧链路 / 情景 / 角色） |
+| `backend/app/services/` | 编排层：`action_service` 是唯一写入口，另有文本解析、知识、叙事、世界编辑、AI 生成、作品库 |
+| `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 四个 SQLite 存储，各自的 `SCHEMA_VERSION` 与迁移 |
+| `backend/tests/` | pytest 1451 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、各工坊、面板与浮层 |
-| `docs/` | 阶段设计、审阅矩阵与风险登记 |
+| `docs/` | 阶段设计、审阅矩阵、风险登记与交付审查（`docs/delivery_review.md`） |
 
 ---
 
@@ -57,7 +71,7 @@
 ```
 浏览器 (React 19 + Vite)
   ├─ GameCanvas ────── 剧情流 / 文字输入 / 选项按钮 / 地图点击 / 背包
-  ├─ WorldStudio ───── 地点·物品·门·实体·事件·任务·自定义行动·地图·调试
+  ├─ WorldStudio ───── 地图·剧本生成·物品·门·实体·事件·任务·行动·调试·作品穿越
   ├─ KnowledgeStudio ─ 知识·上下文模式·剧情线·模型预设
   └─ StorylineStudio / ScenarioBuilder / SetupWizard / SettingsPanel ...
         │  REST (axios)
@@ -65,9 +79,11 @@
 FastAPI (backend/app/main.py)
   ├─ /api/v1   …… 规则链路（确定性）      routes_engine.py
   ├─ /api/v1   …… 知识·预设·AI 生成       routes_knowledge.py
+  ├─ /api/v1   …… 作品库·世界穿越·角色挑选 routes_works.py
   ├─ /api/game …… 旧聊天链路（流式 SSE）  routes_game.py
   ├─ /api/scenarios …… 情景与战役         routes_scenarios.py
   └─ /api       …… 角色卡与外观           routes_characters.py
+  └─ /api       …… 全局设置·健康检查       main.py
         │
         ▼
 ActionService.execute            唯一的状态写入口 (services/action_service.py)
@@ -88,12 +104,14 @@ SQLite（路径均可用环境变量覆盖）
         └─(可选) Neo4j 知识图谱镜像 —— ENGINE_GRAPH_MIRROR=1 且配置密码时启用
 ```
 
-**关键不变量**（见 `docs/review-overview.md`）：
+**关键不变量**（见 `docs/review-overview.md` 与 `docs/delivery_review.md`）：
 
 - 模型不写状态；叙事失败不回滚回合。
 - 条件、效果、后续事件都是校验过的数据，没有脚本或 `eval`。
 - 事件、任务奖励、剧情推进在同一回合内按固定点收敛，同一事件每回合最多尝试一次。
 - 地图点击、结构化按钮与自然语言共用同一个 `ActionRequest` 管线。
+- 同一 `request_id` 重放返回同一份结果，不重复扣物品、不重复发奖励。
+- 叙事、图谱镜像、摘要的失败只记录，不撤销已提交的回合。
 
 ---
 
@@ -169,8 +187,9 @@ return handler(kind, state, world, effect)
 
 ### 世界与地图编辑
 
-- `WorldStudio` 可编辑地点（区域 + 网格坐标）、物品、门（锁与钥匙）、实体、事件、任务、
-  自定义行动，并提供事件校验与模拟、执行树、状态诊断、快照回滚与存档导入导出。
+- `WorldStudio` 有十个页签：地图、剧本生成、物品、门、实体、事件、任务、行动、调试、作品穿越。
+  每次保存都跑完整世界校验；不通过的编辑不会落库。调试页提供事件校验与模拟、执行树、
+  状态诊断、快照回滚与存档导入导出。
 - 地图是地理视觉画布：地形分区、道路、地点标记、门锁标记，支持缩放/拖拽与坐标写回；
   `move` 可接受经 BFS 校验的路线逐段移动。
 - 内置世界模板（`frontend/src/data/worldTemplates.js`）：**轨道站事故**、**雾镇档案**、
@@ -188,6 +207,60 @@ return handler(kind, state, world, effect)
 
 生成接口统一走已配置模型或指定预设；未配置模型返回 **503**，非法 JSON/引用返回 **502**。
 
+### 一句话生成剧本：世界 + 知识 + 主线
+
+`POST /api/v1/scenarios/author`（`backend/app/services/scenario_author.py`）用**一次模型调用**返回三件套，
+但**逐件独立校验**：世界过 `validate_references`，知识逐条过 `KnowledgeEntryCreate`，
+剧情线过 `validate_storyline`。哪件不合法就进 `warnings` 而不是整单失败——一份能玩的世界
+不该因为其中一条知识少写了标题就整个作废；三件全废才返回 502。
+
+`save=false` 是**试运行**：只校验、不落盘，用于在作者确认前预览模型会给出什么。
+落盘时世界走 `world_service.save_world`，剧情线必须经 `get_play_config → 改 .storyline → set_play_config`
+写回（直接覆盖会重置 mode 与模型预设）。**它从不写权威游戏状态**——只创建配置。
+
+### 作品穿越：借一个世界的骨架
+
+`backend/app/services/work_catalogue.py` 内置六部作品档案（西游记、福尔摩斯、三体、流浪地球、
+哈利·波特、指环王），每部带梗概、语气、地点（含地点注释）、开场提示与 2–4 个可选角色。
+`POST /api/v1/works/enter` 会按档案生成一个**链式连通**的世界骨架（相邻地点双向出口），
+把角色作为起点 NPC 写入，并记到战役的角色选择上。
+
+这是**策展优先**设计而不是联网搜索：档案是确定性的、可测试的，模型只在内置作品未命中时才补写
+（`allow_model=false` 时直接 404，不花模型调用）。选角色是「换一个视角看这个世界」，
+不是绕过规则——进入后的每一步仍然走同一个规则链路。
+
+### 任务：定义可编辑，进度由事实推进
+
+任务有目标、前置任务、接受条件、失败条件与奖励。`GET|POST|PATCH /api/v1/worlds/{w}/quests`
+到目标与奖励级（`.../objectives/{id}`、`.../rewards/{id}`）都可编辑，每次编辑都跑完整世界校验，
+**不通过的编辑不会落盘**。奖励没有 id，用效果种类当路径 id（同一任务同一效果种类只有一条）。
+
+推进目标的是 `quest_progress` **效果**，不是任何一段文本。调试时的手动推进
+（`POST /campaigns/{c}/quests/{q}/objectives/{o}/progress`）走的仍是 `ActionService` 的提交路径：
+幂等、版本 CAS、单事务、领域事件齐全，只是在判定环节跳过规则。它受 `ENGINE_DEBUG_TOOLS` 保护，
+关闭时返回 403。
+
+### 叙事诊断：模型到底看到了什么
+
+每回合的 `narrative.diagnostics` 记录**只读旁路**信息，不进入提示词、不影响提交：
+
+- 路由：`provider` / `model` / `temperature` / `max_tokens` / `timeout` / `language` / `content_policy`
+- 上下文：`blocks[]`（id、层、标题、160 字符摘要）与 `fact_counts`（按来源计数）
+- 结局：`skipped`（未调用模型）或实际生效的策略；超时、异常、空文本、被拒**都带着这份记录**
+
+失败时最需要诊断，所以 `narrative.failed` 事件也带 `diagnostics`。前端调试台「叙事与上下文」页签
+把它读成卡片，「行动记录」页签列出该战役每个 request_id 的 `applied/rejected/duplicate`。
+
+### 内容策略与本地回退
+
+`content_policy` 有 `standard` / `nsfw` 两档（`POST /api/settings` 可改）。有两种路径：
+
+- **主动**：直接选 `nsfw`，整条请求走本地模型（`nsfw_provider` / `nsfw_model`）。
+- **被动**：上游返回拒绝时，路由器不把拒绝文本当正常输出转发，而是带 `⚠⚠REFUSAL⚠⚠` 哨兵返回；
+  叙事层发现哨兵后整条重发到本地模型一次。本地也拒绝则本回合没有叙事，**状态照常提交**。
+
+流式路径同样处理：`stream()` 累积后判定，命中就不再逐帧转发——否则玩家会看到半句拒绝文本。
+
 ### 模型路由
 
 `backend/app/engines/llm_router.py` 支持多个供应商，可在设置面板或模型预设中切换：
@@ -199,6 +272,31 @@ return handler(kind, state, world, effect)
 预设为 SillyTavern 风格子集：`top_p` / `top_k` / `min_p`、重复/存在/频率惩罚、`seed`、
 停止词、上下文窗口、预设系统提示；叙事/intent/dialogue/summary 四个角色可按场景覆盖。
 
+### 叙事语言
+
+`WorldDefinition.language`（`"zh"` / `"en"`，留空视为英文）决定**描述语言**，规则引擎从不读它。
+起步世界自动写入，AI 生成的世界按提示词语言写入。三处都遵守它：
+
+1. 确定性叙事器（`TemplateNarrator`）的句子与连接符；
+2. 效果描述（拾取/失去/移动/开门/关门/标记）；
+3. 交给模型时的 `language` 选项（场景预设已指定则预设优先）。
+
+没有这一层时，中文世界会得到 `You arrive at 林间小路.` 这种句子——地点名是中文，句子是英文。
+
+### 叙事不会带控制标记
+
+旧聊天链路曾靠解析模型输出里的 `[ITEM_ADD:name|category|source]` 改库存。那条路现在默认不写状态
+（`LEGACY_APPLY_ITEM_TAGS=0`），但标记能出现在引擎散文里本身就是风险：任何一处放宽的正则都会
+把它变成副作用。`strip_prose_tags()` 因此在两条叙事路径上都把这类标记剥掉。
+
+### 编辑器与调试台
+
+- **世界工坊**（九个页签）：地图、剧本生成、物品、门、实体、事件、任务、行动、调试、作品穿越——
+  每次保存都跑完整世界校验；事件可校验、可模拟（模拟不改真实状态）；调试页有状态差异与快照回滚。
+- **调试台**（三个页签）：调用追踪（旧链路的 trace）、叙事与上下文（新的 diagnostics）、行动记录（request 列表与单条详情）。
+- 所有能改状态的调试能力都受 `ENGINE_DEBUG_TOOLS` 限制，生产环境默认关闭并返回 403。
+
+---
 
 ## 快速开始
 
@@ -207,6 +305,9 @@ return handler(kind, state, world, effect)
 - **Python 3.10+**、**Node.js 18+**
 - 可选：**Docker**（只为 Neo4j 知识图谱镜像准备，没有也能完整游玩）
 - 可选：一个模型 API key，或本机跑一个 OpenAI 兼容推理服务
+
+最短路径（不需要任何配置）：装好依赖 → `python launch.py` → 首页选一个情景 → 绑定起步世界 → 直接玩。
+叙事由 `TemplateNarrator` 按已结算效果生成，引擎的判定、事件、任务、存档全部照常工作。
 
 ### 安装
 
@@ -250,6 +351,16 @@ NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=
 
+# 内容策略：standard = 正常；nsfw = 整条请求走本地模型
+# 也可在设置面板切换，或 POST /api/settings
+# CONTENT_POLICY=standard
+# NSFW_MODEL=
+# 上游拒绝时自动改走本地模型重试一次
+# LOCAL_FALLBACK_ON_REFUSAL=1
+
+# 调试/作者工具：手动推进任务目标、回滚快照、修复状态都受它控制
+# ENGINE_DEBUG_TOOLS=0
+
 # 可选：设置后 /api 全部需要 Bearer 令牌（或 X-API-Token），健康检查除外
 # API_TOKEN=
 ```
@@ -290,7 +401,18 @@ start.bat           # Windows
 `InventoryPanel`、`JournalPanel`、`NpcInspector`、`MemoryInspector`、`CharacterProfilePanel`、
 `StoryProgressPanel`、`PlotGeneratorPanel`、`TimeskipModal`、`SettingsPanel`、`DevtoolsPanel`。
 
-典型流程：新建情景 → 设定问答（SetupWizard）→ 绑定世界 → 行动（文字或按钮）→ 看结算与叙事 → 调试面板核对状态、事件执行树与快照。
+典型流程：新建情景 → 设定问答（SetupWizard）→ 绑定世界 → 行动（文字或按钮）→
+看结算与叙事 → 调试台核对叙事上下文、行动记录与状态差异。
+
+几条值得知道的界面行为：
+
+- **行动预演**：提交前可先看判定结果（`POST /campaigns/{id}/actions/preview`），预演不写状态。
+- **自然语言**：文字行动由 `text_action_service` 解析成同一个 `ActionRequest`，解析失败回到按钮，
+  不会「模型理解成什么就是什么」。
+- **调试台三个页签**：调用追踪（旧链路 trace）、叙事与上下文（`narrative.diagnostics`）、
+  行动记录（request 列表与单条详情含状态差异）。
+- **内容策略**在设置面板切换；切到「NSFW（本地）」后叙事整条走本地模型。
+
 前端状态用 Zustand（`frontend/src/store.js`），接口在 `frontend/src/api.js`；页面按路由懒加载。
 
 ---
@@ -309,7 +431,14 @@ shujia/
 ├── README.md / CHANGELOG.md
 ├── docs/
 │   ├── review-overview.md       # 运行时结构、13 项验收矩阵、风险登记
+│   ├── delivery_review.md       # 七条需求与 14 条验收的交付审查
 │   ├── stage6_effect_registry.md # 效果注册表与相关测试记录
+│   ├── stage8_content_policy.md  # 内容策略与本地回退
+│   ├── stage9_world_crossover.md # 作品穿越
+│   ├── stage10_scenario_author.md# 一句话生成剧本
+│   ├── stage11_quest_editor.md   # 任务编辑与手动推进
+│   ├── stage13_narrative_debug_console.md # 叙事诊断与调试台
+│   ├── stage14_world_language.md # 叙事语言跟随世界
 │   ├── local_model_ninfer.md    # 本地模型接入
 │   ├── postgres-migration.md    # SQLite → PostgreSQL 一次性导出
 │   └── ...                      # 各阶段设计与审计记录
@@ -319,11 +448,11 @@ shujia/
 │   │   ├── main.py              # FastAPI 入口、中间件、/api/settings
 │   │   ├── config.py            # pydantic-settings，读取 .env
 │   │   ├── api/                 # routes_engine / routes_knowledge / routes_game
-│   │   │                        # routes_scenarios / routes_characters
+│   │   │                        # routes_scenarios / routes_characters / routes_works
 │   │   ├── db/                  # scenario_store / game_state_store / event_store / trace_store
 │   │   ├── engines/             # 规则与引擎层
-│   │   ├── models/              # game.py / knowledge.py（世界、状态、条件）
-│   │   ├── services/            # 编排与服务层
+│   │   ├── models/              # game.py / knowledge.py / work.py（世界、状态、条件、作品档案）
+│   │   ├── services/            # 编排与服务层（action_service 是唯一写入口）
 │   │   └── utils/
 │   ├── scripts/sqlite_to_postgres.py
 │   └── tests/                   # pytest，asyncio_mode = auto
@@ -353,45 +482,68 @@ shujia/
 
 ## API 概览
 
-全部接口挂在 `/api` 下；设置 `API_TOKEN` 后除 `/api/health` 外都要求
-`Authorization: Bearer <token>` 或 `X-API-Token`。五个路由模块共注册 111 个路由，
-下面只列主干，完整清单见 <http://127.0.0.1:8000/docs>。
+全部接口挂在 `/api` 下，共 **135 个路由**；设置 `API_TOKEN` 后除健康检查外都要求
+`Authorization: Bearer <token>` 或 `X-API-Token`。完整清单与请求/响应结构见 <http://127.0.0.1:8000/docs>，
+`/api/v1` 的每条路由都有类型化响应模型，并由 `backend/tests/api/test_routes_contracts.py` 守住。
 
 ### 规则链路 `/api/v1`（确定性游玩）
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | GET | `/action-types` | 内置行动目录（16 个内置 + 世界声明的 `custom`） |
-| GET | `/actions` | 同上，兼容入口 |
 | POST | `/campaigns/{id}/world` | 为战役绑定世界 |
 | POST | `/campaigns/{id}/actions` | 提交结构化行动（唯一写入口） |
+| POST | `/campaigns/{id}/actions/preview` | 干运行：只看判定，不写状态 |
 | POST | `/campaigns/{id}/text-actions` | 自然语言行动，解析后走同一管线 |
 | POST | `/campaigns/{id}/combat` | 战斗回合 |
-| GET | `/campaigns/{id}/state` | 权威状态 |
-| GET | `/campaigns/{id}/events` | 领域事件（可回放） |
+| GET | `/campaigns/{id}/state` | 权威状态（含 `version`） |
+| GET | `/campaigns/{id}/requests` | 该战役的请求记录（含 `applied/rejected/duplicate`） |
+| GET | `/actions/{request_id}` | 按幂等键查单条请求与结果 |
+| GET | `/campaigns/{id}/events` | 领域事件（可回放，支持 `after_version`） |
+| GET | `/campaigns/{id}/event-executions` | 事件执行记录 |
+| GET | `/campaigns/{id}/quest-progress` | 任务进度（读权威状态拼装） |
 | GET | `/campaigns/{id}/lane` | 时间线/调试视图 |
 | GET | `/campaigns/{id}/diagnostics` | 状态一致性诊断 |
 | GET | `/campaigns/{id}/snapshots` | 快照列表；`/{version}` 取单份 |
-| GET | `/campaigns/{id}/state-diff` | 状态差异 |
+| GET | `/campaigns/{id}/state-diff` | 状态差异（版本前后对比） |
 | POST | `/campaigns/{id}/rollback` | 回滚到快照（受 `ENGINE_DEBUG_TOOLS` 限制） |
 | POST | `/campaigns/{id}/repair` | 修复（同上） |
+| POST | `/campaigns/{id}/quests/{q}/objectives/{o}/progress` | 调试用目标推进（同上，走真实提交路径） |
 | GET/POST | `/campaigns/{id}/export`、`/import` | 存档导出/导入（覆盖需 `reset=true`） |
-| GET | `/actions/{request_id}` | 按幂等键查请求记录 |
-| GET/POST | `/worlds`、`/worlds/{id}` | 世界读取与写入 |
+| GET/POST | `/worlds`、`/worlds/{id}` | 世界读取、新建与整份写入 |
+| GET | `/world-presets` | 起步世界预设（奇幻/轨道站/雾镇/荒野） |
 | POST | `/worlds/validate` | 校验引用与条件/效果 |
 | POST | `/worlds/generate` | AI 生成世界 |
-| POST | `/worlds/{wid}/events/{eid}/simulate` | 事件模拟 |
-| PUT/DELETE | `/worlds/{wid}/{locations,items,doors,entities,events,quests}/{item_id}` | 资源级编辑 |
+| POST | `/scenarios/author` | 一句话生成世界 + 知识 + 剧情线（`save=false` 为试运行） |
+| GET/POST | `/worlds/{w}/quests` | 任务列表与新建 |
+| GET/PATCH/PUT/DELETE | `/worlds/{w}/quests/{q}` | 单个任务的读取与整体替换 |
+| PUT/DELETE | `/worlds/{w}/quests/{q}/objectives/{oid}` | 任务目标 |
+| PUT/DELETE | `/worlds/{w}/quests/{q}/rewards/{kind}` | 任务奖励（路径 id 是效果种类） |
+| POST | `/worlds/{w}/events/{e}/validate`、`/simulate` | 事件校验与只读模拟 |
+| PUT/DELETE | `/worlds/{w}/{locations,items,doors,entities,events,quests}/{item_id}` | 资源级编辑 |
+| PUT/DELETE | `/worlds/{w}/custom-actions/{action_id}` | 世界声明的自定义行动 |
 | GET | `/worlds/{id}/map` | 地图数据 |
 | GET | `/local-model` | 本地模型可用性 |
+
+### 作品库 `/api/v1`（世界穿越）
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/works` | 内置作品档案列表 |
+| GET | `/works/{title}` | 单个作品（仅内置，未命中 404） |
+| POST | `/works/resolve` | 解析作品；`allow_model=false` 时未命中直接 404 |
+| POST | `/works/enter` | 生成世界骨架并记录角色选择 |
 
 ### 知识、预设与生成 `/api/v1`
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | GET | `/knowledge/layers` | 知识分层 |
+| GET/POST | `/scenarios/{id}/knowledge` | 知识条目列表与新建 |
+| POST | `/scenarios/{id}/knowledge/validate` | 校验知识条目 |
 | PATCH / DELETE | `/knowledge/{entry_id}` | 编辑/删除知识条目（含 `audience_npc_ids`） |
-| GET/PUT | `/scenarios/{id}/play-config` | 游玩配置（模式、预算、预设） |
+| GET | `/scenarios/{id}/context/preview` | 预览一次行动会注入的上下文 |
+| GET/PUT | `/scenarios/{id}/play-config` | 游玩配置（模式、预算、预设、剧情线） |
 | POST | `/scenarios/{id}/generate/knowledge` | AI 生成知识草稿 |
 | POST | `/scenarios/{id}/generate/storyline` | AI 生成故事线草稿 |
 | GET/POST | `/model-presets` | 模型预设列表与新建 |
@@ -430,8 +582,21 @@ shujia/
 角色卡与外观在 `/api` 下：`/api/scenarios/{id}/characters`、`/api/characters/{id}`
 （含 `/looks` 外观变体与 `/api/characters/upload` 上传）、`/api/campaigns/{cid}/character`。
 
-全局设置：`GET/POST /api/settings`（供应商、模型、temperature、max_tokens）、
+全局设置：`GET/POST /api/settings`（供应商、模型、采样参数、`content_policy`、本地回退开关）、
 `GET /api/health`、`GET /api/health/neo4j`。
+
+### 一次行动请求的形态
+
+```json
+{"campaign_id": "camp-1", "request_id": "6f1c…", "action": "open",
+ "target_id": "warehouse_door", "params": {}}
+```
+
+返回 `ActionResult`：`status`（`applied` / `rejected` / `duplicate` / `conflict`）、`ok`、`code`、
+`message`、`state_version`、`effects_applied`、`events_fired`、`quests`、`story_nodes_entered`、
+`narrative`（含 `diagnostics`）与提交后的 `state`。
+
+`request_id` 是幂等键：同一个 id 重放返回 `duplicate` 与**同一份**结果，不会重复扣物品或发奖励。
 
 ---
 
@@ -439,16 +604,27 @@ shujia/
 
 ```bash
 # 后端全量（pytest，asyncio_mode = auto）
-backend/.venv/Scripts/python.exe -m pytest backend/tests -q
+TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' \
+  backend/.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider backend/tests
+
+# 只跑验收走查（1–14 条，不需要任何密钥）
+TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' \
+  backend/.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
+  backend/tests/api/test_acceptance_story.py
 
 # 前端构建（含 hook 顺序检查）
 npm --prefix frontend run build
 ```
 
-- 最近一次全量为 **1304 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），
-  见 `docs/stage6_effect_registry.md`；CHANGELOG 0.5.0 里的 1238 passed 是发版当时的统计口径，两者不矛盾。
+> `TEMP` / `TMP` 必须设置：pytest 默认临时目录在部分 Windows 环境下不可写；
+> `-p no:cacheprovider` 同理，避免 `.pytest_cache` 写入失败。
+
+- 最近一次全量：**1451 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 130 秒。
+- 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 项），覆盖 m00001 第九节的 14 条：
+  建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/叙事失败不回滚/
+  非法事件配置/模拟只读/中文世界读中文。
 - 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层，
-  包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放等。
+  包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放、内容策略与本地回退等。
 - 前端构建会先执行 `frontend/scripts/check-hook-order.mjs`，防止 `useCallback` 未声明就进依赖数组；
   页面全部懒加载，发布包由 `vite build` 产出到 `frontend/dist`。
 - 数据层：`scenarios.db` / `game_state.db` / `events.db` / `traces.db`，
@@ -458,7 +634,8 @@ npm --prefix frontend run build
 
 ## 已知限制
 
-取自 `docs/review-overview.md` 的 13 项验收矩阵中标记为"部分"的缺口，以及风险登记：
+取自 `docs/review-overview.md` 的 13 项验收矩阵中标记为"部分"的缺口、风险登记，以及
+`docs/delivery_review.md` 里如实记录的未验证面：
 
 | 系统 | 状态 | 主要缺口 |
 |------|------|----------|
@@ -467,12 +644,23 @@ npm --prefix frontend run build
 | 行动与交互 | 部分 | 无内置潜行、键盘方向移动、自由寻路 |
 | 物品与属性 | 部分 | 无独立商店/交易面板；装备只加攻防 |
 | LLM 调度 | 部分 | 判定由确定性规则承担，没有 LLM judge；超时/重试未按功能独立配置 |
-| 记忆与历史 | 部分 | 规则链路没有自动 LLM 摘要（仅确定性滚动摘要）；无统一 NPC 知识库视图 |
+| 记忆与历史 | 部分 | 规则链路只有确定性滚动摘要 + 可选 summary 预设；无统一 NPC 知识库视图 |
 | 模型配置 | 部分 | 预设的角色覆盖仍以叙事为主 |
+| 前端 | **未验证** | 当前环境的 `vite build` 不可用（预览钩子导致配置模块解析失败），前端只做过逐文件语法检查，**没有在浏览器里被自动化验证过** |
+| 旧聊天链路 | 待日落 | `LEGACY_APPLY_ITEM_TAGS` 默认 0，已不写权威状态，但代码与前端标记剥离逻辑仍在 |
+| 叙事语言 | 部分 | 只支持中/英二选一；世界工坊未暴露 `language` 字段 |
+| 作品库 | 部分 | 内置六部作品，未做联网检索；模型补写依赖已配置模型 |
 
 风险登记里的三条 P1：服务默认无鉴权（本机使用，需要共享时设 `API_TOKEN`）、
 SQLite 单写者（高并发回以版本冲突重试）、知识为词法相似度而非语义召回。
 此外 `/api/game` 旧聊天链路仍保留独立的流式副作用路径，未绑定世界的冒险行为与绑定世界不同。
+
+### 环境相关的两处坑
+
+1. **`backend/requirements.txt` 在本机不可直接求解**：固定的 `litellm==1.43.0` 在 PyPI 上不存在，
+   `graphiti-core>=0.5.0` 又要求 `pydantic>=2.8.2` 而 `requirements.txt` 钉的是 `2.8.0`。
+   上游未动；本地开发时去掉这两个钉版本即可（安装脚本按原文件执行，遇到同样问题需手动处理）。
+2. **pytest 必须设 `TEMP`/`TMP` 并关掉缓存提供者**，见上一节的命令。
 
 ---
 
@@ -498,6 +686,15 @@ SQLite 单写者（高并发回以版本冲突重试）、知识为词法相似�
 欢迎提交 Issue 与 Pull Request。请遵守一条原则：**这是一个引擎，不是一个游戏。**
 不要在引擎里硬编码某个世界的专有逻辑（题材关键词、等级体系、具体角色名）；
 所有世界相关的信息都应该来自作者定义的世界文档、知识条目与语气指令。
+
+改动前请确认不破坏下面四条不变量（`backend/tests/api/test_acceptance_story.py` 会检查）：
+
+1. **模型不写状态**。任何状态变化都必须经 `ActionService` 提交，模型输出只进叙事。
+2. **失败不回滚**。叙事、图谱镜像、摘要失败都只记录，已提交的回合保持有效。
+3. **幂等**。同一个 `request_id` 重放只返回同一份结果。
+4. **无脚本**。条件、效果、后续事件都是校验过的数据；不要引入 `eval` 或任意代码执行。
+
+提交前跑一遍全量后端测试；改前端请至少跑 `npm --prefix frontend run build`。
 
 ---
 

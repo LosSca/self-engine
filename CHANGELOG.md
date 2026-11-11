@@ -2,6 +2,40 @@
 
 本文件记录面向作者的可见变更。格式参考 Keep a Changelog，版本号遵循语义化版本。
 
+## [Unreleased]
+
+从「模型驱动的聊天」推进到「规则驱动的引擎 + 模型叙事」：新增一句话生成剧本、作品穿越、
+任务编辑与推进、叙事诊断、内容策略与本地回退，并让叙事语言跟随世界。
+
+### Added
+
+- **一句话生成剧本**：`POST /api/v1/scenarios/author`，一次调用返回世界 + 知识 + 剧情线，三件各自独立校验，
+  失败件进 `warnings`；`save=false` 为试运行。世界工坊新增「剧本生成」页签。
+- **作品穿越**：`GET/POST /api/v1/works*`，内置六部作品档案（西游记、福尔摩斯、三体、流浪地球、哈利·波特、指环王），
+  按档案生成链式连通的世界骨架并可挑选角色；`allow_model=false` 时不花模型调用。
+- **任务编辑**：`GET|POST|PATCH /api/v1/worlds/{w}/quests` 到目标与奖励级，每次编辑跑完整世界校验；
+  `POST /campaigns/{c}/quests/{q}/objectives/{o}/progress` 在调试开关下按真实提交路径推进目标。
+- **叙事诊断**：`narrative.diagnostics` 记录 provider/model/采样参数/策略/上下文块与 `fact_counts`，
+  失败出口同样携带；`GET /campaigns/{id}/requests` 列出请求记录。调试台扩展为三个页签。
+- **内容策略与本地回退**：`content_policy`（standard/nsfw），上游拒绝时以哨兵标记且不转发拒绝文本，
+  叙事层整条改走本地模型重试一次；流式路径同样处理。
+- **叙事语言**：`WorldDefinition.language` 决定描述语言，确定性叙事器、效果描述与模型调用三处都遵守。
+- **起步世界预设**：奇幻村庄、轨道站、雾镇、荒野营地，中英双语，`GET /api/v1/world-presets`。
+
+### Changed
+
+- `/api/v1` 全部路由改为类型化响应模型，并新增契约测试 `tests/api/test_routes_contracts.py`。
+- 世界工坊十个页签，调试台三个页签；README 重写（路由清单、行动结果形态、编辑器与调试入口）。
+
+### Fixed
+
+- 中文世界的叙事不再输出英文句子（地点名中文、句子英文）。
+- 引擎回合的散文不再携带 `[ITEM_ADD:...]` 一类控制标记。
+
+### Tests
+
+- 后端：1451 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`。
+- 前端：本环境无法 `vite build`，只做了逐文件语法检查；这一项仍未验证。
 ## [0.5.0] - 2026-11-01
 
 作者工具升级：地图编辑器重做、更多世界预设、SillyTavern 风格模型预设，以及知识/剧情线/世界三处 AI 一键生成。
