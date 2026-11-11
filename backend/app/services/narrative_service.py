@@ -34,6 +34,30 @@ _CONTROL_TAG = re.compile(
 #: purpose: a scenario has a handful of presets at most.
 _PRESET_ROUTERS: dict = {}
 
+#: How long to wait before re-asking a refused turn on the local model. Short:
+#: the local server either answers fast or it is not running at all.
+REFUSAL_RETRY_DELAY = 0.0
+
+#: Text an upstream returns when it declines. Through a proxy a refusal usually
+#: arrives as an error message rather than as prose, so the message itself is
+#: matched too. Kept deliberately narrow: matching ordinary narration here would
+#: move healthy turns onto the local model.
+REFUSAL_ERR_RE = re.compile(
+    r"content[_ ]?policy|content[_ ]?filter|refus|"
+    r"flagged|safety|responsible_ai|moderation|"
+    r"cannot (?:assist|help|comply|provide|fulfill|continue)|"
+    r"violat(?:e|es|ion)|"
+    r"拒绝|内容安全|违规",
+    re.IGNORECASE,
+)
+
+
+def _last_error_text(error: Optional[BaseException]) -> str:
+    """Describe an exception for refusal classification."""
+    if error is None:
+        return ""
+    return f"{type(error).__name__}: {error}"
+
 
 def preset_router(options: Optional[dict]):
     """A router for an authored preset, or None when it should use the default.
@@ -602,17 +626,53 @@ class LLMNarrator:
             stop = options.get("stop")
             if isinstance(stop, list) and stop:
                 sampler_kwargs["stop"] = [str(item) for item in stop if str(item)]
+        policy = (options or {}).get("content_policy")
+        policy = policy.strip().lower() if isinstance(policy, str) else ""
+        if not policy:
+            # The scene can override, but otherwise the router-level switch is
+            # the one setting the player actually toggled.
+            router_config = getattr(self.router, "config", None)
+            default_policy = getattr(router_config, "content_policy", "")
+            policy = (
+                default_policy.strip().lower()
+                if isinstance(default_policy, str)
+                else ""
+            )
         try:
             router = preset_router(options) or self.router
-            text = await asyncio.wait_for(
-                router.complete(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    **sampler_kwargs,
-                ),
-                timeout=self.timeout,
-            )
+            delay = REFUSAL_RETRY_DELAY
+            # `text` must exist even when every attempt raises; the bare except
+            # below turns that into a failed NarrativeResult, never a NameError.
+            text = None
+            for attempt in (1, 2):
+                try:
+                    text = await asyncio.wait_for(
+                        router.complete(
+                            messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            content_policy=policy or None,
+                            **sampler_kwargs,
+                        ),
+                        timeout=self.timeout,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    # Two full timeouts on a turn would double the wait the player
+                    # already sat through for nothing.
+                    raise
+                except Exception as error:
+                    # Through a proxy an upstream refusal often surfaces as an
+                    # error, not as prose, so the reroute must catch both. One
+                    # retry only: an unreachable local server is not a refusal.
+                    if attempt == 1 and (
+                        REFUSAL_ERR_RE.search(_last_error_text(error))
+                        or policy == "nsfw"
+                    ):
+                        await asyncio.sleep(delay)
+                        policy = "nsfw"
+                        continue
+                    raise
         except asyncio.TimeoutError:
             return NarrativeResult(
                 status="failed", error=f"narrator timed out after {self.timeout}s"

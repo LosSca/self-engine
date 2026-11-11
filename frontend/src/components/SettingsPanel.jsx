@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useGameStore } from '../store'
-import { updateCampaignSettings } from '../api'
+import { updateCampaignSettings, updateContentPolicy } from '../api'
 import { Settings, X } from 'lucide-react'
 import { THEME_LABELS, applyTheme, currentTheme } from '../lib/theme'
 
@@ -16,13 +16,15 @@ const PROVIDERS = [
 export default function SettingsPanel({ onClose }) {
   const {
     llmProvider, llmModel, temperature, maxTokens, combatEnabled,
-    activeCampaignId, updateSettings,
+    nsfwMode, refusalFallback, activeCampaignId, updateSettings,
   } = useGameStore()
   const [provider, setProvider] = useState(llmProvider)
   const [model, setModel] = useState(llmModel)
   const [temp, setTemp] = useState(temperature)
   const [tokens, setTokens] = useState(maxTokens)
   const [combat, setCombat] = useState(combatEnabled)
+  const [nsfw, setNsfw] = useState(!!nsfwMode)
+  const [refusalFallbackOn, setRefusalFallbackOn] = useState(refusalFallback !== false)
   const [saved, setSaved] = useState(false)
   const [theme, setTheme] = useState(currentTheme())
   const [apiToken, setApiToken] = useState(
@@ -47,7 +49,16 @@ export default function SettingsPanel({ onClose }) {
       temperature: temp,
       maxTokens: tokens,
       combatEnabled: combat,
+      nsfwMode: nsfw,
+      refusalFallback: refusalFallbackOn,
     })
+    try {
+      // The switch has to reach the backend router: it decides where a narrated
+      // turn is sent, and which model picks it up after a refusal.
+      await updateContentPolicy({ nsfwMode: nsfw, refusalFallback: refusalFallbackOn })
+    } catch {
+      // Kept locally regardless; the backend keeps its previous policy.
+    }
     if (activeCampaignId) {
       try {
         await updateCampaignSettings(activeCampaignId, { combatEnabled: combat })
@@ -185,6 +196,42 @@ export default function SettingsPanel({ onClose }) {
               <span>标准</span>
               <span>扩展</span>
             </div>
+          </div>
+
+          {/* 内容策略 / NSFW 路由 */}
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
+              内容策略
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {[{ id: false, label: '标准' }, { id: true, label: 'NSFW（本地）' }].map((mode) => (
+                <button
+                  key={String(mode.id)}
+                  type="button"
+                  onClick={() => setNsfw(mode.id)}
+                  className={`px-3 py-2.5 rounded-lg border text-xs font-semibold tracking-wide transition-all ${
+                    nsfw === mode.id
+                      ? 'bg-white text-black border-white'
+                      : 'bg-white/[0.03] text-white/60 border-white/10 hover:border-white/30'
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 mt-3 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={refusalFallbackOn}
+                onChange={(e) => setRefusalFallbackOn(e.target.checked)}
+                className="accent-white"
+              />
+              上游拒绝时自动改走本地模型重试一次
+            </label>
+            <p className="text-[10px] text-white/40 leading-relaxed mt-2">
+              NSFW 模式把叙事请求直接发给本地模型（NInfer），内容不出本机；
+              本地不可用时会回落到当前服务商。
+            </p>
           </div>
 
           {/* Optional API token */}

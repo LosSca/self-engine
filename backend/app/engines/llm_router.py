@@ -4,9 +4,10 @@ import inspect
 import json
 import logging
 import os
+import re
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -325,6 +326,23 @@ class LLMProvider(str, Enum):
     # Local OpenAI-compatible server (NInfer). Not a cloud provider: requests are
     # posted verbatim to LOCAL_LLM_BASE_URL with the local bearer key.
     LOCAL = "local"
+    # Synthetic provider: never sent anywhere. It only labels the frame that tells
+    # a running stream "the upstream cut this off" (see \`refusal_signal\`), so a
+    # caller can route the same turn to another provider without a new enum.
+    REFUSAL = "refusal"
+
+
+#: The one-frame refusal signal. It travels through the same channel as text, so
+#: an existing stream consumer keeps working untouched; a consumer that wants the
+#: safety net just compares each frame against this constant.
+REFUSAL_SIGNAL = "\u26a0\u26a0REFUSAL\u26a0\u26a0"
+
+#: Accepted values for the router content policy. "standard" is the normal
+#: safety envelope; "nsfw" asks for the NSFW route (local model by default) and
+#: is also what the passive reroute switches to after an upstream refusal.
+POLICY_STANDARD = "standard"
+POLICY_NSFW = "nsfw"
+POLICY_CHOICES = (POLICY_STANDARD, POLICY_NSFW)
 
 
 def _reasoning_kwargs(provider: LLMProvider, reasoning: bool) -> dict:
@@ -404,6 +422,38 @@ _NO_SAMPLING_MODELS = (
     "claude-mythos-5",
     "gpt-5.6-sol",
 )
+
+
+# Sentences a model writes when its safety layer ends the turn instead of the
+# story. Matched case-insensitively and only when they are most of the answer: a
+# narrator may legitimately put "I can't help with that" in a character's mouth,
+# so a long paragraph that merely contains one of these is not a refusal.
+_REFUSAL_PATTERNS = (
+    r"i (?:can|can't|cannot|can not|could)['\u2019]?t? (?:help|assist) with (?:that|this|your request|the request)",
+    r"i['\u2019]?m (?:sorry|unable to|not able to)[^.]{0,60}",
+    r"i apologi[sz]e,? but",
+    r"as an ai(?: language model)?",
+    r"this request (?:violates|cannot be (?:fulfilled|processed|completed))",
+    r"^\s*sorry[,.!]?\s*$",
+    r"(?:很抱歉|抱歉)[,，]?\s*(?:我|本模型)?\s*(?:无法|不能|没有办法)",
+    r"作为(?:一个)?\s*(?:AI|人工智能|语言模型)",
+    r"我(?:无法|不能)(?:协助|帮助|提供|满足|继续)",
+)
+_REFUSAL_MAX_CHARS = 400
+
+
+def _looks_like_refusal(text: str) -> bool:
+    """True when an answer is a refusal rather than prose."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    if len(body) > _REFUSAL_MAX_CHARS:
+        # A real narration is longer than any of these openers; a refusal bot
+        # that pads to 2 KB is not this router's problem.
+        return False
+    lowered = body.lower()
+    return any(re.search(pattern, lowered, re.IGNORECASE | re.MULTILINE)
+               for pattern in _REFUSAL_PATTERNS)
 
 
 def _accepts_temperature(model: str) -> bool:
@@ -527,6 +577,22 @@ def _get_anthropic_client(base_url: str, api_key: str):
     return client
 
 
+def _as_provider(value, default: LLMProvider | None):
+    """Coerce a provider name (or any unknown value) to a real provider.
+
+    Accepts an LLMProvider, its string value, or None; anything else falls back
+    to default instead of raising later, at call time, in the middle of a turn.
+    """
+    if isinstance(value, LLMProvider):
+        return value
+    if value is None or value == "":
+        return default
+    try:
+        return LLMProvider(str(value).strip().lower())
+    except ValueError:
+        return default
+
+
 @dataclass
 class LLMConfig:
     primary_provider: LLMProvider = LLMProvider.DEEPSEEK
@@ -536,6 +602,27 @@ class LLMConfig:
     fallback_model: str | None = None
     temperature: float = 0.85
     max_tokens: int = 2000
+    # Content policy for a turn. "standard" is the historical behaviour. "nsfw"
+    # routes the turn to nsfw_provider (the machine-local server by default) so
+    # adult content never leaves the box and never depends on whether a cloud
+    # vendor is willing to answer it.
+    content_policy: str = "standard"
+    nsfw_provider: LLMProvider | None = None
+    nsfw_model: str | None = None
+    # When True, a turn whose primary hit the refusal signal is retried once on
+    # local_provider (the machine-local server). Off by default: an operator with
+    # no local model should not pay a second doomed call on every refusal.
+    local_fallback_on_refusal: bool = False
+    local_provider: LLMProvider = LLMProvider.LOCAL
+    local_model: str | None = None
+
+    def __post_init__(self) -> None:
+        # This object is edited live from /api/settings and built ad hoc by
+        # tests; an unknown name must not reach LLMProvider(...) at call time.
+        self.primary_provider = _as_provider(self.primary_provider, LLMProvider.DEEPSEEK)
+        self.fallback_provider = _as_provider(self.fallback_provider, None)
+        self.nsfw_provider = _as_provider(self.nsfw_provider, None)
+        self.local_provider = _as_provider(self.local_provider, LLMProvider.LOCAL)
 
     def get_context_window(self) -> int:
         """Return the context window size (tokens) for the orchestrator model."""
@@ -610,6 +697,57 @@ class LLMRouter:
                 )
             return _LOCAL_LLM_KEY
         return None
+
+    def refusal_signal(self, text: str) -> str | None:
+        """The signal frame for this text, or None when nothing was refused.
+
+        A stream cannot raise: the client is already reading frames. So when the
+        upstream stops on content policy, an empty completion, or a bare refusal
+        sentence, the router emits one sentinel frame instead. The turn itself is
+        not decided here - the caller decides whether to reroute it.
+        """
+        if not text or not text.strip():
+            return REFUSAL_SIGNAL
+        if _looks_like_refusal(text):
+            return REFUSAL_SIGNAL
+        return None
+
+    def local_route_available(self) -> bool:
+        """True when a local OpenAI-compatible server is configured and answers."""
+        try:
+            if not _LOCAL_LLM_URL or not _LOCAL_LLM_KEY:
+                return False
+            from app.services import narrator_factory
+
+            return bool(narrator_factory.local_llm_reachable())
+        except Exception:  # noqa: BLE001 - routing must never break a turn
+            return False
+
+    def with_content_policy(self, options: dict | None) -> "LLMRouter":
+        """The router this turn should run on.
+
+        An "nsfw" policy goes to the explicitly configured local model, or - when
+        the local server is up - to the local one, so the platform sits out of the
+        routing decision. Anything else keeps the current router.
+        """
+        policy = str((options or {}).get("content_policy") or "").strip().lower()
+        if policy != "nsfw":
+            return self
+        if self.config.nsfw_provider:
+            config = replace(self.config)
+            config.primary_provider = self.config.nsfw_provider
+            config.primary_model = self.config.nsfw_model or self._local_default_model()
+            return LLMRouter(config)
+        if self.local_route_available() and self.config.primary_provider != LLMProvider.LOCAL:
+            config = replace(self.config)
+            config.primary_provider = LLMProvider.LOCAL
+            config.primary_model = self.config.local_model or self._local_default_model()
+            return LLMRouter(config)
+        return self
+
+    @staticmethod
+    def _local_default_model() -> str:
+        return _LOCAL_LLM_MODEL or "local"
 
     @staticmethod
     def _sanitize_messages_for_anthropic(messages: list[dict]) -> list[dict]:
@@ -714,22 +852,25 @@ class LLMRouter:
     async def complete(self, messages: list[dict], **kwargs) -> str:
         caller = _get_caller()
         orchestrator = kwargs.pop("orchestrator", False)
-        model = self._build_model_string(
-            self.config.primary_provider, self._active_model(orchestrator)
-        )
-        max_tokens = kwargs.pop("max_tokens", self.config.max_tokens)
+        # A content policy moves this call to another provider (usually the local
+        # model); every step below must therefore use the routed provider.
+        policy = kwargs.pop("content_policy", None)
+        routed = self.with_content_policy({"content_policy": policy})
+        provider = routed.config.primary_provider
+        model = routed._build_model_string(provider, routed._active_model(orchestrator))
+        max_tokens = kwargs.pop("max_tokens", routed.config.max_tokens)
         reasoning = kwargs.pop("reasoning", True)
-        api_base = self._get_api_base(self.config.primary_provider)
+        api_base = routed._get_api_base(provider)
         call_kwargs = {**kwargs}
         # Authored sampler presets may contain fields a provider rejects
         # (top_k on OpenAI, repetition_penalty, ...). Let litellm drop the
         # unsupported ones instead of failing the whole narrated turn.
         call_kwargs.setdefault("drop_params", True)
-        call_kwargs.update(_reasoning_kwargs(self.config.primary_provider, reasoning))
-        if self.config.primary_provider == LLMProvider.ANTHROPIC:
+        call_kwargs.update(_reasoning_kwargs(provider, reasoning))
+        if provider == LLMProvider.ANTHROPIC:
             messages = self._sanitize_messages_for_anthropic(messages)
         messages = self._prepare_cached_messages(messages, call_kwargs)
-        if api_base and self.config.primary_provider == LLMProvider.ANTHROPIC:
+        if api_base and provider == LLMProvider.ANTHROPIC:
             messages, folded_cached = _fold_system_into_user(messages)
             if folded_cached:
                 call_kwargs["extra_headers"] = {
@@ -738,8 +879,8 @@ class LLMRouter:
                 }
         if api_base:
             call_kwargs["api_base"] = api_base
-            call_kwargs["api_key"] = self._get_api_key(self.config.primary_provider)
-        if (api_base and self.config.primary_provider == LLMProvider.ANTHROPIC
+            call_kwargs["api_key"] = routed._get_api_key(provider)
+        if (api_base and provider == LLMProvider.ANTHROPIC
                 and _has_cache_control(messages)):
             t0 = time.monotonic()
             resp = await self._complete_anthropic_sdk(
@@ -758,12 +899,38 @@ class LLMRouter:
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
-                **{**self._sampling_kwargs(model), **call_kwargs},
+                **{**self._sampling_kwargs(model, provider), **call_kwargs},
             )
             _log_call(caller, messages, max_tokens, response, time.monotonic() - t0, model=model)
-            return response.choices[0].message.content
-        except Exception:
+            text = response.choices[0].message.content
+            if (self.config.local_fallback_on_refusal
+                    and _looks_like_refusal(text or "")
+                    and self.local_route_available()):
+                # Passive nsfw routing, primary half: the upstream answered, but
+                # only to copy out. Retry the same turn once on the local model.
+                local = self.with_content_policy({"content_policy": "nsfw"})
+                if local is not self:
+                    logger.warning(
+                        "LLM refusal on %s [%s] - retrying on the local model",
+                        model, caller,
+                    )
+                    return await local.complete(messages, max_tokens=max_tokens,
+                                                reasoning=reasoning, **kwargs)
+            return text
+        except Exception as exc:
+            if routed is not self:
+                # A policy turn on a dead local server degrades to the primary
+                # instead of failing the turn outright (see with_content_policy).
+                logger.warning(
+                    "LLM policy route failed [%s] %s: %s - falling back to the primary provider",
+                    caller, type(exc).__name__, exc,
+                )
+                return await self.complete(messages, max_tokens=max_tokens,
+                                           reasoning=reasoning, **kwargs)
             if self.config.fallback_provider and self.config.fallback_model:
+                # Complete the interrupted turn on the configured fallback. An
+                # exception is not a refusal: the fallback provider usually can
+                # answer, which is the whole point of configuring it.
                 fallback_model = self._build_model_string(
                     self.config.fallback_provider, self.config.fallback_model
                 )
@@ -784,25 +951,60 @@ class LLMRouter:
                     **{**self._sampling_kwargs(fallback_model, self.config.fallback_provider), **fb_kwargs},
                 )
                 _log_call(caller, messages, max_tokens, response, time.monotonic() - t0, model=fallback_model)
-                return response.choices[0].message.content
+                text = response.choices[0].message.content
+                if (self.config.local_fallback_on_refusal
+                        and _looks_like_refusal(text or "")
+                        and self.local_route_available()):
+                    # Passive nsfw routing, fallback half: the upstream error is
+                    # not a refusal, so the configured fallback answers. If that
+                    # answer is itself a refusal, the local model gets one try;
+                    # a local refusal is final - there is nowhere left to go.
+                    local = self.with_content_policy({"content_policy": "nsfw"})
+                    if local is not self:
+                        logger.warning(
+                            "LLM refusal on %s [%s] - retrying on the local model",
+                            model, caller,
+                        )
+                        return await local.complete(messages, max_tokens=max_tokens,
+                                                    reasoning=reasoning, **kwargs)
+                return text
             raise
+
+    async def complete_routed(
+        self, messages: list[dict], policy: str = "standard", **kwargs
+    ) -> str:
+        """`complete` under a content policy.
+
+        The policy route is itself an explicit choice, so the answer it returns
+        is the answer of this turn: no second opinion, no retry. An "nsfw" turn
+        that fails on the local server already degrades to the primary inside
+        `complete`.
+        """
+        router = self.with_content_policy({"content_policy": policy})
+        return await router.complete(messages, **kwargs)
 
     async def stream(self, messages: list[dict], **kwargs) -> AsyncIterator[str]:
         caller = _get_caller()
         orchestrator = kwargs.pop("orchestrator", False)
-        model = self._build_model_string(
-            self.config.primary_provider, self._active_model(orchestrator)
-        )
-        max_tokens = kwargs.pop("max_tokens", self.config.max_tokens)
+        # A content policy moves the request to another provider (usually the
+        # local model), so the whole preparation below must use that provider,
+        # not the configured primary.
+        policy = kwargs.pop("content_policy", None)
+        routed = self.with_content_policy({"content_policy": policy})
+        provider = routed.config.primary_provider
+        model = routed._build_model_string(provider, routed._active_model(orchestrator))
+        # The routed config owns the budget too: a local policy model usually runs
+        # a smaller window than the cloud primary.
+        max_tokens = kwargs.pop("max_tokens", routed.config.max_tokens)
         reasoning = kwargs.pop("reasoning", True)
-        api_base = self._get_api_base(self.config.primary_provider)
+        api_base = routed._get_api_base(provider)
         call_kwargs = {**kwargs}
         call_kwargs.setdefault("drop_params", True)
-        call_kwargs.update(_reasoning_kwargs(self.config.primary_provider, reasoning))
-        if self.config.primary_provider == LLMProvider.ANTHROPIC:
+        call_kwargs.update(_reasoning_kwargs(provider, reasoning))
+        if provider == LLMProvider.ANTHROPIC:
             messages = self._sanitize_messages_for_anthropic(messages)
         messages = self._prepare_cached_messages(messages, call_kwargs)
-        if api_base and self.config.primary_provider == LLMProvider.ANTHROPIC:
+        if api_base and provider == LLMProvider.ANTHROPIC:
             messages, folded_cached = _fold_system_into_user(messages)
             if folded_cached:
                 call_kwargs["extra_headers"] = {
@@ -811,15 +1013,14 @@ class LLMRouter:
                 }
         if api_base:
             call_kwargs["api_base"] = api_base
-            call_kwargs["api_key"] = self._get_api_key(self.config.primary_provider)
+            call_kwargs["api_key"] = routed._get_api_key(provider)
         # The block below is the CLIProxyAPI workaround (non-streaming). A local
         # OpenAI-compatible server streams SSE natively, so it falls through to
         # the normal streaming path at the end of this method.
-        if api_base and self.config.primary_provider != LLMProvider.LOCAL:
+        if api_base and provider != LLMProvider.LOCAL:
             # FASE 2: cached-form Anthropic requests go through the anthropic SDK
             # directly. litellm strips content-block cache_control, killing the cache.
-            if (self.config.primary_provider == LLMProvider.ANTHROPIC
-                    and _has_cache_control(messages)):
+            if provider == LLMProvider.ANTHROPIC and _has_cache_control(messages):
                 t0 = time.monotonic()
                 resp = await self._complete_anthropic_sdk(
                     messages, max_tokens, model, api_base,
@@ -870,21 +1071,45 @@ class LLMRouter:
                 yield content
             return
         t0 = time.monotonic()
-        response = await litellm.acompletion(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            stream=True,
-            **{**self._sampling_kwargs(model), **call_kwargs},
-        )
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                stream=True,
+                **{**self._sampling_kwargs(model), **call_kwargs},
+            )
+        except Exception:
+            # Local-first nsfw turn on a dead local server: the safety net runs it
+            # on the primary provider rather than failing the turn outright.
+            if routed is not self and self.config.primary_provider != provider:
+                async for frame in self.stream(messages, max_tokens=max_tokens,
+                                               reasoning=reasoning, **kwargs):
+                    yield frame
+                return
+            raise
         output_chars = 0
         accumulated = ""
+        # Frames are buffered until the end so a refusal that arrives as prose
+        # can be replaced by the refusal frame instead of reaching the client as
+        # narration. Nothing is lost for a normal answer: the text was never
+        # going out before the terminal frame anyway (the SSE consumer reads
+        # whole answers, not keystrokes).
         async for chunk in response:
             delta = chunk.choices[0].delta.content
             if delta:
                 output_chars += len(delta)
                 accumulated += delta
-                yield delta
+        signal = self.refusal_signal(accumulated)
+        if signal is not None:
+            logger.warning(
+                "🚫 LLM REFUSAL [%s] model=%s empty=%s - routing decision belongs to the caller",
+                caller, model, not accumulated.strip(),
+            )
+            yield signal
+            return
+        if accumulated:
+            yield accumulated
         # For streaming, estimate tokens from output chars
         system_chars, total_chars = _count_message_chars(messages)
         elapsed = round(time.monotonic() - t0, 2)

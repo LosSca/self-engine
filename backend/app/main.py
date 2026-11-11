@@ -4,7 +4,7 @@ import mimetypes
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +21,7 @@ from app.api.routes_game import router as game_router, _llm, apply_model_policy
 from app.api.routes_engine import router as engine_router
 from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
-from app.engines.llm_router import LLMProvider
+from app.engines.llm_router import POLICY_CHOICES, LLMProvider
 
 app = FastAPI(title="Project Lunar", version="0.5.0")
 
@@ -104,6 +104,23 @@ class SettingsUpdateRequest(BaseModel):
     model: str = "deepseek-v4-flash"
     temperature: float = 0.85
     max_tokens: int = 2000
+    # Content policy lives on the router rather than on a game session, so the
+    # switch covers narration, generation and NPC speech alike.
+    content_policy: str | None = None
+    nsfw_model: str | None = None
+    local_fallback_on_refusal: bool | None = None
+
+
+def _normalise_policy(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip().lower()
+    if value not in POLICY_CHOICES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown content policy {value!r}; expected one of {POLICY_CHOICES}",
+        )
+    return value
 
 
 @app.post("/api/settings")
@@ -112,11 +129,23 @@ def update_settings(req: SettingsUpdateRequest):
         provider = LLMProvider(req.provider)
     except ValueError:
         provider = LLMProvider.DEEPSEEK
+    policy = _normalise_policy(req.content_policy)
     _llm.config.temperature = req.temperature
     _llm.config.max_tokens = req.max_tokens
+    if policy is not None:
+        _llm.config.content_policy = policy
+    if req.nsfw_model is not None:
+        _llm.config.nsfw_model = req.nsfw_model.strip() or None
+    if req.local_fallback_on_refusal is not None:
+        _llm.config.local_fallback_on_refusal = bool(req.local_fallback_on_refusal)
     apply_model_policy(provider, req.model)
     model = _llm.config.orchestrator_model or _llm.config.primary_model
-    return {"status": "ok", "provider": provider.value, "model": model}
+    return {
+        "status": "ok",
+        "provider": provider.value,
+        "model": model,
+        "content_policy": policy or _llm.config.content_policy,
+    }
 
 
 @app.get("/api/settings")
@@ -129,4 +158,12 @@ def get_settings():
         "max_tokens": _llm.config.max_tokens,
         "local_model": settings.local_llm_model,
         "local_base_url": settings.local_llm_base_url,
+        "content_policy": _llm.config.content_policy,
+        "policy_choices": list(POLICY_CHOICES),
+        "nsfw_provider": (
+            _llm.config.nsfw_provider.value if _llm.config.nsfw_provider else None
+        ),
+        "nsfw_model": _llm.config.nsfw_model,
+        "local_fallback_on_refusal": _llm.config.local_fallback_on_refusal,
+        "local_route_available": _llm.local_route_available(),
     }

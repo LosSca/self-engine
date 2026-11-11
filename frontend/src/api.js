@@ -1027,3 +1027,26 @@ export async function fetchCampaignDiagnostics(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/diagnostics`)
   return jsonOrThrow(r, '读取状态诊断失败')
 }
+
+/**
+ * Push the content-policy switch to the backend router.
+ *
+ * Only the policy lives here: provider/model/temperature are applied to the
+ * store and forwarded with each request, so sending them would overwrite the
+ * live router configuration with whatever the panel happened to show.
+ */
+export async function updateContentPolicy({ nsfwMode, refusalFallback }) {
+  const body = { content_policy: nsfwMode ? 'nsfw' : 'standard' }
+  if (refusalFallback != null) body.local_fallback_on_refusal = !!refusalFallback
+  const r = await fetch(`${BASE}/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return jsonOrThrow(r, '保存内容策略失败')
+}
+
+export async function fetchContentPolicy() {
+  const r = await fetch(`${BASE}/settings`)
+  return jsonOrThrow(r, '读取内容策略失败')
+}

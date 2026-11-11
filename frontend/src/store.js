@@ -36,6 +36,11 @@ export const useGameStore = create((set) => ({
   temperature: 0.85,
   maxTokens: 2000,
   combatEnabled: true,
+  // NSFW mode: narration (and every other model call) prefers the local model,
+  // and an upstream refusal is retried there once. Stored per browser and
+  // pushed to the backend router from the settings panel.
+  nsfwMode: false,
+  refusalFallback: true,
 
   // Actions
   setScenarios: (scenarios) => set({ scenarios }),
@@ -172,6 +177,8 @@ export const useGameStore = create((set) => ({
         if (s.temperature != null) restored.temperature = s.temperature
         if (s.maxTokens != null) restored.maxTokens = s.maxTokens
         if (s.combatEnabled != null) restored.combatEnabled = s.combatEnabled
+        if (s.nsfwMode != null) restored.nsfwMode = s.nsfwMode
+        if (s.refusalFallback != null) restored.refusalFallback = s.refusalFallback
       }
       if (Object.keys(restored).length > 0) set(restored)
       return Object.keys(restored).length > 0
@@ -202,6 +209,8 @@ export const useGameStore = create((set) => ({
         if (s.temperature != null) restored.temperature = s.temperature
         if (s.maxTokens != null) restored.maxTokens = s.maxTokens
         if (s.combatEnabled != null) restored.combatEnabled = s.combatEnabled
+        if (s.nsfwMode != null) restored.nsfwMode = s.nsfwMode
+        if (s.refusalFallback != null) restored.refusalFallback = s.refusalFallback
         if (Object.keys(restored).length > 0) set(restored)
       }
     } catch {}
