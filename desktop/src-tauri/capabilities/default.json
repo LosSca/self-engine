@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "桌面壳默认权限：只需要窗口与 shell 插件的基础能力。",
+  "windows": ["main"],
+  "permissions": ["core:default", "shell:allow-open"]
+}

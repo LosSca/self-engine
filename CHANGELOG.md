@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Tauri 桌面壳**（`desktop/`）：原生窗口 + 侧车进程，双击即可打开，不再需要浏览器和黑窗口。
+  壳以子进程运行 `python launch.py --backend-only --no-window --no-browser`，健康检查通过后
+  向页面注入 `window.__LUNAR_API_BASE__`；前端只改了 `frontend/src/api.js` 一行 BASE 取值，
+  浏览器打开时的行为完全不变。构建方式见 `desktop/README.md`。
+- 新增 `LICENSE`（MIT，与 README 声明一致）。
+
+### Removed
+
+- 清理一次性脚本与散落产物：`cli.sh`、`run_gen.sh`、`narrative_*.txt`、`tone_current.txt`、
+  `opening_current.txt`、`scenario-sword-god.json.bak-item3`、`setup_wizard_plan.md`、
+  `narrative_coherence_plan.md`、`PLANO.md`（葡语旧计划）、`scenario_clone_op/`（海贼王迁移一次性产物）、
+  `.claude/`、`frontend/README.md`（Vite 模板残留）、`proxy/` 里未被 README 提到的旧 Python 代理。
+- 文档去重：`docs/audit_phase0.md`（与 `docs/phase0_audit.md` 重复）、`docs/delivery_phase1.md`、
+  `docs/audit_systems_13.md`、`docs/review_followups_2_to_5.md`、`docs/plans/`、`docs/tickets/`（葡语工单）、
+  `docs/stage14_knowledge_extract_and_planner.md`（已被 `stage14_world_language.md` 取代）。
+- `docker-compose.yml` 与安装脚本里的 Neo4j 容器步骤：Neo4j 本来就是可选镜像，改成在文档里说明
+  自己起服务并填 `NEO4J_URI`。
+
 从「模型驱动的聊天」推进到「规则驱动的引擎 + 模型叙事」：新增一句话生成剧本、作品穿越、
 任务编辑与推进、叙事诊断、内容策略与本地回退，并让叙事语言跟随世界。
 

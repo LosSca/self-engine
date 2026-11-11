@@ -29,6 +29,12 @@ backend/server.out
 backend/server.err
 
 *.bak
+*.bak-item*
+*_current.txt
+
+# Experiment raw output (regenerable by backend/scripts/*_ab.py)
+docs/fase3a_ab/
+docs/fase3b_ab/
 
 # CLIProxyAPI binary + auth
 proxy/cliproxyapi/cli-proxy-api.exe
@@ -60,3 +66,9 @@ logs/
 
 # Local user data (scenarios, scraped assets)
 local/
+
+# Desktop shell build artifacts
+desktop/node_modules/
+desktop/web/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

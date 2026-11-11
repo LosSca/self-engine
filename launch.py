@@ -56,7 +56,8 @@ FRONTEND = ROOT / "frontend"
 DIST = FRONTEND / "dist"
 LOGS = ROOT / ".logs"
 
-BACKEND_PORT = 8000
+# 端口可用环境变量覆盖：桌面壳（desktop/）会挑一个空闲端口，再通过 LUNAR_BACKEND_PORT 传进来。
+BACKEND_PORT = int(os.environ.get("LUNAR_BACKEND_PORT") or 8000)
 FRONTEND_PORT = 5173
 PROD_PORT = 4173
 SERVE_DIST = ROOT / "scripts" / "serve-dist.mjs"

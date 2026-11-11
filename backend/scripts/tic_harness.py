@@ -33,7 +33,9 @@ from app.engines.llm_router import LLMRouter, LLMConfig, LLMProvider
 from app.engines.narrator_engine import NarratorEngine
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_SCENARIO = os.path.join(_ROOT, "scenario_clone_op", "one_piece_adventures_lunar.pt-br.json")
+# Cenário de teste: exporte um cenário pela UI (ou use um `scenario-*.json`) e passe o caminho
+# em SCENARIO=... ; o default abaixo existe só para rodar o harness em qualquer checkout.
+_SCENARIO = os.environ.get("SCENARIO") or os.path.join(_ROOT, "backend", "scenarios", "sample.pt-br.json")
 _OUTDIR = os.path.join(_ROOT, "docs", "fase3a_ab")
 
 # ── OLD anti-tic blocks (pink-elephant, verbatim as removed by FASE 3a) ──

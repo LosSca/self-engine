@@ -14,8 +14,8 @@
   <a href="#已知限制">已知限制</a>
 </p>
 
-> 图片占位：早期 README 使用的 `docs/banner.png` 仍是上游 Project Lunar 的横幅，
-> 与现在的项目不符，因此这里改用文字标题。换成新图后，把本段替换为
+> 这里刻意不使用横幅图片：早期使用的 `docs/banner.png` 是上游 Project Lunar 的旧图，
+> 与现在的项目不符，已移除。要加新图时把本段替换为
 > `<p align="center"><img src="docs/banner.png" alt="Self-Reference Engine" width="100%" /></p>` 即可。
 
 ---
@@ -69,7 +69,7 @@
 
 ## 架构
 
-替换了旧的 `docs/architecture.png`（那张图描述的是单一聊天链路），下面是当前实现的文字框图：
+旧的 `docs/architecture.png` 描述的是单一聊天链路，已与实现不符并移除；下面是当前的文字框图：
 
 ```
 浏览器 (React 19 + Vite)
@@ -406,9 +406,9 @@ install.bat      # Windows
 脚本会建好后端虚拟环境、安装 `backend/requirements.txt` 与前端依赖，
 没有 `.env` 时从 `.env.example` 复制一份。
 
-> **Docker / Neo4j 可选**：脚本仍会尝试 `docker-compose up -d neo4j`。
-> 不装 Docker 时忽略这一步的失败，并在 `.env` 写 `ENGINE_GRAPH_MIRROR=0`——
-> 图谱只是镜像，不会因为图谱不可用而回滚回合。
+> **Neo4j 可选，且脚本不再替你起容器**：安装脚本只装 Python 与前端依赖。
+> 需要实体关系图谱时自己起一个 Neo4j 5 并把 `NEO4J_URI` 填进 `.env`；不想用就把
+> `ENGINE_GRAPH_MIRROR` 设为 0——图谱只是镜像，不会因为不可用而回滚回合。
 
 ### 配置
 
@@ -483,6 +483,19 @@ start.bat           # Windows
 裸导入会 404 导致白屏；`--prod` 交付的是一份已经打包好的 js，在任何环境下都能渲染。
 想回到热更新就在参数里加 `--dev`。细节见 [`docs/launch.md`](docs/launch.md)。
 
+### 桌面端（可选）
+
+`desktop/` 是一个 Tauri 2 壳：原生窗口里跑的就是上面这套前端，后端仍由 `launch.py` 拉起。
+需要 Rust stable + Node 18+，构建与限制见 [`desktop/README.md`](desktop/README.md)。
+
+```bash
+cd frontend && npm install && npm run build
+cd ../desktop && npm install
+npm run build        # 产物在 desktop/src-tauri/target/release/bundle/
+```
+
+不想装 Rust 的话，用 `start.bat --prod` + Chrome「创建快捷方式（以窗口形式打开）」也是同一效果。
+
 常用参数（传给 `launch.py`）：`--debug`（后端 reload + 调用转储）、
 `--backend-only` / `--frontend-only`、`--no-browser`、
 `--no-window`（不开新窗口，日志写 `.logs/`，自检/CI 用）。
@@ -527,8 +540,8 @@ shujia/
 ├── scripts/serve-dist.mjs       # --prod 的前端静态托管 + /api 反代
 ├── scripts/start.sh             # macOS / Linux 启动入口（调用 launch.py）
 ├── scripts/start-dev.ps1        # PowerShell 开发启动脚本
-├── install.bat / install.sh     # 一键安装（含可选 Neo4j 容器）
-├── docker-compose.yml           # Neo4j 5 容器（可选）
+├── install.bat / install.sh     # 一键安装（Python venv + 前端依赖）
+├── desktop/                     # Tauri 桌面壳（不重写界面，只包一层窗口 + 拉起后端）
 ├── .env.example                 # 环境变量样例，安装脚本会复制为 .env
 ├── README.md / CHANGELOG.md
 ├── docs/
@@ -840,4 +853,4 @@ SQLite 单写者（高并发回以版本冲突重试）、知识为词法相似�
 
 ## 许可证
 
-MIT
+MIT，见 [`LICENSE`](LICENSE)。

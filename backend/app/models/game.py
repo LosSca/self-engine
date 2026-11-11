@@ -1,6 +1,6 @@
 """Validated data models for the deterministic game engine.
 
-Architecture contract (see docs/audit_phase0.md):
+Architecture contract (see docs/phase0_audit.md):
 
 * rules decide facts      -> RuleOutcome (code + message + effects)
 * effects record them     -> Effect, applied by engines/event_engine.py

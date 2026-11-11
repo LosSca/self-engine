@@ -1,4 +1,10 @@
-const BASE = '/api'  // proxied to http://localhost:8000 via vite proxy
+// 后端地址：开发/浏览器模式下是相对路径 /api（vite proxy 或 scripts/serve-dist.mjs 反代到
+// 127.0.0.1:8000）。Tauri 桌面壳里页面来自 tauri://localhost，相对路径会打到壳身上，
+// 所以桌面壳会注入 window.__LUNAR_API_BASE__ = 'http://127.0.0.1:<port>'；普通网页不受影响。
+export const BASE =
+  (typeof window !== 'undefined' && window.__LUNAR_API_BASE__)
+    ? String(window.__LUNAR_API_BASE__).replace(/\/+$/, '') + '/api'
+    : '/api'
 
 export async function checkNeo4j() {
   try {
