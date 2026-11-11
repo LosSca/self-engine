@@ -159,3 +159,57 @@ def test_template_narrator_marks_the_capture_as_local():
     assert result.diagnostics is not None
     assert result.diagnostics.skipped is True
     assert result.diagnostics.provider == "template"
+
+
+def test_capture_counts_the_context_sources():
+    blocks = [
+        {"id": "canon:1", "layer": "global", "title": "A", "content": "a"},
+        {"id": "canon:2", "layer": "global", "title": "B", "content": "b"},
+        {"id": "history:camp-1", "layer": "history", "title": "recent turns", "content": "c", "kind": "history"},
+        {"id": "", "title": "no kind", "content": "d"},
+        "not a block",
+    ]
+    diag = capture_diagnostics(blocks)
+    # Counted by kind when present, else by layer; unusable blocks are skipped
+    # rather than counted under an empty key.
+    assert diag.fact_counts == {"global": 2, "history": 1}
+
+
+def test_capture_accepts_explicit_fact_counts():
+    diag = capture_diagnostics([], None, fact_counts={"event": 3})
+    assert diag.fact_counts == {"event": 3}
+
+
+def test_narrator_timeout_records_the_answering_policy():
+    world = village_world()
+    state = fresh_state(world)
+
+    class Slow(_Router):
+        async def complete(self, messages, **kwargs):
+            raise asyncio.TimeoutError()
+
+    narrator = LLMNarrator(Slow(), timeout=0.01)
+    result = asyncio.run(
+        narrator.narrate(
+            _request(), _outcome(), state, world, options={"content_policy": "nsfw"}
+        )
+    )
+    assert result.status == "failed"
+    assert result.diagnostics is not None
+    # A failed call still has to say which policy was in force, otherwise a
+    # reviewer cannot tell a standard turn from a rerouted nsfw one.
+    assert result.diagnostics.content_policy == "nsfw"
+
+
+def test_narrator_empty_text_records_the_answering_policy():
+    world = village_world()
+    state = fresh_state(world)
+    narrator = LLMNarrator(_Router(text="   "))
+    result = asyncio.run(
+        narrator.narrate(
+            _request(), _outcome(), state, world, options={"content_policy": "nsfw"}
+        )
+    )
+    assert result.status == "failed"
+    assert "empty" in result.error
+    assert result.diagnostics.content_policy == "nsfw"

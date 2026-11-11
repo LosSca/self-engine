@@ -1124,3 +1124,37 @@ export async function fetchContentPolicy() {
   const r = await fetch(`${BASE}/settings`)
   return jsonOrThrow(r, '读取内容策略失败')
 }
+/** Domain events as the store recorded them (newest first). */
+export async function fetchDomainEvents(campaignId, { limit = 100, afterVersion = 0 } = {}) {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (afterVersion) params.set('after_version', String(afterVersion))
+  const r = await fetch(`${V1}/campaigns/${campaignId}/events?${params.toString()}`)
+  return jsonOrThrow(r, '读取事件记录失败')
+}
+
+/**
+ * The narration capture for one stored event row.
+ *
+ * `narrator.response` and `narrative.failed` both carry a `diagnostics`
+ * payload; this normalises the shape so the panel never has to guess.
+ */
+export function narrativeDiagnosticsOf(row) {
+  const payload = row?.payload
+  if (!payload || typeof payload !== 'object') return null
+  const diag = payload.diagnostics
+  if (!diag || typeof diag !== 'object') return null
+  return diag
+}
+
+/** The turns this campaign has recorded, newest first (index form). */
+export async function fetchCampaignRequests(campaignId, limit = 50) {
+  const r = await fetch(`${V1}/campaigns/${campaignId}/requests?limit=${limit}`)
+  return jsonOrThrow(r, '读取行动记录失败')
+}
+
+/** One recorded turn in full, including the refusal code and its effects. */
+export async function fetchActionRecord(requestId) {
+  const r = await fetch(`${V1}/actions/${encodeURIComponent(requestId)}`)
+  return jsonOrThrow(r, '读取行动详情失败')
+}

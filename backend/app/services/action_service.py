@@ -815,6 +815,12 @@ class ActionService:
             narrative = NarrativeResult(
                 status="failed",
                 error=f"{type(exc).__name__}: {exc}",
+                # The call never reached the narrator, so there is no live
+                # capture; record what the reviewer would have seen anyway
+                # (route, sampling, context) instead of an empty row.
+                diagnostics=capture_diagnostics(
+                    knowledge, options
+                ).model_copy(update={"skipped": True}),
             )
         if narrative.status != "ok":
             # The model is unavailable or its answer was rejected: describe the
@@ -1110,6 +1116,10 @@ class ActionService:
                         "error": narrative.error,
                         "degraded": narrative.status == "ok",
                         "model": narrative.model,
+                        # A failed turn is where the capture matters most: it
+                        # holds the route, the sampling and the context the
+                        # model was given before it let the turn down.
+                        "diagnostics": _diagnostics_payload(narrative),
                     },
                     "state_version": new_state.version,
                 }

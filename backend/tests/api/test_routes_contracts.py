@@ -29,6 +29,7 @@ TYPED_PATHS = [
     ("get", "/api/v1/campaigns/{campaign_id}/quest-progress"),
     ("get", "/api/v1/campaigns/{campaign_id}/event-executions"),
     ("get", "/api/v1/actions/{request_id}"),
+    ("get", "/api/v1/campaigns/{campaign_id}/requests"),
     ("get", "/api/v1/worlds/{world_id}/quests"),
     ("post", "/api/v1/worlds/{world_id}/quests"),
     ("get", "/api/v1/worlds/{world_id}/quests/{quest_id}"),
@@ -149,3 +150,85 @@ def test_story_and_diagnostics_share_the_narration_health_model():
     model = schema["components"]["schemas"][ref["$ref"].split("/")[-1]]
     narration = model["properties"]["narration"]
     assert narration.get("$ref", "").endswith("NarrationHealth")
+
+
+def _requests_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAME_STATE_DB_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
+    monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenario.db"))
+    import importlib
+
+    import app.main as main
+
+    importlib.reload(main)
+    from fastapi.testclient import TestClient
+
+    return TestClient(main.app)
+
+
+def test_campaign_requests_list_the_recorded_turns(tmp_path, monkeypatch):
+    world = {
+        "world_id": "req_world",
+        "name": "Requests",
+        "description": "",
+        "start_location_id": "square",
+        "locations": [
+            {
+                "id": "square",
+                "name": "Square",
+                "description": "A square.",
+                "exits": [{"target_id": "hall", "label": "north"}],
+            },
+            {
+                "id": "hall",
+                "name": "Hall",
+                "description": "A hall.",
+                "exits": [{"target_id": "square", "label": "south"}],
+            },
+        ],
+    }
+    with _requests_client(tmp_path, monkeypatch) as client:
+        assert client.post("/api/v1/worlds", json=world).status_code in (200, 201)
+        bound = client.post(
+            "/api/v1/campaigns/camp-1/world",
+            json={"world_id": "req_world", "reset": True},
+        )
+        assert bound.status_code == 200, bound.text
+
+        applied = client.post(
+            "/api/v1/campaigns/camp-1/actions",
+            json={
+                "request_id": "req-applied",
+                "campaign_id": "camp-1",
+                "action": "move",
+                "target_id": "hall",
+            },
+        )
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["status"] == "applied"
+
+        # A rejection is recorded too: a debugger needs to see the turns that
+        # did not happen, not only the ones that did.
+        rejected = client.post(
+            "/api/v1/campaigns/camp-1/actions",
+            json={
+                "request_id": "req-rejected",
+                "campaign_id": "camp-1",
+                "action": "move",
+                "target_id": "nowhere",
+            },
+        )
+        assert rejected.status_code == 200, rejected.text
+
+        listed = client.get("/api/v1/campaigns/camp-1/requests", params={"limit": 20})
+        assert listed.status_code == 200, listed.text
+        rows = listed.json()
+        by_id = {row["request_id"]: row for row in rows}
+        assert "req-applied" in by_id and "req-rejected" in by_id, by_id
+        assert by_id["req-applied"]["status"] == "applied"
+        assert by_id["req-applied"]["state_version"] >= 1
+
+        # The index must point at turns the detail route can actually open.
+        detail = client.get("/api/v1/actions/req-applied")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["request"]["action"] == "move"

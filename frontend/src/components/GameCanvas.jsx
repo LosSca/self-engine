@@ -14,6 +14,9 @@ import {
   fetchScenarioView,
   regenerateOpening,
   fetchTraces,
+  fetchDomainEvents,
+  fetchCampaignRequests,
+  fetchActionRecord,
   deleteTraces,
   fetchCampaignCharacter,
   fetchCampaignStory,
@@ -978,6 +981,10 @@ export default function GameCanvas() {
         open={devtoolsOpen}
         onClose={() => setDevtoolsOpen(false)}
         traces={traces}
+        campaignId={activeCampaignId}
+        fetchDomainEvents={fetchDomainEvents}
+        fetchRequests={fetchCampaignRequests}
+        fetchRequestDetail={fetchActionRecord}
         onClear={async () => {
           await deleteTraces(activeCampaignId)
           clearTraces()

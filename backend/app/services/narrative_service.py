@@ -89,6 +89,25 @@ def capture_blocks(knowledge: Optional[Sequence[Mapping]]) -> List[NarrativeBloc
     return blocks
 
 
+def count_context_kinds(knowledge) -> Dict[str, int]:
+    """How many context blocks of each source were handed to the narrator.
+
+    Counted by the same `kind`/`layer` the block carries (knowledge layers,
+    `history`, and whatever a context provider names). It answers the one
+    question a reviewer asks first about a strange line: did the model get
+    background at all, and which part of it.
+    """
+    counts: Dict[str, int] = {}
+    for block in knowledge or ():
+        if not isinstance(block, Mapping):
+            continue
+        kind = str(block.get("kind") or block.get("layer") or "").strip()
+        if not kind:
+            continue
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
 def capture_diagnostics(
     knowledge: Optional[Sequence[Mapping]] = None,
     options: Optional[Mapping] = None,
@@ -130,7 +149,7 @@ def capture_diagnostics(
         preset_routed=routed,
         skipped=skipped,
         blocks=capture_blocks(knowledge),
-        fact_counts={str(k): int(v) for k, v in (fact_counts or {}).items()},
+        fact_counts={str(k): int(v) for k, v in (count_context_kinds(knowledge) if fact_counts is None else fact_counts).items()},
     )
 
 
@@ -770,23 +789,25 @@ class LLMNarrator:
                         continue
                     raise
         except asyncio.TimeoutError:
+            # The capturing policy, not the planned one: a refusal reroute that
+            # then timed out is exactly the kind of turn a reviewer must see.
             return NarrativeResult(
                 status="failed",
                 error=f"narrator timed out after {self.timeout}s",
-                diagnostics=diagnostics,
+                diagnostics=diagnostics.model_copy(update={"content_policy": policy}),
             )
         except Exception as exc:  # noqa: BLE001 - narrative must never break the turn
             return NarrativeResult(
                 status="failed",
                 error=f"{type(exc).__name__}: {exc}",
-                diagnostics=diagnostics,
+                diagnostics=diagnostics.model_copy(update={"content_policy": policy}),
             )
         cleaned = _CONTROL_TAG.sub("", text or "").strip()
         if not cleaned:
             return NarrativeResult(
                 status="failed",
                 error="narrator returned empty text",
-                diagnostics=diagnostics,
+                diagnostics=diagnostics.model_copy(update={"content_policy": policy}),
             )
         verified = _verified(world, outcome, cleaned, executions_effects)
         # The route that actually answered wins over the one that was planned:

@@ -743,6 +743,32 @@ class GameStateStore:
             for row in rows
         ]
 
+    def list_requests(
+        self, campaign_id: str, limit: int = 50, after_version: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Newest first: what each turn was asked to do and what came back.
+
+        This is the index a debug console needs before fetching one turn by
+        `request_id`: it covers applied, rejected and duplicate turns alike,
+        because every one of them is recorded here.
+        """
+        rows = self._conn.execute(
+            "SELECT request_id, campaign_id, status, state_version, created_at"
+            " FROM action_requests WHERE campaign_id = ? AND state_version > ?"
+            " ORDER BY rowid DESC LIMIT ?",
+            (campaign_id, after_version, int(limit)),
+        ).fetchall()
+        return [
+            {
+                "request_id": row["request_id"],
+                "campaign_id": row["campaign_id"],
+                "status": row["status"],
+                "state_version": row["state_version"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def get_action_request_result(
         self, campaign_id: str, request_id: str
     ) -> Optional[Dict[str, Any]]:

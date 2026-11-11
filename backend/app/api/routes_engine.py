@@ -652,6 +652,15 @@ class EventExecutionView(BaseModel):
     created_at: str = ""
 
 
+class RequestSummaryView(BaseModel):
+    """One recorded turn, index form: enough to pick one out of a list."""
+
+    request_id: str
+    campaign_id: str = ""
+    status: str = ""
+    state_version: int = 0
+    created_at: str = ""
+
 class RequestRecordResponse(BaseModel):
     """GET /actions/{request_id}: one recorded turn, as the store saw it.
 
@@ -1859,6 +1868,23 @@ def list_event_executions(
             break
     return executions
 
+
+@router.get("/campaigns/{campaign_id}/requests", response_model=List[RequestSummaryView])
+def list_campaign_requests(
+    campaign_id: str,
+    limit: int = Query(50, ge=1, le=500),
+    after_version: int = Query(0, ge=0),
+):
+    """The turns this campaign has recorded, newest first.
+
+    Read-only and cheap: it lists what each turn was and how it ended, so a
+    debugger can then open one turn in full through `/actions/{request_id}`.
+    """
+    store = _get_store()
+    try:
+        return store.list_requests(campaign_id, limit=limit, after_version=after_version)
+    finally:
+        store.close()
 
 @router.get("/actions/{request_id}", response_model=RequestRecordResponse)
 def get_action(request_id: str):
