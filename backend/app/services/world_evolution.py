@@ -309,7 +309,7 @@ def statements_to_proposals(
             origin=origin,
             source=source or "interaction",
             observer=observer,
-            payload=_claim_payload(kind, payload_name, entities),
+            payload=_claim_payload(kind, payload_name, entities, text=text),
             evidence=[{"text": text, "kind": getattr(statement, "kind", kind)}],
         )
         if pid in seen:
@@ -371,7 +371,13 @@ def _claim_name_for(kind: str) -> bool:
     return normalize_kind(kind) in ("location", "item", "character", "quest")
 
 
-def _claim_payload(kind: str, name: str, entities: Sequence[str]) -> Dict[str, Any]:
+def _claim_payload(
+    kind: str,
+    name: str,
+    entities: Sequence[str],
+    *,
+    text: str = "",
+) -> Dict[str, Any]:
     """What the staging lane needs in order to build a real definition."""
     payload: Dict[str, Any] = {
         "entities": list(entities),
@@ -433,8 +439,15 @@ def _canon_conflict(
     if not wanted:
         return ""
     existing = _existing_names(world, kind)
-    if wanted in existing:
+    if wanted and wanted in existing:
         return "the world already defines {0} {1!r}; edit it instead of re-declaring it".format(kind, wanted)
+    # A claim that names a place the world already has is a claim *about* that
+    # place, not a second place with the same name. Longest match wins, so
+    # "Old Chapel" is preferred over "Chapel".
+    span = " ".join(str(proposal.statement or "").split()).lower()
+    for name in sorted(existing, key=len, reverse=True):
+        if len(name) >= 3 and name in span:
+            return "the world already defines {0} {1!r}; edit it instead of re-declaring it".format(kind, name)
     return ""
 
 
@@ -627,7 +640,8 @@ class WorldEvolutionService:
             return proposal
         try:
             verdict = await self.system.review_ops(
-                proposal.statement, world=world
+                proposal.statement,
+                known=self._known(world, None) if world is not None else (),
             )
         except Exception as exc:
             proposal.warnings.append("review failed: {0}".format(exc))

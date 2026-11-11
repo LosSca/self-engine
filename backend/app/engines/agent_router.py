@@ -217,6 +217,11 @@ class AgentRuntime:
         if not config.provider or not config.model:
             return self.router, self.router.config.primary_provider.value
         source = self.router.config
+        if source is None:
+            # A router without a configuration (a test double, a custom
+            # adapter) answers for the role itself: there is nothing to clone
+            # and nothing to override.
+            return self.router, (config.provider.value if config.provider else "")
         overridden = LLMConfig(
             primary_provider=config.provider,
             primary_model=config.model,
