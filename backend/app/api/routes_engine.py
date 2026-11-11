@@ -301,6 +301,16 @@ def _graph_mirror_sink():
     return sink
 
 
+def _clock_paused(campaign_id: str) -> bool:
+    """Whether this campaign's world clock is frozen (the player left)."""
+    try:
+        from app.api import routes_game
+
+        return bool(routes_game.campaign_clock_paused(campaign_id))
+    except Exception:  # noqa: BLE001 - a missing runtime means "not paused"
+        return False
+
+
 def _service() -> ActionService:
     scenario_store = _get_scenario_store()
     service = ActionService(
@@ -309,6 +319,7 @@ def _service() -> ActionService:
         context_provider=_make_context_provider(scenario_store),
         history_provider=_history_provider(),
         settled_sink=_graph_mirror_sink(),
+        clock_paused=_clock_paused,
     )
     #: Closed together with the game store by the request handler.
     service.scenario_store = scenario_store

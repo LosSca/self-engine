@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.engines.action_registry import get_action
 from app.engines.event_engine import condition_holds, entity_item_count, entity_location
+from app.engines import game_clock
 from app.models.game import (
     CombatantState,
     Condition,
@@ -607,6 +608,11 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False, code="merchant_absent",
                 message="That merchant is not here.",
+            )
+        if not game_clock.open_now(merchant, state):
+            return RuleOutcome(
+                ok=False, code="shop_closed",
+                message=f"The {merchant.name} is closed at this hour.",
             )
         if target_id not in merchant.shop_items:
             return RuleOutcome(

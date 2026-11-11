@@ -36,6 +36,7 @@ from app.engines.event_engine import (
     run_triggered_events,
 )
 from app.engines.quest_engine import advance_quests
+from app.engines.game_clock import advance_state, duration_minutes
 from app.engines.rules_engine import RulesEngine
 from app.engines.story_engine import StoryStatus, advance_storyline
 from app.models.game import (
@@ -156,6 +157,7 @@ class ActionService:
         context_provider=None,
         history_provider=None,
         settled_sink=None,
+        clock_paused=None,
     ):
         self.store = store
         self.rules = rules or RulesEngine()
@@ -167,6 +169,9 @@ class ActionService:
         #: what this campaign has already committed. Injected by the API layer so
         #: the domain service never reaches into the event store directly.
         self.history_provider = history_provider
+        #: Callable[[str], bool] - whether the campaign's clock is frozen. A
+        #: paused campaign is one the player left; time must not move in it.
+        self.clock_paused = clock_paused
         #: Callable[[str, GameState, str], None] - runs after a turn commits,
         #: outside the transaction. Only for work that may fail freely: the
         #: knowledge graph mirrors prose and must never roll a turn back.
@@ -1063,6 +1068,19 @@ class ActionService:
         new_state.version = state.version + 1
         new_state.turn = state.turn + 1
         new_state.updated_at = _now()
+        # In-game time moves with the turn it belongs to and nowhere else.
+        # The same clock is written into the transaction below, so a save can
+        # never disagree with the facts it recorded.
+        clock_paused = False
+        if callable(self.clock_paused):
+            try:
+                clock_paused = bool(self.clock_paused(new_state.campaign_id))
+            except Exception:  # noqa: BLE001 - a broken probe freezes nothing
+                clock_paused = False
+        minutes_spent = duration_minutes(request.action, request.params)
+        if clock_paused:
+            minutes_spent = 0
+        clock = advance_state(new_state, minutes_spent, paused=clock_paused)
 
         # Narration is presentation only: it reads the settled state but can
         # never fail, roll back or rewrite it. A model timeout or a bad payload
@@ -1106,6 +1124,8 @@ class ActionService:
             context_entries=context_entries,
             combat_round=combat_round,
             narrative=narrative,
+            minutes_spent=minutes_spent,
+            clock=clock.label,
             state=new_state,
         )
         events: List[Dict[str, Any]] = [

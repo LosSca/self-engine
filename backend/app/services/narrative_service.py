@@ -15,6 +15,7 @@ from collections import deque
 from collections.abc import Mapping
 from typing import List, Optional, Sequence, Tuple
 
+from app.engines import game_clock
 from app.models.game import (
     ActionRequest,
     Effect,
@@ -817,8 +818,11 @@ class LLMNarrator:
                 for o in quest.objectives
             )
             quest_lines.append(f"- {quest.title} [{progress.status}] {objectives}")
+        clock = game_clock.Clock.from_state(state)
         facts = {
             "location": location_block,
+            # The narrator may say what time it is; it may not say time passed.
+            "time": {"label": clock.label, "phase": clock.time_of_day},
             "inventory": inventory,
             "open_doors": open_doors,
             "visible_items": [

@@ -32,6 +32,9 @@ class ActionSpec:
     verbs: Tuple[str, ...] = ()
     #: Lower runs first when two verbs could both match a phrase.
     verb_priority: int = 100
+    #: In-game minutes the verb consumes. 0 means the action takes no time
+    #: (looking around, talking); None means "ask game_clock for the default".
+    minutes: Optional[int] = None
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -40,6 +43,7 @@ class ActionSpec:
             "target": self.target,
             "description": self.description,
             "verbs": list(self.verbs),
+            "minutes": self.minutes,
         }
 
 
@@ -85,6 +89,7 @@ register_action(
         handler="_attack",
         target="required",
         description="Strike a creature or hostile NPC that is in the current location.",
+        minutes=1,
         verbs=("攻击", "打击", "砍", "劈", "刺向", "刺", "揍", "attack", "strike",
                "fight", "kill", "stab", "slash", "hit the", "hit "),
         verb_priority=10,
@@ -97,6 +102,7 @@ register_action(
         handler="_flee",
         target="optional",
         description="Leave the current fight; the enemy may still land a parting blow.",
+        minutes=1,
         verbs=("逃跑", "逃走", "撤离", "撤退", "跑", "flee", "run away", "retreat", "escape"),
         verb_priority=20,
     )
@@ -108,6 +114,7 @@ register_action(
         handler="_defend",
         target="optional",
         description="Raise your guard for one round instead of attacking.",
+        minutes=1,
         verbs=("防御", "格挡", "防守", "架起", "defend", "block", "guard", "parry"),
         verb_priority=30,
     )
@@ -117,6 +124,7 @@ register_action(
         name="take",
         label="拾取",
         handler="_take",
+        minutes=1,
         target="required",
         description="Pick up an item that lies in the current location.",
         verbs=("拾取", "捡起", "拿走", "拿起", "拿到", "拿", "拿取", "take", "pick up", "grab"),
@@ -128,6 +136,7 @@ register_action(
         name="open",
         label="打开",
         handler="_open",
+        minutes=1,
         target="required",
         description="Open a door here, if it is unlocked or you carry its key.",
         verbs=("打开", "开启", "推开", "开锁", "开", "open", "unlock"),
@@ -150,6 +159,7 @@ register_action(
         name="talk",
         label="交谈",
         handler="_talk",
+        minutes=0,
         target="optional",
         description="Speak to someone here.",
         verbs=("交谈", "对话", "说话", "说说", "问", "说", "talk", "speak", "ask"),
@@ -161,6 +171,7 @@ register_action(
         name="move",
         label="移动",
         handler="_move",
+        minutes=10,
         target="required",
         description="Walk through an exit to a neighbouring location.",
         verbs=("前往", "移动到", "走到", "进入", "回到", "去往", "去", "go to", "head to",
@@ -242,6 +253,7 @@ register_action(
         name="investigate",
         label="调查",
         handler="_investigate",
+        minutes=5,
         target="optional",
         description="Inspect one entity, item or door here, or the room when no target is named.",
         verbs=("调查", "检查", "查看", "端详", "inspect", "examine", "investigate"),
@@ -253,6 +265,7 @@ register_action(
         name="look",
         label="观察",
         handler="_look",
+        minutes=0,
         target="none",
         description="Describe the current location, its items, doors and exits.",
         verbs=("观察", "环顾", "看看", "看", "look", "observe", "survey"),

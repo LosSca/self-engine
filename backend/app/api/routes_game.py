@@ -918,16 +918,43 @@ async def resume_campaign(campaign_id: str):
     return {"status": "ok", "campaign_id": campaign_id, "paused": False}
 
 
+def campaign_clock_paused(campaign_id: str) -> bool:
+    """Whether this campaign's world clock is frozen.
+
+    A campaign with no cached session counts as paused: if nobody is playing
+    it, nothing in it moves. This is the single predicate the rules pipeline
+    consults before it lets a turn advance the clock.
+    """
+    session = _sessions.get(campaign_id)
+    if session is None:
+        return True
+    return bool(getattr(session, "paused", False))
+
+
 @router.get("/{campaign_id}/clock")
 async def get_campaign_clock(campaign_id: str):
-    """Report whether this campaign is running, paused or simply not loaded."""
+    """Report the in-game clock, and whether it is running, paused or idle."""
     session = _sessions.get(campaign_id)
+    paused = campaign_clock_paused(campaign_id)
+    clock = None
+    try:
+        from app.engines.game_clock import Clock
+        from app.db.game_state_store import GameStateStore
+
+        with GameStateStore(_game_state_db_path(), migrate=False) as store:
+            state = store.get_state(campaign_id)
+        if state is not None:
+            clock = Clock.from_state(state).to_dict()
+    except Exception:  # noqa: BLE001 - the clock view is informational
+        clock = None
     return {
         "campaign_id": campaign_id,
-        "state": "paused" if session is not None and getattr(session, "paused", False) else (
+        "state": "paused" if paused and session is not None else (
             "running" if session is not None else "idle"
         ),
         "session_cached": session is not None,
+        "clock_paused": paused,
+        "clock": clock,
     }
 
 

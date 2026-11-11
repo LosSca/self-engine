@@ -30,6 +30,16 @@ from app.services.action_service import ActionService
 logger = logging.getLogger(__name__)
 
 
+def campaign_clock_paused(campaign_id: str) -> bool:
+    """Whether the world clock of this campaign is frozen (player left)."""
+    try:
+        from app.api import routes_game
+
+        return bool(routes_game.campaign_clock_paused(campaign_id))
+    except Exception:  # noqa: BLE001 - no runtime means nothing is running
+        return True
+
+
 def _first_sentence(text: str, limit: int = 160) -> str:
     """First non-empty line of an opening narrative, trimmed for a summary."""
     for line in (text or "").splitlines():
@@ -612,7 +622,10 @@ class TextActionService:
     ):
         self.game_store = game_store
         self.scenario_store = scenario_store
-        self.action_service = action_service or ActionService(game_store)
+        self.action_service = action_service or ActionService(
+            game_store,
+            clock_paused=lambda campaign_id: campaign_clock_paused(campaign_id),
+        )
         self.parser = parser or TextActionParser()
         #: Optional LLM that may *suggest* a mapping when the parser finds none.
         #: Off unless ENGINE_INTENT_ADVISOR is set; even when on, its suggestion

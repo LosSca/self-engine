@@ -1042,6 +1042,11 @@ class GameState(BaseModel):
     currency: int = 0
     xp: int = 0
     level: int = 1
+    #: In-game clock. The world moves only when the player acts, so these are
+    #: the only source of elapsed time; saves from before this field read as
+    #: day 1, 08:00 (see app/engines/game_clock.py).
+    day: int = Field(1, ge=0)
+    minute: int = Field(480, ge=0)
     updated_at: str = ""
 
 
@@ -1167,4 +1172,9 @@ class ActionResult(BaseModel):
     #: Deterministic combat resolution for this request (None outside combat).
     combat_round: Optional[Dict[str, Any]] = None
     narrative: NarrativeResult = Field(default_factory=NarrativeResult)
+    #: In-game minutes this request consumed (0 for a rejected or duplicate
+    #: request, and 0 for verbs that take no time such as looking or talking).
+    minutes_spent: int = 0
+    #: The committed clock after this request, for display ("Day 1, 08:10").
+    clock: str = ""
     state: Optional[GameState] = None
