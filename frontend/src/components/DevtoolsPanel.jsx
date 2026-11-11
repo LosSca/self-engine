@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Terminal, X, Trash2, ChevronRight, Brain, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Terminal, X, Trash2, ChevronRight, Brain, AlertTriangle, RefreshCw, Cpu } from 'lucide-react'
+import { agentsSummary, callLabel } from '../agentView'
 
 const fmtTok = (n) => {
   const v = Number(n) || 0
@@ -340,6 +341,8 @@ export default function DevtoolsPanel({
   fetchDomainEvents,
   fetchRequests,
   fetchRequestDetail,
+  fetchAgents,
+  fetchAgentCalls,
 }) {
   const [selectedKey, setSelectedKey] = useState(null)
   const [tab, setTab] = useState('traces')
@@ -352,6 +355,10 @@ export default function DevtoolsPanel({
   const [openRequestId, setOpenRequestId] = useState('')
   const [requestDetail, setRequestDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [roles, setRoles] = useState([])
+  const [calls, setCalls] = useState([])
+  const [agentsError, setAgentsError] = useState('')
+  const [agentsLoading, setAgentsLoading] = useState(false)
 
   useEffect(() => {
     if (open && traces.length) setSelectedKey(traces[traces.length - 1].key)
@@ -409,9 +416,29 @@ export default function DevtoolsPanel({
     }
   }
 
+  const loadAgents = async () => {
+    setAgentsLoading(true)
+    setAgentsError('')
+    try {
+      const payload =
+        typeof fetchAgents === 'function' ? await fetchAgents() : { roles: [] }
+      setRoles(agentsSummary(payload?.roles))
+      const rows =
+        campaignId && typeof fetchAgentCalls === 'function'
+          ? await fetchAgentCalls(campaignId, { limit: 100 })
+          : []
+      setCalls(Array.isArray(rows) ? rows : [])
+    } catch (err) {
+      setAgentsError(err?.message || '读取 Agent 信息失败')
+    } finally {
+      setAgentsLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (open && tab === 'narration') loadNarration()
     if (open && tab === 'actions') loadRequests()
+    if (open && tab === 'agents') loadAgents()
   }, [open, tab, campaignId])
 
   if (!open) return null
@@ -432,6 +459,7 @@ export default function DevtoolsPanel({
                 ['traces', `调用追踪 ${traces.length}`],
                 ['narration', '叙事与上下文'],
                 ['actions', '行动记录'],
+                ['agents', '模型调用'],
               ].map(([key, label]) => (
                 <button
                   key={key}
@@ -478,6 +506,60 @@ export default function DevtoolsPanel({
               selected={openRequestId}
               detail={requestDetail}
             />
+          </div>
+        ) : tab === 'agents' ? (
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+            {agentsError && (
+              <div className="mb-3 flex items-center gap-2 text-[11px] font-mono text-rose-300/90">
+                <AlertTriangle size={12} /> {agentsError}
+              </div>
+            )}
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-[11px] font-mono text-white/40">
+                <Cpu size={12} /> 每个角色由哪个模型回答
+              </div>
+              <button
+                onClick={loadAgents}
+                className="text-white/40 hover:text-white transition-colors p-1"
+                title="刷新"
+              >
+                <RefreshCw size={14} />
+              </button>
+            </div>
+            <div className="space-y-1 mb-6">
+              {roles.length === 0 && !agentsLoading && (
+                <p className="text-white/25 text-[11px] font-mono">没有读到 Agent 路由。</p>
+              )}
+              {roles.map((entry) => (
+                <div
+                  key={entry.role}
+                  className="flex items-center gap-3 text-[11px] font-mono px-2.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02]"
+                >
+                  <span className="text-white/70 w-12">{entry.label}</span>
+                  <span className="text-white/40">{entry.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="text-[11px] font-mono text-white/40 mb-2">模型调用记录</div>
+            {calls.length === 0 && !agentsLoading && (
+              <p className="text-white/25 text-[11px] font-mono">
+                本战役还没有记录模型调用。
+              </p>
+            )}
+            <div className="space-y-1">
+              {calls.map((call, index) => (
+                <div
+                  key={`${call.created_at}-${index}`}
+                  className={`text-[11px] font-mono px-2.5 py-1.5 rounded-lg border ${
+                    call.status === "error"
+                      ? "border-rose-400/30 bg-rose-400/5 text-rose-300/90"
+                      : "border-white/5 bg-white/[0.02] text-white/50"
+                  }`}
+                >
+                  {callLabel(call)}
+                </div>
+              ))}
+            </div>
           </div>
         ) : tab === 'narration' ? (
           <div className="flex-1 overflow-y-auto custom-scrollbar p-6">

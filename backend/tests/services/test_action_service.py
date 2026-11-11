@@ -153,8 +153,10 @@ async def test_narrative_failure_does_not_roll_back_committed_state(store):
 
     result = await service.execute(_request("req-take", "take", "iron_key"))
     assert result.status == "applied"
-    # Degraded narration is still a turn: the prose describes what the rules did.
-    assert result.narrative.status == "ok"
+    # The turn committed; only the prose failed. Both facts stay visible: the
+    # degradation is recorded as "failed", and the text still describes what
+    # the rules actually did instead of leaving the player with an error line.
+    assert result.narrative.status == "failed"
     assert result.narrative.model == "fallback"
     assert result.narrative.text
     assert "narrator unavailable" in result.narrative.error
@@ -234,7 +236,7 @@ async def test_narrator_exception_still_commits_the_turn(store):
 
     assert result.status == "applied"
     assert result.state_version == 1
-    assert result.narrative.status == "ok"
+    assert result.narrative.status == "failed"
     assert result.narrative.model == "fallback"
     assert "TimeoutError" in result.narrative.error
     stored = store.get_state("camp-1")
@@ -253,6 +255,8 @@ async def test_narrator_exception_on_a_rejected_action_is_reported_not_raised(st
 
     assert result.status == "rejected"
     assert result.code == "door_locked"
+    # A rejection never calls the narrator, so there is no prose failure to
+    # report: the refusal message is the answer and the turn was not applied.
     assert result.narrative.status == "ok"
     assert result.narrative.model == "fallback"
     assert "TimeoutError" in result.narrative.error

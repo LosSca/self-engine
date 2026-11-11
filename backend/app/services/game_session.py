@@ -115,8 +115,13 @@ class GameSession:
         combat_enabled: bool = True,
         knowledge_context: str = "",
         knowledge_provider=None,
+        agents=None,
     ):
         self.campaign_id = campaign_id
+        # Phase 1: when role routing is supplied, each model call names the role
+        # that answers it, so the deployment can put narration and reasoning on
+        # different models without touching this class.
+        self._agents = agents
         # True while the player is away: no turns, no background world ticks.
         self.paused = False
         self.language = language
@@ -1632,6 +1637,7 @@ class GameSession:
             knowledge_block = self._build_npc_knowledge_boundaries_block(active_npc_names)
             if knowledge_block:
                 narrator_hints += knowledge_block
+            narrator_hints += self._npc_dossier_block(active_npc_names)
 
             if cache_on:
                 zone0 = self._narrator.build_zone0(
@@ -1941,6 +1947,7 @@ class GameSession:
         knowledge_block = self._build_npc_knowledge_boundaries_block(active_npc_names)
         if knowledge_block:
             narrator_hints += knowledge_block
+        narrator_hints += self._npc_dossier_block(active_npc_names)
 
         graph_ctx = await self.get_graph_relationship_summary()
 
@@ -2671,6 +2678,63 @@ class GameSession:
             f"[{ct}] " + ", ".join(names)
             for ct, names in by_type.items()
         )
+
+    def _npc_dossier_block(self, active_npc_names: set[str]) -> str:
+        """Give the narrator each on-scene NPC's own file, not just its facts.
+
+        Without this the shared narrative model improvises a personality from
+        one line of description, so the same innkeeper reads differently every
+        scene. The file is assembled from data the legacy play loop already
+        holds — the named entities in the session's world, each NPC's own
+        thoughts from the mind engine, and the NPC's witnessed memory — so no
+        second copy of a character lives anywhere. A secret one NPC holds is
+        only ever in that NPC's file, which is what keeps knowledge isolated
+        even though one model speaks for everyone.
+        """
+        if self._agents is None or not active_npc_names:
+            return ""
+        try:
+            from app.engines.npc_dossier import NpcDossier
+
+            entities = self._scene_entities_by_name()
+            blocks: list[str] = []
+            for name in sorted(active_npc_names):
+                entity = entities.get((name or "").strip().lower())
+                if entity is None:
+                    continue
+                mind = None
+                try:
+                    mind = self._npc_minds.get_mind(self.campaign_id, name)
+                except Exception:  # noqa: BLE001 - minds are optional colour
+                    mind = None
+                dossier = NpcDossier.from_entity(entity, mind=mind)
+                lines = dossier.identity_lines() + dossier.state_lines()
+                if lines:
+                    blocks.append("--- " + dossier.name + " ---\n- " + "\n- ".join(lines))
+            if not blocks:
+                return ""
+            return (
+                "\nNPC CHARACTER FILES (stable identity — voice, temperament and "
+                "priorities must match; never contradict these, and never let one "
+                "NPC refer to another NPC's secrets):\n" + "\n".join(blocks)
+            )
+        except Exception:  # noqa: BLE001 - enrichment, never a gate
+            logger.debug("NPC dossier enrichment failed", exc_info=True)
+            return ""
+
+    def _scene_entities_by_name(self) -> dict:
+        """Entities from the scenario catalogue, keyed by lower-case name."""
+        try:
+            scenario = getattr(self, "_scenario", None) or getattr(self, "scenario", None)
+            entities = getattr(scenario, "entities", None) or {}
+            if isinstance(entities, dict):
+                return {
+                    (getattr(entity, "name", "") or key).strip().lower(): entity
+                    for key, entity in entities.items()
+                }
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
 
     def _build_npc_knowledge_boundaries_block(
         self,

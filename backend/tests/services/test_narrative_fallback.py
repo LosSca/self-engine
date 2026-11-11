@@ -68,8 +68,9 @@ async def test_failed_narrator_still_describes_the_committed_turn(store):
     assert result.status == "applied"
     assert result.state.version == 1
     assert result.state.inventory == {"iron_key": 1}
-    # The player is not handed an error: the engine describes its own result.
-    assert result.narrative.status == "ok"
+    # The player is not handed an error: the engine describes its own result,
+    # and the model being down stays visible on the same record.
+    assert result.narrative.status == "failed"
     assert result.narrative.model == "fallback"
     assert "Iron Key" in result.narrative.text
     # The failure is still reported for debugging.

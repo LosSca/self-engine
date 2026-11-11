@@ -1124,6 +1124,21 @@ export async function fetchContentPolicy() {
   const r = await fetch(`${BASE}/settings`)
   return jsonOrThrow(r, '读取内容策略失败')
 }
+
+/** Which model answers each agent role (keys are never sent by the API). */
+export async function getAgents() {
+  const r = await fetch(`${V1}/agents`)
+  return jsonOrThrow(r, '读取 Agent 路由失败')
+}
+
+/** Recent model calls for one campaign, newest first (telemetry only). */
+export async function getAgentCalls(campaignId, { role = '', limit = 50 } = {}) {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (role) params.set('role', role)
+  const r = await fetch(`${V1}/campaigns/${campaignId}/agent-calls?${params.toString()}`)
+  return jsonOrThrow(r, '读取模型调用记录失败')
+}
 /** Domain events as the store recorded them (newest first). */
 export async function fetchDomainEvents(campaignId, { limit = 100, afterVersion = 0 } = {}) {
   const params = new URLSearchParams()

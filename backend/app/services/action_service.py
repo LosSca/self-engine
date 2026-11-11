@@ -622,15 +622,9 @@ class ActionService:
                 narrative = NarrativeResult(
                     status="failed", error=f"{type(exc).__name__}: {exc}"
                 )
-        if narrative.status != "ok":
-            # A refused action still gets a sentence, and a broken model must
-            # not turn that into an error: the refusal itself is the answer.
-            narrative = NarrativeResult(
-                status="ok",
-                text=outcome.message or outcome.code,
-                model="fallback",
-                error=narrative.error,
-            )
+        # Whatever the prose layer managed, the rejection itself is the answer,
+        # and its error text stays available to the debug panel.
+        narrative = self._degrade_story(narrative, outcome, state, world, [])
         result = ActionResult(
             **self._base(request),
             status="rejected",
@@ -689,6 +683,34 @@ class ActionService:
             "in_combat": bool(new_state.combat.get("active")),
             "facts": [fact.kind for item in applied for fact in item.facts],
         }
+
+    @staticmethod
+    def _degrade_story(narrative, outcome, state, world, executions) -> NarrativeResult:
+        """Keep a successful turn's status when the prose could not be written.
+
+        "The turn was applied but the narrator timed out" is exactly the case
+        the diagnostics panel has to show, so a failure before state was
+        produced stays "failed" and keeps its error. A refusal is different:
+        the refusal itself is the answer, so it still gets one sentence.
+        """
+        if narrative.status == "ok":
+            return narrative
+        if outcome.ok:
+            try:
+                from app.services.narrative_service import render_fallback
+
+                text = render_fallback(world, state, outcome, executions)
+            except Exception:  # noqa: BLE001 - the error text is still true
+                text = ""
+            return narrative.model_copy(
+                update={"model": "fallback", "text": text or narrative.text}
+            )
+        return NarrativeResult(
+            status="ok",
+            text=outcome.message or outcome.code,
+            model="fallback",
+            error=narrative.error,
+        )
 
     async def _call_narrator(self, *args, **kwargs):
         return await self.narrator.narrate(*args, **kwargs)
@@ -846,27 +868,11 @@ class ActionService:
                     knowledge, options
                 ).model_copy(update={"skipped": True}),
             )
-        if narrative.status != "ok":
-            # The model is unavailable or its answer was rejected: describe the
-            # committed result deterministically instead of leaving the player
-            # with an error line. The failure itself is still reported.
-            # A failed narrator never reads as an error to the player: the
-            # engine can describe its own committed result.
-            fallback = render_fallback(world, new_state, outcome, executions)
-            if fallback:
-                return (
-                    NarrativeResult(
-                        status="ok",
-                        text=fallback,
-                        model="fallback",
-                        error=narrative.error,
-                        # The model call did happen; keeping its capture is
-                        # what lets a reviewer see why it was rejected.
-                        diagnostics=narrative.diagnostics,
-                    ),
-                    context_entries,
-                )
-        return narrative, context_entries
+        # A broken or refused narrator is not fatal: the engine can always
+        # describe its own committed result. What it must not do is hide the
+        # failure, so the status and error stay on the record and only the
+        # text and model label change.
+        return self._degrade_story(narrative, outcome, new_state, world, executions), context_entries
 
     def _reject_effects(
         self,
@@ -1061,17 +1067,28 @@ class ActionService:
         # Narration is presentation only: it reads the settled state but can
         # never fail, roll back or rewrite it. A model timeout or a bad payload
         # degrades to status="failed" and the turn still commits.
-        narrative, context_entries = await self._narrate_applied(
-            request,
-            outcome,
-            new_state,
-            world,
-            executions,
-            quest_updates,
-            play,
-            active_node,
-            list(story_status.armed_packs) if story_status is not None else [],
-        )
+        try:
+            narrative, context_entries = await self._narrate_applied(
+                request,
+                outcome,
+                new_state,
+                world,
+                executions,
+                quest_updates,
+                play,
+                active_node,
+                list(story_status.armed_packs) if story_status is not None else [],
+            )
+            narrative = self._degrade_story(narrative, outcome, new_state, world, executions)
+        except Exception as exc:  # noqa: BLE001 - prose must never undo a turn
+            narrative = self._degrade_story(
+                NarrativeResult(status="failed", error=f"{type(exc).__name__}: {exc}"),
+                outcome,
+                new_state,
+                world,
+                executions,
+            )
+            context_entries = []
         self._append_summary(new_state, request, outcome, narrative)
         await self._maybe_llm_summary(new_state, play)
 

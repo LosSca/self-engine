@@ -17,6 +17,8 @@ import {
   fetchDomainEvents,
   fetchCampaignRequests,
   fetchActionRecord,
+  getAgents,
+  getAgentCalls,
   deleteTraces,
   fetchCampaignCharacter,
   fetchCampaignStory,
@@ -985,6 +987,8 @@ export default function GameCanvas() {
         fetchDomainEvents={fetchDomainEvents}
         fetchRequests={fetchCampaignRequests}
         fetchRequestDetail={fetchActionRecord}
+        fetchAgents={getAgents}
+        fetchAgentCalls={getAgentCalls}
         onClear={async () => {
           await deleteTraces(activeCampaignId)
           clearTraces()

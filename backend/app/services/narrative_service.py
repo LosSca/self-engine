@@ -423,7 +423,11 @@ def render_fallback(
         elif execution.status == "failed" and execution.reason:
             sentences.append(f"({execution.name}: {execution.reason})")
     if not sentences:
-        return ""
+        # A successful turn with nothing to report (a plain talk, a look) used
+        # to return "", which the UI showed as an empty bubble. The state is
+        # committed either way, so say the one true thing instead of nothing.
+        sentence = "Nothing changes."
+        return _localise(world, sentence, sentence)
     return " ".join(sentences)
 
 
@@ -726,6 +730,9 @@ class LLMNarrator:
         self.context_builder = context_builder
         self.memory_provider = memory_provider
         self.campaign_id = campaign_id
+        #: True when the last narrate() was answered by a fallback rather than
+        #: by the role's own model. Read by tests and by the debug panel.
+        self.last_route = ""
 
     def _narrative_route(self, options: Optional[dict] = None):
         """Return (router, provider, model) for this call's narrative work.
@@ -947,6 +954,7 @@ class LLMNarrator:
             text = None
             delay = REFUSAL_RETRY_DELAY
             use_agents = self.agents is not None and preset_router(options) is None
+            self.last_route = "agent" if use_agents else "router"
             for attempt in (1, 2):
                 try:
                     if use_agents:
@@ -963,6 +971,11 @@ class LLMNarrator:
                         )
                         if reply.ok:
                             text = reply.text
+                            if reply.degraded:
+                                # The role's own model was unavailable; the
+                                # answer is real prose, but a reviewer must be
+                                # able to see it came from somewhere else.
+                                self.last_route = "degraded:" + ",".join(reply.attempts)
                             break
                         raise RuntimeError(reply.error or "narrative agent failed")
                     text = await asyncio.wait_for(

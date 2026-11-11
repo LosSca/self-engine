@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 
 from app.services.game_session import GameSession
+from app.engines.agent_router import AgentRuntime, load_agent_configs
 from app.engines.narrator_engine import NarratorEngine
 from app.engines.memory_engine import MemoryEngine, CrystalTier
 from app.engines.world_reactor import WorldReactor
@@ -69,6 +70,11 @@ def apply_model_policy(provider: LLMProvider, model: str) -> None:
 
 
 _narrator = NarratorEngine(llm=_llm)
+# Role routing for every model call made from the play loop. Telemetry lands in
+# the game-state database (falling back to the scenario database), so the dev
+# panel can show which model answered, how long it took and why it failed.
+# The store is resolved lazily on first use: the play-loop database may not
+# exist yet at import time.
 _memory = MemoryEngine(event_store=_event_store, llm=_llm)
 _world_reactor = WorldReactor(llm=_llm)
 _journal = JournalEngine(llm=_llm, event_store=_event_store)
@@ -78,6 +84,45 @@ _npc_minds = NpcMindEngine(llm=_llm)
 _inventory = InventoryEngine(event_store=_event_store)
 
 _sessions: dict[str, GameSession] = {}
+
+#: Telemetry lives in the play-loop database that actually exists on this host.
+_telemetry_store = None
+
+
+def _record_agent_call(**fields):
+    """Persist one agent call; telemetry must never break a turn."""
+    try:
+        store = _agent_telemetry_store()
+        if store is not None:
+            store.record_agent_call(**fields)
+    except Exception:  # noqa: BLE001 - observability is not a game rule
+        logger.debug("agent call not recorded", exc_info=True)
+
+
+def _agent_telemetry_store():
+    """A store that can record agent calls, opened lazily and kept open.
+
+    The scenario database is always present (it holds the campaign), while the
+    game-state database only appears once a campaign has been bound; either can
+    answer the query, so the first one that opens wins.
+    """
+    global _telemetry_store
+    if _telemetry_store is None:
+        for factory in (lambda: ScenarioStore(_scenario_db_path()), lambda: GameStateStore(_game_state_db_path())):
+            try:
+                store = factory()
+            except Exception:  # noqa: BLE001 - telemetry is optional
+                continue
+            if hasattr(store, "record_agent_call"):
+                _telemetry_store = store
+                break
+    return _telemetry_store
+
+
+_agents = AgentRuntime(_llm, record=_record_agent_call)
+
+
+
 _graph_engines: dict = {}
 
 def _scenario_db_path() -> str:
@@ -250,6 +295,7 @@ def _ensure_session(campaign_id: str) -> GameSession:
         combat_enabled=combat_enabled,
         knowledge_context=knowledge_context,
         knowledge_provider=lambda: _load_knowledge_context_for_campaign(campaign_id),
+        agents=_agents,
     )
     return _sessions[campaign_id]
 

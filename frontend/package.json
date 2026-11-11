@@ -8,7 +8,8 @@
     "build": "node scripts/check-hook-order.mjs && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "check:hooks": "node scripts/check-hook-order.mjs"
+    "check:hooks": "node scripts/check-hook-order.mjs",
+    "check:agents": "node scripts/check-agent-wiring.mjs"
   },
   "dependencies": {
     "axios": "^1.13.6",
