@@ -106,7 +106,12 @@ def test_campaign_character_selection(client, scenario_id):
     assert body["look"]["image_url"] == "/media/a.png"
 
 
-def test_campaign_rejects_character_from_another_scenario(client, scenario_id):
+def test_campaign_accepts_a_character_from_another_scenario(client, scenario_id):
+    """A character is library-wide: any world may bring it in.
+
+    This used to be a 409 ("Character belongs to another scenario"); the lock
+    was removed when characters moved out of the scenario.
+    """
     other = client.post("/api/scenarios/", json={"title": "别的世界"}).json()
     foreign = client.post(
         f"/api/scenarios/{other['id']}/characters", json={"name": "外来者"}
@@ -119,8 +124,53 @@ def test_campaign_rejects_character_from_another_scenario(client, scenario_id):
         f"/api/campaigns/{campaign['id']}/character",
         json={"character_id": foreign["id"]},
     )
-    assert res.status_code == 409
-    assert "another scenario" in res.json()["detail"]
+    assert res.status_code == 200, res.text
+    assert res.json()["picks"]["character_id"] == foreign["id"]
+    assert res.json()["picks"]["name"] == "外来者"
+
+
+def test_library_characters_are_created_outside_any_scenario(client):
+    created = client.post(
+        "/api/characters",
+        json={"name": "雾行者", "role": "游侠", "description": "来自北境", "is_player": True},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["scenario_id"] == ""
+    assert body["is_player"] is True
+
+    listed = client.get("/api/characters").json()
+    assert [c["id"] for c in listed] == [body["id"]]
+
+    # ...and it is offered by every scenario without being copied into it.
+    scenario = client.post("/api/scenarios/", json={"title": "某个世界"}).json()
+    offered = client.get(f"/api/scenarios/{scenario['id']}/characters").json()
+    assert body["id"] in [c["id"] for c in offered]
+
+
+def test_scenario_character_can_be_imported_into_the_library(client, scenario_id):
+    owned = client.post(
+        f"/api/scenarios/{scenario_id}/characters",
+        json={"name": "本世界的人", "role": "村民"},
+    ).json()
+    client.post(
+        f"/api/characters/{owned['id']}/looks",
+        json={"outfit": "常服", "expression": "平静", "image_url": "/media/x.png"},
+    )
+
+    res = client.post(f"/api/characters/{owned['id']}/library/import")
+    assert res.status_code == 201, res.text
+    clone = res.json()
+    assert clone["scenario_id"] == ""
+    assert clone["name"] == "本世界的人"
+    assert [look["outfit"] for look in clone["looks"]] == ["常服"]
+    assert clone["id"] != owned["id"]
+
+    # Importing an already-library character is a no-op, not a duplicate.
+    again = client.post(f"/api/characters/{clone['id']}/library/import")
+    assert again.status_code == 201
+    assert again.json()["id"] == clone["id"]
+    assert len(client.get("/api/characters").json()) == 1
 
 
 def test_upload_writes_into_media_dir(client, tmp_path, monkeypatch):

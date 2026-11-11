@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   fetchCharactersByScenario,
+  fetchLibraryCharacters,
   saveSetupAnswers,
   setCampaignCharacter,
 } from '../api'
@@ -19,22 +20,35 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
 
-  // 角色形象
+  // 角色形象：本世界的角色 + 全局角色库，开局时可以随便挑一个。
+  const [worldCharacters, setWorldCharacters] = useState([])
+  const [libraryCharacters, setLibraryCharacters] = useState([])
   const [characters, setCharacters] = useState(null)
   const [characterId, setCharacterId] = useState('')
   const [lookId, setLookId] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    if (!scenario?.id) {
-      setCharacters([])
-      return () => { cancelled = true }
-    }
-    fetchCharactersByScenario(scenario.id)
-      .then((data) => {
+    const own = scenario?.id
+      ? fetchCharactersByScenario(scenario.id).catch(() => [])
+      : Promise.resolve([])
+    Promise.all([own, fetchLibraryCharacters().catch(() => [])])
+      .then(([scenarioList, libraryList]) => {
         if (cancelled) return
-        setCharacters(Array.isArray(data) ? data : [])
-        const player = (data || []).find((c) => c.is_player) || (data || [])[0]
+        // The per-scenario route already includes the library; keep the
+        // world's own cast first so its protagonist stays the default pick.
+        const seen = new Set()
+        const merged = []
+        ;[...(scenarioList || []), ...(libraryList || [])].forEach((c) => {
+          if (!c || seen.has(c.id)) return
+          seen.add(c.id)
+          merged.push(c)
+        })
+        setWorldCharacters(Array.isArray(scenarioList) ? scenarioList : [])
+        setLibraryCharacters(Array.isArray(libraryList) ? libraryList : [])
+        setCharacters(merged)
+        const player = merged.find((c) => c.is_player) || merged[0]
         if (player) {
           setCharacterId(player.id)
           const looks = player.looks || []
@@ -46,13 +60,27 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     return () => { cancelled = true }
   }, [scenario?.id])
 
+  const libraryIds = useMemo(
+    () => new Set(libraryCharacters.map((c) => c.id)),
+    [libraryCharacters],
+  )
+
+  const pickCharacter = (c) => {
+    setCharacterId(c.id)
+    const looks = c.looks || []
+    const portrait = looks.find((l) => l.image_url) || looks[0]
+    setLookId(portrait?.id || '')
+    setPickerOpen(false)
+  }
+
   const character = useMemo(
     () => (characters || []).find((c) => c.id === characterId) || null,
     [characters, characterId],
   )
   const looks = character?.looks || []
   const selectedLook = looks.find((l) => l.id === lookId) || null
-  const showCharacterStage = Boolean(character && looks.length > 0)
+  // 任何一个角色都能进这一步：没有立绘的角色照样可以让玩家点名。
+  const showCharacterStage = Boolean(character)
   const total = ordered.length + (showCharacterStage ? 1 : 0)
   const isCharacterStage = showCharacterStage && step === 0
   const questionIndex = showCharacterStage ? step - 1 : step
@@ -68,7 +96,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     (current?.options || []).find((o) => o.label === label) || null
 
   const canAdvance = () => {
-    if (isCharacterStage) return Boolean(selectedLook)
+    if (isCharacterStage) return Boolean(character)
     if (!current) return false
     if (current.type === 'text') {
       return !current.required || textValue.trim().length > 0
@@ -148,12 +176,12 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
   }
 
   const saveCharacterPicks = async () => {
-    if (!selectedLook || !character) return
+    if (!character) return
     await setCampaignCharacter(campaignId, {
       character_id: character.id,
-      look_id: selectedLook.id,
-      outfit: selectedLook.outfit,
-      expression: selectedLook.expression,
+      look_id: selectedLook?.id || '',
+      outfit: selectedLook?.outfit || '',
+      expression: selectedLook?.expression || '',
       name: character.name,
     })
   }
@@ -255,12 +283,65 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
             <>
               <div className="mb-8">
                 <p className="text-xl md:text-2xl font-light leading-relaxed text-white/90">
-                  选择你的角色形象
+                  选择你的角色
                 </p>
                 <p className="text-sm text-white/40 mt-3 leading-relaxed">
-                  服装与表情会影响之后叙事插图中的角色形象，可以随时在游戏内更换。
+                  角色独立于世界存在：这里既有本世界的角色，也有你角色库里带来的角色。服装与表情会影响之后叙事插图中的形象，随时可以在游戏内更换。
                 </p>
               </div>
+
+              {!pickerOpen && (
+                <div className="mb-6 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPickerOpen(true)}
+                    className="px-5 py-2.5 rounded-xl border border-white/15 text-white/70 hover:text-white hover:border-white/40 text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
+                  >
+                    {characters.length > 1 ? `换一个角色（共 ${characters.length} 个）` : '角色库快照'}
+                  </button>
+                  <span className="text-[10px] text-white/30">
+                    {libraryIds.has(character.id) ? '来自角色库' : '本世界角色'}
+                    {looks.length === 0 ? ' · 还没有立绘' : ''}
+                  </span>
+                </div>
+              )}
+
+              {pickerOpen && (
+                <div className="mb-6 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {characters.map((c) => {
+                    const art = (c.looks || []).find((l) => l.image_url) || (c.looks || [])[0] || null;
+                    const active = c.id === character.id;
+                    return (
+                      <button
+                        type="button"
+                        key={c.id}
+                        onClick={() => pickCharacter(c)}
+                        className={
+                          'text-left rounded-2xl border overflow-hidden transition-all ' +
+                          (active
+                            ? 'bg-white/[0.08] border-white/40'
+                            : 'bg-white/[0.02] border-white/10 hover:border-white/25')
+                        }
+                      >
+                        <span className="block h-28 bg-white/5 flex items-center justify-center">
+                          {art?.image_url ? (
+                            <img src={art.image_url} alt={c.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-[10px] text-white/20">无立绘</span>
+                          )}
+                        </span>
+                        <span className="block px-3 py-2">
+                          <span className="block text-xs text-white truncate">{c.name}</span>
+                          <span className="block text-[10px] text-white/35 truncate">
+                            {c.role || (c.is_player ? '玩家角色' : '角色')}
+                            {libraryIds.has(c.id) ? ' · 库' : ''}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
 
               <div className="flex flex-col sm:flex-row gap-8 mb-10">
                 <div className="w-40 h-56 rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden flex items-center justify-center shrink-0 mx-auto sm:mx-0">
@@ -281,6 +362,11 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                     <div className="text-xs text-white/40 mt-1">
                       {character.role || '玩家角色'}
                     </div>
+                    {looks.length === 0 && (
+                      <p className="text-[10px] text-white/30 mt-2 leading-relaxed">
+                        这个角色还没有立绘，叙事照常进行，只是不会被画进插图。可以在角色库里补一张。
+                      </p>
+                    )}
                     {character.description && (
                       <p className="text-sm text-white/50 mt-3 leading-relaxed">
                         {character.description}
@@ -288,7 +374,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className={(looks.length > 0 ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'hidden')}>
                     <div>
                       <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2">
                         服装
@@ -448,7 +534,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                   disabled={submitting}
                   className="text-[10px] tracking-widest text-white/30 hover:text-white/70 transition-colors"
                 >
-                  跳过形象选择
+                  这次不选角色
                 </button>
               )}
             </div>

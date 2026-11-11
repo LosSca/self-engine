@@ -61,7 +61,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口，另有文本解析、知识、叙事、世界编辑、AI 生成、作品库 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 四个 SQLite 存储，各自的 `SCHEMA_VERSION` 与迁移 |
-| `backend/tests/` | pytest 1635 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest 1640 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记与交付审查（`docs/delivery_review.md`） |
 
@@ -693,6 +693,14 @@ shujia/
 
 角色卡与外观在 `/api` 下：`/api/scenarios/{id}/characters`、`/api/characters/{id}`
 （含 `/looks` 外观变体与 `/api/characters/upload` 上传）、`/api/campaigns/{cid}/character`。
+
+### 角色库 `/api/characters`
+
+角色现在**独立于世界存在**：`GET /api/characters` 列全局库，`POST /api/characters` 直接在库外创建
+（`scenario_id` 为空串），`POST /api/characters/{id}/library/import` 把某个世界里的角色复制一份收进库。
+`GET /api/scenarios/{id}/characters` 仍然只列这个世界的角色，但**开局时可以从库里挑任何一个**——
+`PUT /api/campaigns/{cid}/character` 不再因为角色属于别的世界而 409。前端首页新增「角色库」页
+（`/characters`），SetupWizard 的角色步骤会同时列出本世界角色与库角色，并在卡片上标「· 库」。
 
 全局设置：`GET/POST /api/settings`（供应商、模型、采样参数、`content_policy`、本地回退开关）、
 `GET /api/health`、`GET /api/health/neo4j`。

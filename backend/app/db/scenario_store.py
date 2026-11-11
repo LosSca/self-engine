@@ -76,9 +76,17 @@ class CharacterLook:
 
 @dataclass
 class ScenarioCharacter:
+    """An authored player character.
+
+    ``scenario_id`` is empty for rows in the global library: a character is no
+    longer owned by one scenario, so the same character can be brought into any
+    world. Rows written before the library existed keep their scenario id and
+    stay listed under that scenario.
+    """
+
     id: str
-    scenario_id: str
-    name: str
+    scenario_id: str = ""
+    name: str = ""
     role: str = ""
     description: str = ""
     portrait_url: str = ""
@@ -98,7 +106,7 @@ class ScenarioCharacter:
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 12
+    SCHEMA_VERSION = 13
 
     _MIGRATIONS = {
         1: [
@@ -221,6 +229,30 @@ class ScenarioStore:
             )""",
             "CREATE INDEX IF NOT EXISTS idx_scenario_knowledge_scenario "
             "ON scenario_knowledge(scenario_id)",
+        ],
+        # Character library: a character is authored once and can be brought
+        # into any world, so it is no longer owned by a scenario. Existing
+        # rows keep their scenario id and stay listed there; new rows leave
+        # it empty and show up in every scenario picker.
+        13: [
+            "CREATE TABLE IF NOT EXISTS scenario_characters_v13 ("
+            "    id TEXT PRIMARY KEY,"
+            "    scenario_id TEXT NOT NULL DEFAULT '',"
+            "    name TEXT NOT NULL,"
+            "    role TEXT NOT NULL DEFAULT '',"
+            "    description TEXT NOT NULL DEFAULT '',"
+            "    portrait_url TEXT NOT NULL DEFAULT '',"
+            "    is_player INTEGER NOT NULL DEFAULT 0,"
+            "    created_at TEXT NOT NULL"
+            ")",
+            "INSERT OR IGNORE INTO scenario_characters_v13 "
+            "(id, scenario_id, name, role, description, portrait_url, is_player, created_at) "
+            "SELECT id, COALESCE(scenario_id, ''), name, role, description, "
+            "portrait_url, is_player, created_at FROM scenario_characters",
+            "DROP TABLE scenario_characters",
+            "ALTER TABLE scenario_characters_v13 RENAME TO scenario_characters",
+            "CREATE INDEX IF NOT EXISTS idx_scenario_characters_scenario "
+            "ON scenario_characters(scenario_id)",
         ],
     }
 
@@ -547,10 +579,25 @@ class ScenarioStore:
         return self._row_to_character(row, self.list_looks(character_id))
 
     def list_characters(self, scenario_id: str) -> "list[ScenarioCharacter]":
+        """Characters authored for one scenario, plus the shared library.
+
+        Library rows (no scenario id) are offered everywhere so a character
+        can be picked up by any world; scenario-owned rows stay where they
+        were authored.
+        """
         rows = self._conn.execute(
             f"SELECT {self._CHARACTER_COLS} FROM scenario_characters "
-            "WHERE scenario_id=? ORDER BY is_player DESC, created_at ASC",
+            "WHERE scenario_id=? OR scenario_id='' "
+            "ORDER BY is_player DESC, created_at ASC",
             (scenario_id,),
+        ).fetchall()
+        return [self._row_to_character(r, self.list_looks(r[0])) for r in rows]
+
+    def list_library_characters(self) -> "list[ScenarioCharacter]":
+        """Every character that is not tied to a scenario, newest last."""
+        rows = self._conn.execute(
+            f"SELECT {self._CHARACTER_COLS} FROM scenario_characters "
+            "WHERE scenario_id='' ORDER BY is_player DESC, created_at ASC",
         ).fetchall()
         return [self._row_to_character(r, self.list_looks(r[0])) for r in rows]
 
@@ -672,7 +719,7 @@ class ScenarioStore:
                 (scenario_id,),
             )
             self._conn.execute(
-                "DELETE FROM scenario_characters WHERE scenario_id=?", (scenario_id,)
+                "DELETE FROM scenario_characters WHERE scenario_id=? AND scenario_id<>''", (scenario_id,)
             )
             self._conn.execute(
                 "DELETE FROM scenario_knowledge WHERE scenario_id=?", (scenario_id,)

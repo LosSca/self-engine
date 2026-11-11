@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   fetchCampaignCharacter,
   fetchCharactersByScenario,
+  fetchLibraryCharacters,
   setCampaignCharacter,
 } from '../api'
 
@@ -24,15 +25,23 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
       try {
         const view = await fetchCampaignCharacter(campaignId)
         const picks = view?.picks || {}
-        const scenarioId = view?.character?.scenario_id
-        let list = []
-        if (scenarioId) {
-          list = await fetchCharactersByScenario(scenarioId)
-        } else {
-          list = view?.character ? [view.character] : []
-        }
+        const scenarioId = view?.scenario_id || view?.character?.scenario_id
+        // Characters live in a library: the campaign's own cast comes first,
+        // then the shared library, so a world-less character can still be
+        // swapped for a local one mid-game.
+        const [own, library] = await Promise.all([
+          scenarioId ? fetchCharactersByScenario(scenarioId).catch(() => []) : Promise.resolve([]),
+          fetchLibraryCharacters().catch(() => []),
+        ])
+        const seen = new Set()
+        const list = []
+        ;[...(own || []), ...(library || []), ...(view?.character ? [view.character] : [])].forEach((c) => {
+          if (!c || seen.has(c.id)) return
+          seen.add(c.id)
+          list.push(c)
+        })
         if (cancelled) return
-        setCharacters(Array.isArray(list) ? list : [])
+        setCharacters(list)
         const initial = list.find((c) => c.id === picks.character_id)
           || list.find((c) => c.is_player)
           || list[0]
@@ -59,15 +68,16 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
   const outfits = Array.from(new Set(looks.map((l) => l.outfit)))
 
   const handleSave = async () => {
-    if (!character || !selectedLook) return
+    // A character without art is still a valid pick: the portrait is optional.
+    if (!character) return
     setSaving(true)
     setError('')
     try {
       await setCampaignCharacter(campaignId, {
         character_id: character.id,
-        look_id: selectedLook.id,
-        outfit: selectedLook.outfit,
-        expression: selectedLook.expression,
+        look_id: selectedLook?.id || '',
+        outfit: selectedLook?.outfit || '',
+        expression: selectedLook?.expression || '',
         name: character.name,
       })
       setSaved(true)
@@ -103,7 +113,7 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
             <p className="text-xs text-rose-300 mb-4">{error}</p>
           )}
           {!loading && characters.length === 0 && (
-            <p className="text-xs text-white/30">这个情景还没有配置角色包。</p>
+            <p className="text-xs text-white/30">角色库还是空的：去首页「角色库」创建一个角色，这里就能挑选。</p>
           )}
 
           {!loading && characters.length > 0 && character && (
@@ -127,9 +137,14 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
                   {character.description && (
                     <p className="text-xs text-white/45 mt-3 leading-relaxed">{character.description}</p>
                   )}
+                  {looks.length === 0 && (
+                    <p className="text-[10px] text-white/30 mt-3 leading-relaxed">
+                      这个角色还没有立绘，叙事照常进行，只是不会被画进插图。
+                    </p>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                <div className={(looks.length > 0 ? 'grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5' : 'hidden')}>
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2">
                       服装
@@ -172,7 +187,7 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
                 <div className="flex items-center gap-3">
                   <button
                     onClick={handleSave}
-                    disabled={saving || !selectedLook}
+                    disabled={saving || !character}
                     className="px-6 py-2.5 rounded-xl bg-white text-black text-xs font-bold tracking-widest uppercase hover:bg-gray-200 disabled:opacity-40 transition-all"
                   >
                     {saving ? '保存中…' : '保存形象'}

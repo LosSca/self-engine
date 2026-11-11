@@ -13,6 +13,7 @@ const SetupWizard = lazy(() => import('./components/SetupWizard'))
 const KnowledgeStudio = lazy(() => import('./components/KnowledgeStudio'))
 const WorldStudio = lazy(() => import('./components/WorldStudio'))
 const StorylineStudio = lazy(() => import('./components/StorylineStudio'))
+const CharacterLibrary = lazy(() => import('./components/CharacterLibrary'))
 
 // 懒加载期间的占位：同款全屏底色与文案，避免空白闪一下。
 const ChunkFallback = () => (
@@ -214,6 +215,17 @@ function Home() {
           <p className="text-white/30 max-w-xl text-xs sm:text-sm font-light leading-relaxed px-2">
             先选择一种世界类型，或从空白开始搭建你自己的文字冒险。
           </p>
+          <div className="hero-emblem mt-6 flex items-center gap-3">
+            <Link
+              to="/characters"
+              className="px-6 py-3 rounded-2xl border border-white/10 text-white/60 hover:text-white hover:border-white/40 transition-all text-[10px] font-bold tracking-[0.2em] uppercase"
+            >
+              角色库
+            </Link>
+            <span className="text-[10px] text-white/25 font-mono tracking-widest">
+              角色独立于世界，开局时任意挑选
+            </span>
+          </div>
         </header>
 
         {/* 世界类型选择 */}
@@ -471,6 +483,14 @@ export default function App() {
             }
           />
           <Route path="/play" element={<PlayGate />} />
+          <Route
+            path="/characters"
+            element={
+              <Suspense fallback={<ChunkFallback />}>
+                <CharacterLibrary open onClose={() => window.location.href = '/'} />
+              </Suspense>
+            }
+          />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>

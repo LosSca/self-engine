@@ -271,6 +271,42 @@ def _load_setup_answers_for_campaign(campaign_id: str) -> dict:
         return {}
 
 
+def _load_player_character_for_campaign(campaign_id: str) -> dict:
+    """Load the library character the player brought into this campaign.
+
+    The character is authored outside the world, so the campaign only stores
+    the picks (character id / look). Returns an empty dict when nothing was
+    picked, which keeps the prompt exactly as it was before.
+    """
+    try:
+        with ScenarioStore(_scenario_db_path()) as store:
+            campaign = store.get_campaign(campaign_id)
+            if not campaign:
+                return {}
+            picks = campaign.character_picks or {}
+            character = store.get_character(picks.get("character_id") or "")
+            if not character:
+                return {}
+            look = store.get_look(picks.get("look_id") or "")
+            if look is None:
+                look = character.look_for(
+                    picks.get("outfit") or "", picks.get("expression") or "",
+                )
+            return {
+                "id": character.id,
+                "name": picks.get("name") or character.name,
+                "role": character.role,
+                "description": character.description,
+                "portrait_url": character.portrait_url,
+                "outfit": look.outfit if look else picks.get("outfit", ""),
+                "expression": look.expression if look else picks.get("expression", ""),
+                "image_url": look.image_url if look else "",
+            }
+    except Exception:
+        logger.debug("Could not load player character for %s", campaign_id)
+        return {}
+
+
 def _ensure_session(campaign_id: str) -> GameSession:
     """Get or create a GameSession, ensuring all in-memory state is rebuilt.
 
@@ -319,6 +355,7 @@ def _ensure_session(campaign_id: str) -> GameSession:
         opening_narrative=opening,
         story_cards=story_cards,
         setup_answers=setup_answers,
+        player_character=_load_player_character_for_campaign(campaign_id),
         combat_enabled=combat_enabled,
         knowledge_context=knowledge_context,
         knowledge_provider=lambda: _load_knowledge_context_for_campaign(campaign_id),
@@ -810,12 +847,16 @@ async def get_scenario_view(campaign_id: str):
 
     with ScenarioStore(_scenario_db_path()) as store:
         characters = [_character_dict(c) for c in store.list_characters(scenario.id)]
+    # The character the player actually brought in, so the client can show the
+    # same protagonist the narrator was told about.
+    player_character = _load_player_character_for_campaign(campaign_id)
 
     return {
         "title": scenario.title,
         "language": scenario.language,
         "world_type": scenario.world_type,
         "characters": characters,
+        "player_character": player_character or None,
         "opening_narrative": opening,
         "tone_instructions": interpolate(
             scenario.tone_instructions, answers, context=f"{ctx_root}:tone",

@@ -100,3 +100,46 @@ def test_delete_scenario_removes_characters_and_looks(store, scenario):
     assert store.delete_scenario(scenario.id) is True
     assert store.get_character(hero.id) is None
     assert store.get_look(look.id) is None
+
+def test_library_characters_belong_to_every_scenario(store, scenario):
+    library = store.add_character("", name="雾行者", role="游侠")
+    own = store.add_character(scenario.id, name="当地人")
+    other = store.create_scenario(title="另一世界", language="zh")
+    store.add_character(other.id, name="彼方人")
+
+    assert library.scenario_id == ""
+    assert [c.id for c in store.list_library_characters()] == [library.id]
+    # A library character is offered everywhere; the other world member is not.
+    assert {c.id for c in store.list_characters(scenario.id)} == {library.id, own.id}
+    assert [c.id for c in store.list_characters(other.id)][0] == library.id
+
+
+def test_deleting_a_scenario_keeps_the_library(store, scenario):
+    library = store.add_character("", name="雾行者")
+    store.add_character(scenario.id, name="当地人")
+
+    assert store.delete_scenario(scenario.id) is True
+    assert [c.id for c in store.list_library_characters()] == [library.id]
+
+
+def test_migration_keeps_existing_characters(tmp_path):
+    """A database written before characters became library-wide still opens."""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    with ScenarioStore(str(path)) as s:
+        hero = s.add_character("sc1", name="旧人", role="r", is_player=True)
+        s.add_look(hero.id, "旅装", "平静", "/media/legacy.png")
+
+    # Pretend the file predates migration 13 and re-open it.
+    conn = sqlite3.connect(str(path))
+    conn.execute("DELETE FROM schema_version WHERE version = 13")
+    conn.commit()
+    conn.close()
+
+    with ScenarioStore(str(path)) as s:
+        assert s._get_schema_version() >= 13
+        loaded = s.get_character(hero.id)
+        assert loaded is not None and loaded.scenario_id == "sc1"
+        assert [l.image_url for l in loaded.looks] == ["/media/legacy.png"]
+        assert [c.id for c in s.list_characters("sc1")] == [hero.id]

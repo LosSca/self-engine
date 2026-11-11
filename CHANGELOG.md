@@ -22,6 +22,19 @@
 - **叙事语言**：`WorldDefinition.language` 决定描述语言，确定性叙事器、效果描述与模型调用三处都遵守。
 - **起步世界预设**：奇幻村庄、轨道站、雾镇、荒野营地，中英双语，`GET /api/v1/world-presets`。
 
+### Added（角色库：角色不再属于世界）
+
+- **全局角色库**：`GET /api/characters` 列出不属于任何世界的角色，`POST /api/characters` 直接创建，
+  `POST /api/characters/{id}/library/import` 把世界里的角色复制一份收进库（幂等，源行不动）。
+  `scenario_store` 迁移到 13：`scenario_characters.scenario_id` 允许空串表示库角色，行按 `SELECT ... INSERT ... DROP ... RENAME` 原样搬迁；
+  `delete_scenario` 只清理属于该世界的行，删世界不清库。
+- **跨世界选角**：`PUT /api/campaigns/{cid}/character` 删掉了「角色属于另一个世界」的 409，
+  任何世界都能用库里任何一个角色开局；`GET /api/scenarios/{id}/characters` 改为「本世界的角色 + 库角色」。
+- **开局叙事知道你是谁**：`GameSession` 新增 `player_character` 参数，`_build_character_setup_block()`
+  在玩家没填自定义设定时也会把「玩家角色：名字 / 身份 / 描述」注入叙事上下文。
+- **前端**：首页新增「角色库」页（`/characters`，`CharacterLibrary.jsx`：创建、改名、换身份、立绘差分的增删改、收录世界角色）；
+  SetupWizard 的角色步骤同时列本世界角色与库角色并标「· 库」，没有立绘的角色不再被整步跳过；
+  CharacterProfilePanel 的候选列表同样合并两处。
 ### Added（自定义 OpenAI 兼容供应商）
 
 - **接任何兼容接口**：`app/config.py` 新增 `custom_llm_base_url` / `custom_llm_api_key` / `custom_llm_model`，

@@ -576,6 +576,25 @@ export async function setCampaignCharacter(campaignId, picks) {
   return jsonOrThrow(r, '保存角色形象失败')
 }
 
+export async function fetchLibraryCharacters() {
+  const r = await fetch(`${BASE}/characters`)
+  return jsonOrThrow(r, '读取角色库失败')
+}
+
+export async function createLibraryCharacter(data) {
+  const r = await fetch(`${BASE}/characters`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return jsonOrThrow(r, '创建角色失败')
+}
+
+export async function importCharacterToLibrary(characterId) {
+  const r = await fetch(`${BASE}/characters/${characterId}/library/import`, { method: 'POST' })
+  return jsonOrThrow(r, '收录到角色库失败')
+}
+
 // ---------------------------------------------------------------- knowledge / play mode
 const V1 = '/api/v1'
 

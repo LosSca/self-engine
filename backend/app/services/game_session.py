@@ -112,6 +112,7 @@ class GameSession:
         opening_narrative: str = "",
         story_cards: list | None = None,
         setup_answers: dict | None = None,
+        player_character: dict | None = None,
         combat_enabled: bool = True,
         knowledge_context: str = "",
         knowledge_provider=None,
@@ -142,6 +143,10 @@ class GameSession:
             scenario_tone, self._setup_answers,
             context=f"campaign:{campaign_id}:tone",
         )
+        # The character the player brought into this campaign (authored in the
+        # library, not in the scenario). It is injected into the prompt so the
+        # prose uses the name and role the player actually picked.
+        self._player_character = player_character or {}
         self._character_setup_block = self._build_character_setup_block()
         self._narrator = narrator
         from app.engines.auditor_engine import AuditorEngine
@@ -574,11 +579,14 @@ class GameSession:
         )
 
     def _build_character_setup_block(self) -> str:
-        """Format setup_answers into a CHARACTER SETUP block injected into the
-        narrator's system prompt. Returns empty string when no answers exist."""
-        if not self._setup_answers:
-            return ""
-        lines: list[str] = ["CHARACTER SETUP (locked from session start):"]
+        """Format the player identity into a CHARACTER SETUP block for the prompt.
+
+        The block combines the setup answers and the character the player
+        brought in from the library, and is injected into the narrator system
+        prompt. Returns an empty string when neither exists."""
+        lines: list[str] = []
+        if self._setup_answers:
+            lines.append("CHARACTER SETUP (locked from session start):")
         for answer in self._setup_answers.values():
             if not isinstance(answer, dict):
                 continue
@@ -590,9 +598,34 @@ class GameSession:
             lines.append(f"- {var_name}: {value}")
             if description:
                 lines.append(f"  {description}")
-        if len(lines) == 1:  # only the header
+        player_lines = self._player_character_lines()
+        if player_lines:
+            if not lines:
+                lines.append("CHARACTER SETUP (locked from session start):")
+            lines.extend(player_lines)
+        if len(lines) <= 1:  # header only, nothing to say
             return ""
         return "\n".join(lines)
+
+    def _player_character_lines(self) -> "list[str]":
+        """The library character bound to this campaign, as prompt lines.
+
+        The character is authored outside the world, so the narrator has to be
+        told who the protagonist is explicitly; otherwise it invents a name.
+        Returns an empty list when no character was picked.
+        """
+        character = self._player_character or {}
+        name = str(character.get("name") or "").strip()
+        if not name:
+            return []
+        lines = [f"- player character: {name}"]
+        role = str(character.get("role") or "").strip()
+        if role:
+            lines.append(f"  role: {role}")
+        description = str(character.get("description") or "").strip()
+        if description:
+            lines.append(f"  {description}")
+        return lines
 
     def _init_player_power(self) -> int:
         """Sync default — overridden by _rebuild_player_power or _ensure_player_power."""

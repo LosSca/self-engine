@@ -1,9 +1,15 @@
-"""Character pack API: per-scenario characters and their appearance variants.
+"""Character pack API: the character library and its appearance variants.
 
 A character is configuration (name, role, description, portrait). Each variant
 ("look") pairs an outfit with an expression and one image, so the UI can show a
 portrait that matches the current costume and mood. Campaigns store only the
 player's chosen ids, so game state is never copied into art metadata.
+
+Characters are authored once in a global library (``/characters``) and can be
+brought into any world: a campaign binds whatever character the player picked,
+regardless of which scenario it was authored under. The per-scenario route
+(``/scenarios/{id}/characters``) still exists and returns that scenario own
+characters plus the shared library, so older clients keep working.
 """
 from __future__ import annotations
 
@@ -125,6 +131,59 @@ def create_character(scenario_id: str, req: CharacterCreate):
         return _character_dict(character)
 
 
+# -- character library -------------------------------------------------
+# A character is no longer owned by one scenario: it is authored once and
+# can be brought into any world. These routes are the library surface.
+
+
+@router.get("/characters")
+def list_library_characters():
+    """Every character authored outside a scenario (the shared library)."""
+    with _get_store() as store:
+        return [_character_dict(c) for c in store.list_library_characters()]
+
+
+@router.post("/characters", status_code=201)
+def create_library_character(req: CharacterCreate):
+    """Create a character that belongs to no scenario."""
+    with _get_store() as store:
+        character = store.add_character(
+            "",
+            name=req.name.strip(),
+            role=req.role.strip(),
+            description=req.description,
+            portrait_url=req.portrait_url,
+            is_player=req.is_player,
+        )
+        return _character_dict(character)
+
+
+@router.post("/characters/{character_id}/library/import", status_code=201)
+def import_character_to_library(character_id: str):
+    """Copy a scenario-owned character into the library, keeping its looks.
+
+    The original row is left untouched so existing campaigns that reference
+    it keep resolving; the copy is the one that becomes world-independent.
+    """
+    with _get_store() as store:
+        source = store.get_character(character_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Character not found")
+        if not source.scenario_id:
+            return _character_dict(source)
+        clone = store.add_character(
+            "",
+            name=source.name,
+            role=source.role,
+            description=source.description,
+            portrait_url=source.portrait_url,
+            is_player=source.is_player,
+        )
+        for look in source.looks:
+            store.add_look(clone.id, look.outfit, look.expression, look.image_url)
+        return _character_dict(store.get_character(clone.id) or clone)
+
+
 @router.get("/characters/{character_id}")
 def get_character(character_id: str):
     with _get_store() as store:
@@ -214,10 +273,9 @@ def set_campaign_character(campaign_id: str, req: CampaignCharacterUpdate):
         character = store.get_character(req.character_id) if req.character_id else None
         if req.character_id and not character:
             raise HTTPException(status_code=404, detail="Character not found")
-        if character and character.scenario_id != campaign.scenario_id:
-            raise HTTPException(
-                status_code=409, detail="Character belongs to another scenario"
-            )
+        # A character is no longer tied to the scenario it was authored under:
+        # the player may bring any character into any world. Only a missing
+        # character is an error.
         look = store.get_look(req.look_id) if req.look_id else None
         if req.look_id and not look:
             raise HTTPException(status_code=404, detail="Look not found")
