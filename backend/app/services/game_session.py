@@ -117,6 +117,8 @@ class GameSession:
         knowledge_provider=None,
     ):
         self.campaign_id = campaign_id
+        # True while the player is away: no turns, no background world ticks.
+        self.paused = False
         self.language = language
         # Fire-and-forget side-effect tasks (world tick, journal, graph sync).
         self._pending_tasks: set[asyncio.Task] = set()
@@ -1245,6 +1247,10 @@ class GameSession:
 
     async def process_action(self, player_input: str, max_tokens: int = 2000) -> AsyncIterator[str]:
         self._max_tokens = max_tokens
+        # A paused session belongs to a player who left: it must not keep
+        # narrating or spawning background ticks. resume() reopens it.
+        if getattr(self, "paused", False):
+            raise RuntimeError("game session is paused")
 
         # Ensure player power is evaluated with full context (runs once per campaign)
         await self._ensure_player_power()
@@ -1317,6 +1323,23 @@ class GameSession:
         # drain_pending_tasks().
         if mode != NarrativeMode.META:
             self._spawn_world_tick(narrative_time)
+
+    def pause(self) -> None:
+        """Stop this session: the player left, so the world stops with them.
+
+        Fire-and-forget work spawned by the last turn is cancelled rather than
+        left to finish: a tick that lands after the player left would advance a
+        world nobody is watching, and would desynchronise the next entry.
+        """
+        self.paused = True
+        for task in list(getattr(self, "_pending_tasks", []) or []):
+            if not task.done():
+                task.cancel()
+        self._pending_auto_plot_chunks = []
+
+    def resume(self) -> None:
+        """Reopen this session without catching up on real time."""
+        self.paused = False
 
     def _spawn_world_tick(self, narrative_time: int) -> None:
         """Run the world tick off the response path and keep its framing.

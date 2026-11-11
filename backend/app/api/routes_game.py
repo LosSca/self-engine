@@ -829,6 +829,48 @@ async def _maybe_generate_opening(
     return text
 
 
+@router.post("/{campaign_id}/pause")
+async def pause_campaign(campaign_id: str):
+    """Pause a campaign: the player has left, so nothing advances.
+
+    The legacy session holds fire-and-forget world ticks; pausing cancels
+    them and refuses further turns. Nothing is ever computed from wall-clock
+    time, so there is no offline catch-up to undo on resume.
+    """
+    session = _sessions.get(campaign_id)
+    if session is not None:
+        session.pause()
+    return {"status": "ok", "campaign_id": campaign_id, "paused": True, "session_cached": session is not None}
+
+
+@router.post("/{campaign_id}/resume")
+async def resume_campaign(campaign_id: str):
+    """Resume a campaign exactly where the player left it.
+
+    The session is rebuilt from stored events rather than carried in memory,
+    which is what makes "no offline time passed" true by construction.
+    """
+    session = _sessions.get(campaign_id)
+    if session is not None:
+        session.resume()
+    else:
+        _sessions.pop(campaign_id, None)
+    return {"status": "ok", "campaign_id": campaign_id, "paused": False}
+
+
+@router.get("/{campaign_id}/clock")
+async def get_campaign_clock(campaign_id: str):
+    """Report whether this campaign is running, paused or simply not loaded."""
+    session = _sessions.get(campaign_id)
+    return {
+        "campaign_id": campaign_id,
+        "state": "paused" if session is not None and getattr(session, "paused", False) else (
+            "running" if session is not None else "idle"
+        ),
+        "session_cached": session is not None,
+    }
+
+
 @router.patch("/{campaign_id}/settings")
 async def update_campaign_settings(campaign_id: str, req: CampaignSettingsRequest):
     """Persist campaign-level toggles (e.g. combat mode on/off)."""
