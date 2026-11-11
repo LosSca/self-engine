@@ -35,6 +35,7 @@ import {
   exportCampaign,
   importCampaign,
   generateWorldFromPrompt,
+  authorScenario,
   fetchWorks,
   enterWork,
 } from '../api'
@@ -1481,6 +1482,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [worksBusy, setWorksBusy] = useState(false)
   const [selectedWork, setSelectedWork] = useState('')
   const [selectedCharacter, setSelectedCharacter] = useState('')
+  const [authorPrompt, setAuthorPrompt] = useState('')
+  const [authorBusy, setAuthorBusy] = useState(false)
+  const [authorDryRun, setAuthorDryRun] = useState(true)
+  const [authorResult, setAuthorResult] = useState(null)
 
   const report = useCallback((err) => {
     if (Array.isArray(err && err.detail)) setErrors(err.detail)
@@ -1699,6 +1704,31 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       report(err)
     } finally {
       setWorksBusy(false)
+    }
+  }
+
+  const authorCurrentScenario = async () => {
+    if (!authorPrompt.trim() || authorBusy) return
+    setAuthorBusy(true)
+    setErrors([])
+    setNotice('')
+    setAuthorResult(null)
+    try {
+      const result = await authorScenario({
+        prompt: authorPrompt,
+        scenarioId: scenarioId || '',
+        save: !authorDryRun,
+      })
+      setAuthorResult(result)
+      if (result.status === 'saved') {
+        const list = await fetchWorlds(scenarioId || undefined)
+        setWorlds(list || [])
+        setNotice(`剧本已保存：${result.scenario_title}`)
+      }
+    } catch (err) {
+      report(err)
+    } finally {
+      setAuthorBusy(false)
     }
   }
 
@@ -2448,6 +2478,82 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
             </div>
           )}
 
+          {tab === 'author' && (
+            <div className="flex flex-col gap-5">
+              <SectionNote>
+                一句话描述想要的剧本，模型会一次返回世界、知识与剧情线三件东西。每件都会重新过一遍结构校验：不合法的部分被丢掉并列进警告，合法的部分照常保存。默认只做试运行，不写入任何数据。
+              </SectionNote>
+
+              <textarea
+                className={inputClass + ' min-h-[6rem]'}
+                placeholder="例如：一座被雾笼罩的港口小城，守夜人守着打不开的仓库。"
+                value={authorPrompt}
+                onChange={(e) => setAuthorPrompt(e.target.value)}
+                aria-label="剧本提示词"
+              />
+
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-[11px] text-white/50">
+                  <input
+                    type="checkbox"
+                    checked={authorDryRun}
+                    onChange={(e) => setAuthorDryRun(e.target.checked)}
+                  />
+                  只试运行，不保存
+                </label>
+                <button
+                  className={primaryButton}
+                  disabled={authorBusy || !authorPrompt.trim() || !scenarioId}
+                  onClick={authorCurrentScenario}
+                >
+                  {authorBusy ? '生成中…' : authorDryRun ? '试运行' : '生成并保存'}
+                </button>
+                {!scenarioId && (
+                  <span className="text-[11px] text-amber-300/70">先选一个场景，剧本才会保存到它名下。</span>
+                )}
+              </div>
+
+              {authorResult && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                  <div className="text-sm font-bold text-white">
+                    {authorResult.status === 'saved' ? '已保存' : '试运行结果'}
+                    <span className="ml-2 text-[10px] font-mono uppercase tracking-[0.2em] text-white/35">
+                      {authorResult.scenario_title}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(authorResult.counts || {}).map(([key, value]) => (
+                      <Badge key={key} tone="info">
+                        {key} {value}
+                      </Badge>
+                    ))}
+                  </div>
+                  {(authorResult.warnings || []).length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-amber-300/60 mb-1">
+                        被拒绝的部分
+                      </div>
+                      <ul className="flex flex-col gap-1">
+                        {authorResult.warnings.map((item, index) => (
+                          <li key={index} className="text-[11px] text-amber-200/70 leading-relaxed">
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {authorResult.world_id && authorResult.world_saved && (
+                    <button
+                      className={ghostButton}
+                      onClick={() => selectWorld(authorResult.world_id).then(() => setTab('map'))}
+                    >
+                      打开这个世界
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {world && tab === 'debug' && (
             <div className="flex flex-col gap-5">
               <SectionNote>

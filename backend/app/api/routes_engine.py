@@ -746,6 +746,125 @@ async def generate_world(body: GenerateWorldRequest):
         scenario_store.close()
 
 
+class AuthorScenarioRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    scenario_id: str = ""
+    title: str = Field("", max_length=120)
+    preset_id: str = ""
+    language: str = "中文"
+    location_count: int = Field(6, ge=3, le=12)
+    #: Persist what came back.  Validation still runs when False, which makes
+    #: this a dry run of the authoring pipeline.
+    save: bool = True
+
+
+class AuthorScenarioResponse(BaseModel):
+    status: str
+    scenario_id: str = ""
+    scenario_title: str = ""
+    world_id: str = ""
+    world_saved: bool = False
+    storyline_saved: bool = False
+    knowledge_ids: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    counts: Dict[str, int] = Field(default_factory=dict)
+
+
+@router.post("/scenarios/author", response_model=AuthorScenarioResponse)
+async def author_scenario(body: AuthorScenarioRequest):
+    """Draft a whole scenario (world + knowledge + storyline) from one prompt.
+
+    Everything the model returns is validated again here before it is stored.
+    A partially valid draft is kept and its rejects are reported as warnings.
+    """
+    from uuid import uuid4
+
+    from app.services import ai_generator, scenario_author
+
+    scenario_store = _get_scenario_store()
+    game_store = _get_store()
+    try:
+        preset = (
+            scenario_store.get_model_preset(body.preset_id) if body.preset_id else None
+        )
+        if body.preset_id and preset is None:
+            raise HTTPException(
+                status_code=400, detail=f"unknown model preset '{body.preset_id}'"
+            )
+
+        scenario_id = body.scenario_id.strip()
+        title = body.title.strip() or body.prompt.strip()[:40]
+        if scenario_id:
+            if scenario_store.get_scenario(scenario_id) is None:
+                raise HTTPException(status_code=404, detail="unknown scenario")
+        elif body.save:
+            scenario = scenario_store.create_scenario(
+                title=title, language="zh" if body.language == "中文" else "en"
+            )
+            scenario_id = scenario.id
+        else:
+            scenario_id = "draft"
+
+        router_obj = ai_generator.router_for(preset)
+        if router_obj is None:
+            raise HTTPException(
+                status_code=503,
+                detail="未配置可用模型：请先设置供应商密钥或本地模型",
+            )
+        world_id = f"ai_{uuid4().hex[:8]}"
+        try:
+            draft = await scenario_author.author_scenario(
+                router_obj,
+                body.prompt,
+                world_id,
+                scenario_id,
+                body.language,
+                body.location_count,
+            )
+        except ai_generator.GenerationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        world = draft.get("world")
+        counts = {
+            "locations": len(world.locations) if world else 0,
+            "items": len(world.items) if world else 0,
+            "entities": len(world.entities) if world else 0,
+            "events": len(world.events) if world else 0,
+            "knowledge": len(draft.get("knowledge") or []),
+            "story_nodes": len(draft["storyline"].nodes) if draft.get("storyline") else 0,
+        }
+        if not body.save:
+            return AuthorScenarioResponse(
+                status="draft",
+                scenario_id=body.scenario_id,
+                scenario_title=title,
+                warnings=list(draft.get("warnings") or []),
+                counts=counts,
+            )
+        applied = scenario_author.apply_authored_scenario(
+            scenario_store,
+            game_store,
+            draft,
+            scenario_id,
+            title,
+            body.language,
+        )
+        return AuthorScenarioResponse(
+            status="saved",
+            scenario_id=applied["scenario_id"],
+            scenario_title=applied["scenario_title"],
+            world_id=applied["world_id"],
+            world_saved=applied["world_saved"],
+            storyline_saved=applied["storyline_saved"],
+            knowledge_ids=applied["knowledge_ids"],
+            warnings=applied["warnings"],
+            counts=counts,
+        )
+    finally:
+        game_store.close()
+        scenario_store.close()
+
+
 @router.get("/worlds/{world_id}", response_model=WorldDefinition)
 def get_world(world_id: str):
     store = _get_store()

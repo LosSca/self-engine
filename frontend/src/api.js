@@ -813,6 +813,30 @@ export async function submitAction(campaignId, { action, targetId = null, params
   return r.json()
 }
 
+export async function authorScenario({
+  prompt,
+  scenarioId = '',
+  title = '',
+  presetId = '',
+  language = '中文',
+  locationCount = 6,
+  save = true,
+} = {}) {
+  const r = await fetch(`${V1}/scenarios/author`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      scenario_id: scenarioId,
+      title,
+      preset_id: presetId,
+      language,
+      location_count: locationCount,
+      save,
+    }),
+  })
+  return jsonOrThrow(r, '生成剧本失败')
+}
 export async function fetchWorlds(scenarioId) {
   const query = scenarioId ? `?scenario_id=${encodeURIComponent(scenarioId)}` : ''
   const r = await fetch(`${V1}/worlds${query}`)
