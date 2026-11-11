@@ -14,6 +14,7 @@ import {
   fetchCampaigns,
   fetchEventExecutions,
   fetchQuestProgress,
+  progressQuestObjective,
   fetchCampaignStory,
   fetchWorld,
   fetchWorldMap,
@@ -1625,6 +1626,26 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     }
   }, [open, tab, campaignId, debugNonce])
 
+  /**
+   * Manual progress is an authoring/debug action, not a player action: it goes
+   * through the same commit path as an action (validated effect, new state
+   * version, domain event) so the campaign's history stays coherent. The
+   * backend refuses it outside the debug/dev environment.
+   */
+  const progressObjective = async (questId, objectiveId) => {
+    if (!campaignId) return
+    setNotice('')
+    setErrors([])
+    try {
+      await progressQuestObjective(campaignId, questId, objectiveId, 1)
+      const progress = await fetchQuestProgress(campaignId).catch(() => null)
+      setDebug((prev) => ({ ...prev, progress }))
+      setDebugNonce((value) => value + 1)
+    } catch (err) {
+      report(err)
+    }
+  }
+
   const selectWorld = async (id) => {
     setPlayCampaignId('')
     setErrors([])
@@ -2885,9 +2906,19 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                         </div>
                         <ul className="mt-2 text-[11px] text-white/50 space-y-1">
                           {quest.objectives.map((objective) => (
-                            <li key={objective.id}>
-                              {objective.done ? '✓' : '·'} {objective.description || objective.id}（
-                              {objective.count}/{objective.required_count}，{objective.kind} → {objective.target}）
+                            <li key={objective.id} className="flex flex-wrap items-center gap-2">
+                              <span>
+                                {objective.done ? '✓' : '·'} {objective.description || objective.id}（
+                                {objective.count}/{objective.required_count}，{objective.kind} → {objective.target}）
+                              </span>
+                              {!objective.done && quest.status === 'active' && (
+                                <button
+                                  className="text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+                                  onClick={() => progressObjective(quest.quest_id, objective.id)}
+                                >
+                                  手动推进
+                                </button>
+                              )}
                             </li>
                           ))}
                         </ul>

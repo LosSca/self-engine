@@ -29,6 +29,10 @@ TYPED_PATHS = [
     ("get", "/api/v1/campaigns/{campaign_id}/quest-progress"),
     ("get", "/api/v1/campaigns/{campaign_id}/event-executions"),
     ("get", "/api/v1/actions/{request_id}"),
+    ("get", "/api/v1/worlds/{world_id}/quests"),
+    ("post", "/api/v1/worlds/{world_id}/quests"),
+    ("get", "/api/v1/worlds/{world_id}/quests/{quest_id}"),
+    ("patch", "/api/v1/worlds/{world_id}/quests/{quest_id}"),
     ("get", "/api/v1/works"),
     ("get", "/api/v1/works/{title}"),
     ("post", "/api/v1/works/resolve"),
@@ -40,10 +44,16 @@ def _schema() -> dict:
     return app.openapi()
 
 
+SUCCESS_CODES = ("200", "201", "202")
+
+
 def _response_schema(schema: dict, path: str, method: str) -> dict:
     operation = schema["paths"][path][method]
-    ok = operation["responses"]["200"]
-    return ok["content"]["application/json"]["schema"]
+    for code in SUCCESS_CODES:
+        ok = operation["responses"].get(code)
+        if ok is not None:
+            return ok["content"]["application/json"]["schema"]
+    raise AssertionError(f"{method.upper()} {path} declares no success response")
 
 
 def test_every_listed_route_publishes_a_shape():

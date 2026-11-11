@@ -1077,6 +1077,17 @@ export async function fetchQuestProgress(campaignId) {
   return jsonOrThrow(r, '读取任务进度失败')
 }
 
+export async function progressQuestObjective(campaignId, questId, objectiveId, amount = 1, requestId = '') {
+  const r = await fetch(
+    `${V1}/campaigns/${campaignId}/quests/${encodeURIComponent(questId)}/objectives/${encodeURIComponent(objectiveId)}/progress`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, request_id: requestId }),
+    }
+  )
+  return jsonOrThrow(r, '推进任务目标失败')
+}
 export async function fetchEventExecutions(campaignId, { status = '', limit = 100, afterVersion = 0 } = {}) {
   const params = new URLSearchParams()
   if (status) params.set('status', status)

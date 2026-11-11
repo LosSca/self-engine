@@ -28,11 +28,13 @@ from app.models.game import (
     ActionRequest,
     CustomActionDef,
     DoorDef,
+    Effect,
     EntityDef,
     GameEventDef,
     GameState,
     ItemDef,
     LocationDef,
+    ObjectiveDef,
     QuestDef,
     WorldDefinition,
 )
@@ -1728,6 +1730,83 @@ def get_quest_progress(campaign_id: str):
     }
 
 
+class ProgressObjectiveBody(BaseModel):
+    """An author or debugger asserting that one objective advanced."""
+
+    amount: int = Field(1, ge=1, le=100)
+    request_id: str = Field(
+        "", max_length=128, description="replays of the same id are not applied twice"
+    )
+
+
+@router.post(
+    "/campaigns/{campaign_id}/quests/{quest_id}/objectives/{objective_id}/progress",
+    response_model=ActionResult,
+)
+async def progress_quest_objective(
+    campaign_id: str,
+    quest_id: str,
+    objective_id: str,
+    body: ProgressObjectiveBody,
+):
+    """Advance one objective as an author, through the normal commit path.
+
+    This exists so the editor can demonstrate a quest without playing it out.
+    It is a state change, so it is gated exactly like the other state-changing
+    debug tools (403 in a production install), skips the rule check the player
+    would have to pass, and is still written as one transactional commit plus
+    domain events, which keeps the campaign's history and idempotency intact.
+    """
+    _require_debug_tools()
+    game_store = _get_store()
+    try:
+        state = game_store.get_state(campaign_id)
+        if state is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"campaign '{campaign_id}' has no bound world",
+            )
+        world = _world_or_404(game_store, state.world_id)
+    finally:
+        game_store.close()
+
+    quest = next((q for q in world.quests if q.id == quest_id), None)
+    if quest is None:
+        raise HTTPException(status_code=404, detail=f"unknown quest '{quest_id}'")
+    objective = next((o for o in quest.objectives if o.id == objective_id), None)
+    if objective is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"quest '{quest_id}' has no objective '{objective_id}'",
+        )
+    progress = state.quests.get(quest_id)
+    if progress is not None and progress.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail=f"quest '{quest_id}' is {progress.status}; only an active quest can advance",
+        )
+
+    from uuid import uuid4
+
+    request_id = body.request_id.strip() or f"author-progress-{uuid4().hex[:12]}"
+    service = _service()
+    try:
+        return await service.record_quest_progress(
+            campaign_id,
+            "quest_progress",
+            f"{quest_id}:{objective_id}",
+            request_id,
+            {"amount": body.amount},
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        service.store.close()
+        service.scenario_store.close()
+
+
 @router.get(
     "/campaigns/{campaign_id}/event-executions",
     response_model=List[EventExecutionView],
@@ -1979,6 +2058,103 @@ def delete_quest(world_id: str, quest_id: str):
     from app.services import world_editor
 
     return _edit_world(world_id, lambda world: world_editor.delete_quest(world, quest_id))
+
+
+@router.get("/worlds/{world_id}/quests", response_model=List[QuestDef])
+def list_world_quests(world_id: str):
+    """Read-only quest definitions of one world, in authored order."""
+    game_store = _get_store()
+    try:
+        return _world_or_404(game_store, world_id).quests
+    finally:
+        game_store.close()
+
+
+@router.post(
+    "/worlds/{world_id}/quests", response_model=WorldDefinition, status_code=201
+)
+def create_quest(world_id: str, body: QuestDef):
+    from app.services import world_editor
+
+    return _edit_world(world_id, lambda world: world_editor.upsert_quest(world, body))
+
+
+@router.get("/worlds/{world_id}/quests/{quest_id}", response_model=QuestDef)
+def get_world_quest(world_id: str, quest_id: str):
+    game_store = _get_store()
+    try:
+        world = _world_or_404(game_store, world_id)
+    finally:
+        game_store.close()
+    quest = next((item for item in world.quests if item.id == quest_id), None)
+    if quest is None:
+        raise HTTPException(status_code=404, detail=f"unknown quest '{quest_id}'")
+    return quest
+
+
+@router.patch(
+    "/worlds/{world_id}/quests/{quest_id}", response_model=WorldDefinition
+)
+def patch_quest(world_id: str, quest_id: str, body: QuestDef):
+    """Replace one quest; the path id is authoritative, never the body's."""
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id, lambda world: world_editor.upsert_quest(world, body, quest_id)
+    )
+
+
+@router.put(
+    "/worlds/{world_id}/quests/{quest_id}/objectives/{objective_id}",
+    response_model=WorldDefinition,
+)
+def upsert_quest_objective(
+    world_id: str, quest_id: str, objective_id: str, body: ObjectiveDef
+):
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id,
+        lambda world: world_editor.upsert_objective(world, quest_id, body, objective_id),
+    )
+
+
+@router.delete(
+    "/worlds/{world_id}/quests/{quest_id}/objectives/{objective_id}",
+    response_model=WorldDefinition,
+)
+def delete_quest_objective(world_id: str, quest_id: str, objective_id: str):
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id, lambda world: world_editor.delete_objective(world, quest_id, objective_id)
+    )
+
+
+@router.put(
+    "/worlds/{world_id}/quests/{quest_id}/rewards/{reward_id}",
+    response_model=WorldDefinition,
+)
+def upsert_quest_reward(world_id: str, quest_id: str, reward_id: str, body: Effect):
+    """One reward row; the path id is the effect kind (rewards carry no id)."""
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id,
+        lambda world: world_editor.upsert_reward(world, quest_id, body, reward_id),
+    )
+
+
+@router.delete(
+    "/worlds/{world_id}/quests/{quest_id}/rewards/{reward_id}",
+    response_model=WorldDefinition,
+)
+def delete_quest_reward(world_id: str, quest_id: str, reward_id: str):
+    from app.services import world_editor
+
+    return _edit_world(
+        world_id, lambda world: world_editor.delete_reward(world, quest_id, reward_id)
+    )
 
 
 @router.put(

@@ -710,3 +710,74 @@ async def test_inline_event_choices_queue_and_resolve(store):
     assert chosen.status == "applied"
     assert chosen.state.pending_choice is None
     assert chosen.state.flags.get("picked_b") is True
+
+
+# ------------------------------------------------- author/debug facts lane
+async def test_author_fact_reaches_quests_events_and_history(store):
+    """A tool-asserted fact settles like a turn: version, events, quest move."""
+    bound_world(store)
+    service = ActionService(store)
+    result = await service.record_quest_progress(
+        "camp-1", "quest_progress", "open_the_warehouse:find_key", "tool-1", {"amount": 1}
+    )
+    assert result.status == "applied"
+    assert result.state.quests["open_the_warehouse"].objectives["find_key"] == 1
+
+    kinds = [row["event_type"] for row in service.list_events("camp-1")]
+    assert "debug.asserted" in kinds
+    assert "quest.progressed" in kinds
+
+
+async def test_author_fact_is_idempotent(store):
+    bound_world(store)
+    service = ActionService(store)
+    first = await service.record_quest_progress(
+        "camp-1", "quest_progress", "open_the_warehouse:find_key", "tool-1", {"amount": 1}
+    )
+    second = await service.record_quest_progress(
+        "camp-1", "quest_progress", "open_the_warehouse:find_key", "tool-1", {"amount": 1}
+    )
+    assert second.state_version == first.state_version
+    assert store.get_state("camp-1").quests["open_the_warehouse"].objectives["find_key"] == 1
+
+
+async def test_author_fact_rejects_unknown_objective_without_writing(store):
+    bound_world(store)
+    service = ActionService(store)
+    result = await service.record_quest_progress(
+        "camp-1", "quest_progress", "open_the_warehouse:nope", "tool-2", {"amount": 1}
+    )
+    assert result.status == "rejected"
+    assert "nope" in result.message
+    before = store.get_state("camp-1")
+    assert before.version == 0 and before.turn == 0
+    assert before.quests["open_the_warehouse"].objectives["find_key"] == 0
+
+
+async def test_author_fact_rejects_bad_amount(store):
+    bound_world(store)
+    service = ActionService(store)
+    with pytest.raises(ValueError):
+        await service.record_quest_progress(
+            "camp-1", "quest_progress", "open_the_warehouse:find_key", "tool-3", {"amount": 0}
+        )
+
+
+async def test_author_fact_reach_moves_the_objective(store):
+    """A reach fact is consumed by reach_location objectives like a real move."""
+    world, _ = bound_world(store)
+    world.quests.append(
+        QuestDef(
+            id="tour",
+            title="Tour",
+            objectives=[
+                ObjectiveDef(id="see_village", kind="reach_location", target=world.start_location_id)
+            ],
+        )
+    )
+    save_world(store, world)
+    bind_world(store, "camp-1", world.world_id, reset=True)
+    service = ActionService(store)
+    result = await service.record_quest_progress("camp-1", "reach", world.start_location_id, "tool-4")
+    assert result.status == "applied"
+    assert store.get_state("camp-1").quests["tour"].objectives["see_village"] == 1

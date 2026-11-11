@@ -61,6 +61,68 @@ def _now() -> str:
     return datetime.utcnow().isoformat()
 
 
+#: Which authoritative fact an author-asserted call records from the world.
+#: These are the same fact kinds events, quests and the rules engine speak.
+FACT_KINDS = {
+    "reach": "reach_location",
+    "flag": "flag",
+    "obtain": "item_gained",
+    "open": "door_opened",
+    "quest_progress": "quest_progress",
+}
+
+
+def _settled_event_rows(
+    executions, quest_updates, version: int
+) -> List[Dict[str, Any]]:
+    """Domain-event rows for what one settled batch triggered.
+
+    Shared by the turn lane and the author/debug lane so both leave the same
+    audit trail in the event store.
+    """
+    rows: List[Dict[str, Any]] = []
+    for execution in executions:
+        rows.append(
+            {
+                "event_type": f"event.{execution.status}",
+                "payload": {
+                    "event_id": execution.event_id,
+                    "name": execution.name,
+                    "reason": execution.reason,
+                    "effects": [e.model_dump(mode="json") for e in execution.effects],
+                    "branch": execution.branch,
+                    "parent_event_id": execution.parent_event_id,
+                    "depth": execution.depth,
+                },
+                "state_version": version,
+            }
+        )
+    for update in quest_updates:
+        if update.error:
+            quest_type = "quest.reward_failed"
+        elif update.status == "completed":
+            quest_type = "quest.completed"
+        elif update.status == "failed":
+            quest_type = "quest.failed"
+        else:
+            quest_type = "quest.progressed"
+        payload = {"quest_id": update.quest_id, "objectives": update.objectives}
+        if update.error:
+            payload["error"] = update.error
+        if update.rewards_applied:
+            payload["rewards"] = [
+                effect.model_dump(mode="json") for effect in update.rewards_applied
+            ]
+        rows.append(
+            {
+                "event_type": quest_type,
+                "payload": payload,
+                "state_version": version,
+            }
+        )
+    return rows
+
+
 class ActionService:
     """Deterministic, transactional action processing."""
 
@@ -980,48 +1042,9 @@ class ActionService:
                 "state_version": new_state.version,
             }
         ]
-        for execution in executions:
-            events.append(
-                {
-                    "event_type": f"event.{execution.status}",
-                    "payload": {
-                        "event_id": execution.event_id,
-                        "name": execution.name,
-                        "reason": execution.reason,
-                        "effects": [e.model_dump(mode="json") for e in execution.effects],
-                        "branch": execution.branch,
-                        "parent_event_id": execution.parent_event_id,
-                        "depth": execution.depth,
-                    },
-                    "state_version": new_state.version,
-                }
-            )
-        for update in quest_updates:
-            if update.error:
-                quest_type = "quest.reward_failed"
-            elif update.status == "completed":
-                quest_type = "quest.completed"
-            elif update.status == "failed":
-                quest_type = "quest.failed"
-            else:
-                quest_type = "quest.progressed"
-            quest_payload = {
-                "quest_id": update.quest_id,
-                "objectives": update.objectives,
-            }
-            if update.error:
-                quest_payload["error"] = update.error
-            if update.rewards_applied:
-                quest_payload["rewards"] = [
-                    effect.model_dump(mode="json") for effect in update.rewards_applied
-                ]
-            events.append(
-                {
-                    "event_type": quest_type,
-                    "payload": quest_payload,
-                    "state_version": new_state.version,
-                }
-            )
+        events.extend(
+            _settled_event_rows(executions, quest_updates, new_state.version)
+        )
         if story_status is not None:
             node_map = play.config.storyline.node_map() if play is not None else {}
             for node_id in story_entered:
@@ -1072,6 +1095,150 @@ class ActionService:
                 }
             )
         return result, new_state, events
+
+
+    async def record_quest_progress(
+        self,
+        campaign_id: str,
+        action: str,
+        target_id: str,
+        request_id: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> ActionResult:
+        """Commit facts an author asserted, through the normal write path.
+
+        Debug tooling (a manual quest nudge, an author's simulation being
+        promoted) needs to move the world forward without pretending a player
+        performed a rules-checked action. It therefore skips the rule engine
+        but keeps everything that makes the write trustworthy: the facts are
+        ordinary validated facts, they settle through the same event/quest
+        pipeline as a turn, the commit is one transaction against an expected
+        version, the request row keeps it idempotent, and the narrated answer
+        is generated afterwards from the committed state only.
+        """
+        fact_kind = FACT_KINDS.get(action)
+        if fact_kind is None:
+            raise ValueError(f"unsupported fact action '{action}'")
+        amount = 1
+        raw_amount = (params or {}).get("amount")
+        if raw_amount is not None:
+            try:
+                amount = int(raw_amount)
+            except (TypeError, ValueError):
+                raise ValueError("amount must be an integer") from None
+        if isinstance(raw_amount, bool):
+            raise ValueError("amount must be an integer")
+        if amount < 1 or amount > 100:
+            raise ValueError("amount must be between 1 and 100")
+
+        request = ActionRequest(
+            campaign_id=campaign_id,
+            request_id=request_id,
+            # The request carries the fact being asserted, not a player verb:
+            # this path cannot pretend a rules-checked action happened.
+            action="custom",
+            target_id=target_id,
+            params={**dict(params or {}), "kind": action},
+            narrate=False,
+        )
+        payload = self._payload(request)
+        duplicate = self._replay(request, payload)
+        if duplicate is not None:
+            return duplicate
+
+        state = self.store.get_state(campaign_id)
+        if state is None:
+            raise LookupError(
+                f"campaign '{campaign_id}' has no game state; bind a world first"
+            )
+        world = self.store.get_world(state.world_id)
+        if world is None:
+            raise LookupError(
+                f"world '{state.world_id}' for campaign '{campaign_id}' is missing"
+            )
+        new_state = state.model_copy(deep=True)
+        if fact_kind == "quest_progress":
+            # An objective is not advanced by a fact in this engine: the
+            # `quest_progress` effect is what moves the counter (it is how a
+            # configured event moves it too), so the tool reuses that effect
+            # and only feeds the resulting fact into the quest/event lane.
+            quest_id, _, objective_id = target_id.partition(":")
+            progress_effect = Effect(
+                kind="quest_progress", target=quest_id, value=objective_id, amount=amount
+            )
+            applied = apply_effects(new_state, world, [progress_effect])
+            if not applied[0].ok:
+                refused, _, _ = self._reject_effects(
+                    request, payload, state, applied, record_rejection=True
+                )
+                return refused
+            facts = [fact for item in applied for fact in item.facts]
+        else:
+            facts = [Fact(fact_kind, target_id)]
+        # An authored fact is not a player attempt: events armed on the custom
+        # verb fire, so a designer can hang a hook on "something was asserted"
+        # without inventing a fake player action.
+        outcome = RuleOutcome(
+            ok=True,
+            code="author_asserted",
+            message=f"author asserted {action} {target_id}",
+            effects=[],
+            facts=[],
+        )
+
+        new_state, executions, quest_updates = self._settle_facts(
+            world, new_state, request, facts,
+            set(), set(), {}, set(),
+        )
+        new_state.version = state.version + 1
+        new_state.turn = state.turn + 1
+        new_state.updated_at = _now()
+
+        result = ActionResult(
+            **self._base(request),
+            status="applied",
+            ok=True,
+            code=outcome.code,
+            message=outcome.message,
+            state_version=new_state.version,
+            effects_applied=[],
+            events_fired=executions,
+            quests={qid: progress.status for qid, progress in new_state.quests.items()},
+            state=new_state,
+        )
+        events: List[Dict[str, Any]] = [
+            {
+                "event_type": "debug.asserted",
+                "payload": {
+                    "action": action,
+                    "target": target_id,
+                    "amount": amount,
+                    "fact": fact_kind,
+                },
+                "state_version": new_state.version,
+            }
+        ]
+        events.extend(_settled_event_rows(executions, quest_updates, new_state.version))
+        try:
+            self.store.commit_action(
+                campaign_id=campaign_id,
+                request_id=request_id,
+                request_payload=payload,
+                status="applied",
+                result_payload=result.model_dump(mode="json"),
+                state=new_state,
+                events=events,
+                expected_version=state.version,
+            )
+        except sqlite3.IntegrityError:
+            raced = self._replay(request, payload)
+            if raced is None:
+                raise
+            return raced
+        except StateConflictError as exc:
+            return self._conflict(request, payload, exc)
+        self._notify_settled(campaign_id, new_state, None)
+        return result
 
     # ------------------------------------------------------------- read side
     def get_state(self, campaign_id: str) -> Optional[GameState]:

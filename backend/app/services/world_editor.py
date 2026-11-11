@@ -13,9 +13,11 @@ from app.models.game import (
     CustomActionDef,
     DoorDef,
     EntityDef,
+    Effect,
     GameEventDef,
     ItemDef,
     LocationDef,
+    ObjectiveDef,
     QuestDef,
     WorldDefinition,
 )
@@ -202,3 +204,83 @@ def delete_custom_action(world: WorldDefinition, action_id: str) -> WorldDefinit
 def replace_world(world: WorldDefinition) -> WorldDefinition:
     """Whole-document save used by the world editor's JSON tab."""
     return _finish(world.model_copy(deep=True))
+
+
+# ------------------------------------------------------------------ quest parts
+#
+# Quests are the one authored structure with nested lists (objectives, rewards).
+# Replacing the whole quest to add a single objective means sending the entire
+# document back and forth, and a client that only knows one field silently
+# erases the others. These helpers edit one nested row at a time and still run
+# the full world validation, so a partial edit can never store a broken quest.
+
+
+def upsert_objective(
+    world: WorldDefinition,
+    quest_id: str,
+    objective: ObjectiveDef,
+    objective_id: Optional[str] = None,
+) -> WorldDefinition:
+    _require_id("objective", objective.id, objective_id)
+    draft = _copy(world)
+    quest = next((item for item in draft.quests if item.id == quest_id), None)
+    if quest is None:
+        raise LookupError(f"unknown quest '{quest_id}'")
+    _replace_or_append(quest.objectives, objective, objective.id)
+    return _finish(draft)
+
+
+def delete_objective(
+    world: WorldDefinition, quest_id: str, objective_id: str
+) -> WorldDefinition:
+    draft = _copy(world)
+    quest = next((item for item in draft.quests if item.id == quest_id), None)
+    if quest is None:
+        raise LookupError(f"unknown quest '{quest_id}'")
+    remaining = [item for item in quest.objectives if item.id != objective_id]
+    if len(remaining) == len(quest.objectives):
+        raise LookupError(
+            f"quest '{quest_id}' has no objective '{objective_id}'"
+        )
+    quest.objectives = remaining
+    return _finish(draft)
+
+
+def _replace_reward(quest: QuestDef, reward: Effect, reward_id: str) -> None:
+    """Rewards carry no id, so the path id names the effect kind.
+
+    Two rewards of the same kind on one quest would be ambiguous; the first one
+    wins and the caller is expected to use the index path for the rest. Keeping
+    the rule in one place is better than letting the editor invent one.
+    """
+    for index, existing in enumerate(quest.rewards):
+        if existing.kind == reward_id:
+            quest.rewards[index] = reward
+            return
+    quest.rewards.append(reward)
+
+
+def upsert_reward(
+    world: WorldDefinition, quest_id: str, reward: Effect, reward_id: Optional[str] = None
+) -> WorldDefinition:
+    _require_id("reward", reward.kind, reward_id)
+    draft = _copy(world)
+    quest = next((item for item in draft.quests if item.id == quest_id), None)
+    if quest is None:
+        raise LookupError(f"unknown quest '{quest_id}'")
+    _replace_reward(quest, reward, reward.kind)
+    return _finish(draft)
+
+
+def delete_reward(
+    world: WorldDefinition, quest_id: str, reward_id: str
+) -> WorldDefinition:
+    draft = _copy(world)
+    quest = next((item for item in draft.quests if item.id == quest_id), None)
+    if quest is None:
+        raise LookupError(f"unknown quest '{quest_id}'")
+    remaining = [item for item in quest.rewards if item.kind != reward_id]
+    if len(remaining) == len(quest.rewards):
+        raise LookupError(f"quest '{quest_id}' has no reward '{reward_id}'")
+    quest.rewards = remaining
+    return _finish(draft)
