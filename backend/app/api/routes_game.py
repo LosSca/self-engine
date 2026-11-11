@@ -18,7 +18,15 @@ from app.engines.combat_engine import CombatEngine
 from app.engines.plot_generator import PlotGenerator
 from app.engines.npc_mind_engine import NpcMindEngine
 from app.engines.inventory_engine import InventoryEngine
-from app.engines.llm_router import LLMRouter, LLMConfig, LLMProvider, reset_call_log, get_call_summary, get_call_trace
+from app.engines.llm_router import (
+    LLMRouter,
+    LLMConfig,
+    LLMProvider,
+    custom_route_available,
+    reset_call_log,
+    get_call_summary,
+    get_call_trace,
+)
 from app.engines.opening_generator import (
     format_setup_lines,
     generate_opening,
@@ -48,6 +56,10 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 _event_store = EventStore(os.environ.get("EVENT_DB_PATH", os.path.join(_BACKEND_DIR, "events.db")))
 _trace_store = TraceStore(os.environ.get("LLM_TRACE_DB_PATH", os.path.join(_BACKEND_DIR, "traces.db")))
 _llm = LLMRouter(LLMConfig())
+# Selection state for the custom OpenAI-compatible endpoint: the settings panel
+# picks the model, the .env holds the base URL and key. Stored so a restart-free
+# switch survives an unrelated /api/settings POST.
+_custom_model: str | None = None
 
 # Secondary calls (audit, memory, journal, combat, NPCs, plot, opening) run on a
 # cheaper model than the narrative call.
@@ -62,10 +74,25 @@ _AUXILIARY_MODELS = {
 
 
 def apply_model_policy(provider: LLMProvider, model: str) -> None:
-    """Narrative runs on `model`; everything else on the provider's auxiliary model."""
-    narrative_model = _OPENAI_MODEL if provider == LLMProvider.OPENAI else model
+    """Narrative runs on `model`; everything else on the provider's auxiliary model.
+
+    A custom OpenAI-compatible endpoint is the one case where the caller names a
+    model the built-in table has never heard of: there the chosen model serves
+    both the narrative and the auxiliary role, because guessing an "auxiliary
+    tier" for somebody else's catalogue is worse than paying for the same model.
+    """
+    global _custom_model
+    if provider == LLMProvider.OPENAI and custom_route_available():
+        chosen = (model or _custom_model or settings.custom_llm_model or "").strip()
+        if chosen:
+            _custom_model = chosen
+        narrative_model = _custom_model or _OPENAI_MODEL
+        auxiliary_model = narrative_model
+    else:
+        narrative_model = _OPENAI_MODEL if provider == LLMProvider.OPENAI else model
+        auxiliary_model = _AUXILIARY_MODELS.get(provider, narrative_model)
     _llm.config.primary_provider = provider
-    _llm.config.primary_model = _AUXILIARY_MODELS.get(provider, narrative_model)
+    _llm.config.primary_model = auxiliary_model
     _llm.config.orchestrator_model = narrative_model
 
 

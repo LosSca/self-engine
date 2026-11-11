@@ -22,6 +22,17 @@
 - **叙事语言**：`WorldDefinition.language` 决定描述语言，确定性叙事器、效果描述与模型调用三处都遵守。
 - **起步世界预设**：奇幻村庄、轨道站、雾镇、荒野营地，中英双语，`GET /api/v1/world-presets`。
 
+### Added（自定义 OpenAI 兼容供应商）
+
+- **接任何兼容接口**：`app/config.py` 新增 `custom_llm_base_url` / `custom_llm_api_key` / `custom_llm_model`，
+  设置面板出现「自定义兼容接口」一项（只在 `.env` 里 URL 与 KEY 都齐了才显示）。
+  选中时前端提交 `provider: "openai"`，`apply_model_policy()` 发现自定义端点可用就跳过内置的
+  `_AUXILIARY_MODELS` 表，让选定模型同时担任叙事与辅助两个角色。
+  `LLMRouter._get_api_base()` / `_get_api_key()` 返回 `CUSTOM_LLM_*`，`_build_model_string()` 返回
+  `openai/<model>`，litellm 把裸模型名 POST 到该 `api_base`。`OPENAI_PROXY_URL` 仍然优先。
+- `GET /api/settings` 新增 `custom_route_available` 与 `custom_model`，**不返回密钥与 base URL**。
+- 文档 `docs/custom_llm_provider.md`；`.env.example` 补 `CUSTOM_LLM_*` 注释。
+
 ### Added（第三轮：六个架构阶段）
 
 - **角色路由**（阶段 1）：`app/engines/agent_router.py` 按角色（narrative / system / memory）选模型，
@@ -77,7 +88,7 @@
 
 ### Tests
 
-- 后端：1625 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`，
+- 后端：1635 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`，
   架构六场景见 `backend/tests/services/test_architecture_acceptance.py`。
 - 前端：本环境无法 `vite build`，只做了逐文件语法检查；这一项仍未验证。
 ## [0.5.0] - 2026-11-01

@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useGameStore } from '../store'
-import { updateCampaignSettings, updateContentPolicy } from '../api'
+import {
+  updateCampaignSettings, updateContentPolicy, updateModelRoute, fetchContentPolicy,
+} from '../api'
 import { Settings, X } from 'lucide-react'
 import { THEME_LABELS, applyTheme, currentTheme } from '../lib/theme'
 
@@ -11,6 +13,10 @@ const PROVIDERS = [
   // Local OpenAI-compatible server (NInfer). The alias must match the server's
   // --model-id and .env LOCAL_LLM_MODEL; start it with E:\ninfer\start-local.ps1.
   { id: 'local', label: '本地 NInfer', models: ['qwen3.8-27b'] },
+  // A custom OpenAI-compatible vendor. Listed only when the backend reports a
+  // configured base URL + key (.env CUSTOM_LLM_*), because there is nothing the
+  // panel could fill in to make it work.
+  { id: 'custom', label: '自定义兼容接口', models: [] },
 ]
 
 export default function SettingsPanel({ onClose }) {
@@ -26,18 +32,44 @@ export default function SettingsPanel({ onClose }) {
   const [nsfw, setNsfw] = useState(!!nsfwMode)
   const [refusalFallbackOn, setRefusalFallbackOn] = useState(refusalFallback !== false)
   const [saved, setSaved] = useState(false)
+  const [customModel, setCustomModel] = useState(llmModel || '')
+  const [customReady, setCustomReady] = useState(false)
+  const [modelError, setModelError] = useState('')
   const [theme, setTheme] = useState(currentTheme())
   const [apiToken, setApiToken] = useState(
     () => localStorage.getItem('lunar_api_token') || '',
   )
 
+  const availableProviders = customReady
+    ? PROVIDERS
+    : PROVIDERS.filter((p) => p.id !== 'custom')
   const currentProviderModels = PROVIDERS.find((p) => p.id === provider)?.models || []
 
   const handleProviderChange = (newProvider) => {
     setProvider(newProvider)
     const providerModels = PROVIDERS.find((p) => p.id === newProvider)?.models || []
-    setModel(providerModels[0] || '')
+    if (newProvider === 'custom') setModel(customModel)
+    else setModel(providerModels[0] || '')
   }
+
+  useEffect(() => {
+    let alive = true
+    fetchContentPolicy()
+      .then((data) => {
+        if (!alive) return
+        setCustomReady(!!data?.custom_route_available)
+        if (data?.custom_route_available) {
+          if (data.custom_model) setCustomModel(data.custom_model)
+          const current = useGameStore.getState().llmProvider
+          if (current === 'openai' && data.custom_model) {
+            setProvider('custom')
+            setModel(data.custom_model)
+          }
+        }
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
 
   const handleSave = async () => {
     const token = apiToken.trim()
@@ -52,12 +84,25 @@ export default function SettingsPanel({ onClose }) {
       nsfwMode: nsfw,
       refusalFallback: refusalFallbackOn,
     })
+    setModelError('')
     try {
       // The switch has to reach the backend router: it decides where a narrated
       // turn is sent, and which model picks it up after a refusal.
       await updateContentPolicy({ nsfwMode: nsfw, refusalFallback: refusalFallbackOn })
     } catch {
       // Kept locally regardless; the backend keeps its previous policy.
+    }
+    try {
+      // provider=openai is how the router reaches a custom compatible endpoint;
+      // it decides which base URL and key to use from .env.
+      await updateModelRoute({
+        provider: provider === 'custom' ? 'openai' : provider,
+        model: provider === 'custom' ? customModel.trim() : model,
+        temperature: temp,
+        maxTokens: tokens,
+      })
+    } catch (err) {
+      setModelError(err?.message || '保存模型设置失败')
     }
     if (activeCampaignId) {
       try {
@@ -122,7 +167,7 @@ export default function SettingsPanel({ onClose }) {
               onChange={(e) => handleProviderChange(e.target.value)}
               className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-white/40 focus:bg-white/[0.05] transition-all"
             >
-              {PROVIDERS.map((p) => (
+              {availableProviders.map((p) => (
                 <option key={p.id} value={p.id} className="bg-[#1a1a1a] text-white">{p.label}</option>
               ))}
             </select>
@@ -133,15 +178,35 @@ export default function SettingsPanel({ onClose }) {
             <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
               模型
             </label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-white/40 focus:bg-white/[0.05] transition-all"
-            >
-              {currentProviderModels.map((m) => (
-                <option key={m} value={m} className="bg-[#1a1a1a] text-white">{m}</option>
-              ))}
-            </select>
+            {provider === 'custom' ? (
+              <input
+                type="text"
+                value={customModel}
+                onChange={(e) => setCustomModel(e.target.value)}
+                placeholder="deepseek-v4.1-flash"
+                spellCheck={false}
+                className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/40 focus:bg-white/[0.05] transition-all"
+              />
+            ) : (
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-white/40 focus:bg-white/[0.05] transition-all"
+              >
+                {currentProviderModels.map((m) => (
+                  <option key={m} value={m} className="bg-[#1a1a1a] text-white">{m}</option>
+                ))}
+              </select>
+            )}
+            {provider === 'custom' && (
+              <p className="text-[10px] text-white/40 leading-relaxed mt-2">
+                地址与密钥来自 .env：CUSTOM_LLM_BASE_URL / CUSTOM_LLM_API_KEY。
+                填什么模型就发什么模型名，密钥不会回到浏览器。
+              </p>
+            )}
+            {modelError && (
+              <p className="text-[10px] text-red-400 leading-relaxed mt-2">{modelError}</p>
+            )}
             {provider === 'local' && (
               <p className="text-[10px] text-white/40 leading-relaxed mt-2">
                 需要本地 NInfer 服务：127.0.0.1:8094（运行 start-local.ps1）。

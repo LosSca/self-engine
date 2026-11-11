@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # NInfer on this box is launched with --kv-capacity 34304 and NINFER_KV_WINDOW
     # 32768, so the model can attend over window + retrieval = 49152 tokens.
     local_llm_context_window: int = 49152
+    # OpenAI-compatible endpoint + credentials for one *custom* provider. The
+    # router builds "openai/<model>" against this base URL, so any vendor that
+    # speaks the OpenAI chat-completions dialect (beichenapi, siliconflow, a
+    # gateway, DeepSeek itself) works by filling these three in. Empty URL or
+    # key means the custom provider is not offered at all.
+    custom_llm_base_url: str = ""
+    custom_llm_api_key: str = ""
+    custom_llm_model: str = ""
     debug: bool = False
     # Root directory for scenario assets (character cards, art). Served at /media.
     media_dir: str = "../local/media"

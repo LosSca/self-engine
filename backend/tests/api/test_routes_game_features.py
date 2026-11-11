@@ -25,7 +25,14 @@ def test_get_settings(client):
     assert "max_tokens" in data
 
 
-def test_update_settings(client):
+def test_update_settings(client, monkeypatch):
+    # With a custom endpoint configured, OpenAI means "that vendor" and the model
+    # name is taken literally. This test is about the built-in OpenAI default,
+    # which only applies when no custom route exists.
+    from app.engines import llm_router
+
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_URL", "")
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_KEY", "")
     r = client.post("/api/settings", json={
         "provider": "openai",
         "model": "legacy-openai-model",

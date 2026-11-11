@@ -652,6 +652,24 @@ _OPENAI_PROXY_KEY = _settings.openai_proxy_key or os.environ.get("OPENAI_PROXY_K
 _LOCAL_LLM_URL = _settings.local_llm_base_url or os.environ.get("LOCAL_LLM_BASE_URL", "")
 _LOCAL_LLM_KEY = _settings.local_llm_api_key or os.environ.get("LOCAL_LLM_API_KEY", "")
 _LOCAL_LLM_MODEL = _settings.local_llm_model or os.environ.get("LOCAL_LLM_MODEL", "")
+# One custom OpenAI-compatible vendor (see app/config.py). It reuses the OPENAI
+# transport - litellm only needs the model string and api_base - so nothing else
+# in the router has to learn a new provider.
+_CUSTOM_LLM_URL = (_settings.custom_llm_base_url or os.environ.get("CUSTOM_LLM_BASE_URL", "")).rstrip("/")
+_CUSTOM_LLM_KEY = _settings.custom_llm_api_key or os.environ.get("CUSTOM_LLM_API_KEY", "")
+_CUSTOM_LLM_MODEL = _settings.custom_llm_model or os.environ.get("CUSTOM_LLM_MODEL", "")
+
+
+def custom_route_available() -> bool:
+    """True when a custom OpenAI-compatible endpoint is configured."""
+    return bool(_CUSTOM_LLM_URL and _CUSTOM_LLM_KEY)
+
+
+def custom_default_model() -> str | None:
+    """The model a custom endpoint was configured with, if any."""
+    return _CUSTOM_LLM_MODEL or None
+
+
 _LOCAL_CONTEXT_WINDOW = int(
     _settings.local_llm_context_window or os.environ.get("LOCAL_LLM_CONTEXT_WINDOW", 0)
 )
@@ -662,9 +680,10 @@ class LLMRouter:
         self.config = config
 
     def _build_model_string(self, provider: LLMProvider, model: str) -> str:
-        if provider == LLMProvider.LOCAL:
+        if provider in (LLMProvider.LOCAL, LLMProvider.OPENAI) and self._get_api_base(provider):
             # litellm's OpenAI transport strips the prefix and posts the bare model
-            # id to api_base, which is what NInfer's --model-id expects.
+            # id to api_base, which is what a local server or a custom vendor
+            # expects. Only do it when a base URL is actually configured.
             return f"openai/{model}"
         return f"{provider.value}/{model}"
 
@@ -682,6 +701,8 @@ class LLMRouter:
             return _OPENAI_PROXY_URL
         if provider == LLMProvider.LOCAL:
             return _LOCAL_LLM_URL or None
+        if provider == LLMProvider.OPENAI and not _OPENAI_PROXY_URL and custom_route_available():
+            return _CUSTOM_LLM_URL
         return None
 
     def _get_api_key(self, provider: LLMProvider) -> str | None:
@@ -689,6 +710,8 @@ class LLMRouter:
             return _ANTHROPIC_PROXY_KEY
         if provider == LLMProvider.OPENAI and _OPENAI_PROXY_URL:
             return _OPENAI_PROXY_KEY
+        if provider == LLMProvider.OPENAI and not _OPENAI_PROXY_URL and custom_route_available():
+            return _CUSTOM_LLM_KEY
         if provider == LLMProvider.LOCAL:
             if not _LOCAL_LLM_KEY:
                 raise RuntimeError(

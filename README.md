@@ -51,6 +51,7 @@
 | 换个模型只换一个角色 | `AGENTS_NARRATIVE_MODEL` 等环境变量，或调试台「模型调用」页签看路由 | 不需要 |
 | 换一个起步世界 | `GET /api/v1/world-presets`：奇幻村庄、轨道站、雾镇、荒野营地 | 不需要 |
 | 让模型写得更好 | 设置面板选供应商与预设；上游拒绝时可自动改走本地模型 | 需要 |
+| 用别家的兼容接口 | 设置面板「自定义兼容接口」，地址与密钥放 `.env` 的 `CUSTOM_LLM_*` | 需要 |
 
 ### 代码地图
 
@@ -60,7 +61,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口，另有文本解析、知识、叙事、世界编辑、AI 生成、作品库 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 四个 SQLite 存储，各自的 `SCHEMA_VERSION` 与迁移 |
-| `backend/tests/` | pytest 1625 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest 1635 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记与交付审查（`docs/delivery_review.md`） |
 

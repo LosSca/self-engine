@@ -1306,3 +1306,25 @@ export async function rejectEvolutionProposal(worldId, proposalId, reason = '') 
   )
   return jsonOrThrow(r, '驳回演化提案失败')
 }
+
+/**
+ * Which provider answers the narrative call.
+ *
+ * The custom OpenAI-compatible endpoint is selected through provider "openai":
+ * the backend checks for `CUSTOM_LLM_BASE_URL` in .env and, when it is set,
+ * sends the chosen model there instead of to OpenAI. Nothing secret leaves the
+ * browser — the key stays in the backend's .env.
+ */
+export async function updateModelRoute({ provider, model, temperature, maxTokens }) {
+  const body = { provider }
+  if (model) body.model = model
+  if (temperature != null) body.temperature = temperature
+  if (maxTokens != null) body.max_tokens = maxTokens
+  const r = await fetch(`${BASE}/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return jsonOrThrow(r, '保存模型设置失败')
+}
+

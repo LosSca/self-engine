@@ -22,7 +22,7 @@ from app.api.routes_engine import router as engine_router
 from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
 from app.api.routes_works import router as works_router
-from app.engines.llm_router import POLICY_CHOICES, LLMProvider
+from app.engines.llm_router import POLICY_CHOICES, LLMProvider, custom_route_available
 
 app = FastAPI(title="Project Lunar", version="0.5.0")
 
@@ -150,6 +150,15 @@ def update_settings(req: SettingsUpdateRequest):
     }
 
 
+def _custom_route_model() -> str | None:
+    """The model a custom endpoint would answer with, or None when unconfigured."""
+    if not custom_route_available():
+        return None
+    from app.engines.llm_router import custom_default_model
+
+    return custom_default_model()
+
+
 @app.get("/api/settings")
 def get_settings():
     return {
@@ -168,4 +177,8 @@ def get_settings():
         "nsfw_model": _llm.config.nsfw_model,
         "local_fallback_on_refusal": _llm.config.local_fallback_on_refusal,
         "local_route_available": _llm.local_route_available(),
+        # A custom OpenAI-compatible vendor: the panel shows the switch only when
+        # the base URL and key are in .env. Neither the key nor the URL is echoed.
+        "custom_route_available": custom_route_available(),
+        "custom_model": _custom_route_model(),
     }
