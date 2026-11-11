@@ -61,6 +61,21 @@
 
 全量后端：**1493 passed, 8 skipped**（132s）。
 
+## 四之二、每条需求背后的测试（可直接点开复跑）
+
+| # | 测试文件 | 数量 |
+| --- | --- | --- |
+| ① | `backend/tests/services/test_scenario_author.py`、`backend/tests/api/test_routes_scenario_author.py`、`backend/tests/api/test_routes_scenario_author_saved.py` | 10 + 3 + 2 |
+| ② ⑦ | `backend/tests/services/test_work_catalogue.py`、`backend/tests/api/test_routes_works.py` | 6 + 8 |
+| ③ | `backend/tests/services/test_authoring_session.py`、`backend/tests/api/test_routes_authoring.py` | 8 + 3 |
+| ④ | `backend/tests/services/test_knowledge_extractor.py`、`backend/tests/api/test_routes_knowledge_extract.py` | 12 + 4 |
+| ⑤ | `backend/tests/services/test_interaction_planner.py`、`backend/tests/api/test_routes_planner.py` | 10 + 5 |
+| ⑥ | `backend/tests/engines/test_llm_router_policy.py`、`test_narrator_content_policy.py`、`test_narrator_stream_policy.py`、`backend/tests/api/test_settings_content_policy.py` | 20 + 4 + 6 + 5 |
+| 契约 | `backend/tests/api/test_routes_contracts.py`（`/api/v1` 每个写接口都必须声明响应模型） | 8 |
+| 验收 | `backend/tests/api/test_acceptance_story.py` | 5 |
+
+全量后端：**1493 passed, 8 skipped**（132s，本轮实测）。前端：9 个文件过 esbuild 语法检查，
+**没有过 `vite build`**（见第五节第 1 条）。
 ## 五、仍然存在的问题
 
 1. **前端从未经过 `vite build`**。沙箱里 DSH 预览钩子让 `vite.config.js` 报 `Cannot find module E:\shujia\.dsh-tmp\config-module.mjs`，只能用 esbuild 逐文件语法检查。前端功能没有在真实浏览器里被自动化验证过。
