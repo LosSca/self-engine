@@ -1158,3 +1158,64 @@ export async function fetchActionRecord(requestId) {
   const r = await fetch(`${V1}/actions/${encodeURIComponent(requestId)}`)
   return jsonOrThrow(r, '读取行动详情失败')
 }
+
+/**
+ * Propose knowledge entries from a campaign's committed narration.
+ *
+ * The backend treats this as a proposal lane: with apply === false nothing is
+ * written and the candidates come back for review; with apply === true only
+ * the scenario knowledge table is touched (no rule reads it).
+ */
+export async function extractKnowledge(
+  scenarioId,
+  { campaignId, apply = false, refine = false, presetId = '', limit = 20, language = 'zh' } = {},
+) {
+  const r = await fetch(`${V1}/scenarios/${scenarioId}/knowledge/extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      campaign_id: campaignId,
+      apply,
+      refine,
+      preset_id: presetId,
+      limit,
+      language,
+    }),
+  })
+  return jsonOrThrow(r, '提取记忆失败')
+}
+
+/**
+ * Plan what every candidate action in the current room would do.
+ *
+ * Read-only: the backend evaluates each candidate with the real rules engine
+ * against a throwaway copy of the state and reports why blocked actions fail.
+ */
+export async function planRoom(worldId, campaignId = '') {
+  const qs = campaignId ? `?campaign_id=${encodeURIComponent(campaignId)}` : ''
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/plan${qs}`, { method: 'POST' })
+  return jsonOrThrow(r, '规划行动失败')
+}
+
+/**
+ * Simulate a short chain of actions without writing anything.
+ * Stops at the first step the rules reject.
+ */
+export async function previewActions(worldId, steps, campaignId = '') {
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/preview-actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ campaign_id: campaignId, steps }),
+  })
+  return jsonOrThrow(r, '预演行动失败')
+}
+
+/** Explain why an action is blocked and how the requirement could be met. */
+export async function explainAction(worldId, action, target, campaignId = '') {
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/explain`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ campaign_id: campaignId, action, target }),
+  })
+  return jsonOrThrow(r, '解释行动失败')
+}

@@ -37,6 +37,9 @@ import {
   importCampaign,
   generateWorldFromPrompt,
   authorScenario,
+  extractKnowledge,
+  planRoom,
+  explainAction,
   fetchWorks,
   enterWork,
 } from '../api'
@@ -122,6 +125,7 @@ const TABS = [
   ['actions', '行动'],
   ['debug', '调试'],
   ['works', '作品穿越'],
+  ['memory', '记忆提炼'],
 ]
 
 const inputClass =
@@ -1488,6 +1492,14 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [authorBusy, setAuthorBusy] = useState(false)
   const [authorDryRun, setAuthorDryRun] = useState(true)
   const [authorResult, setAuthorResult] = useState(null)
+  const [memoryTarget, setMemoryTarget] = useState('')
+  const [memoryBusy, setMemoryBusy] = useState(false)
+  const [memoryDryRun, setMemoryDryRun] = useState(true)
+  const [memoryResult, setMemoryResult] = useState(null)
+  const [plan, setPlan] = useState(null)
+  const [planBusy, setPlanBusy] = useState(false)
+  const [planError, setPlanError] = useState('')
+  const [explain, setExplain] = useState(null)
 
   const report = useCallback((err) => {
     if (Array.isArray(err && err.detail)) setErrors(err.detail)
@@ -1633,6 +1645,33 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
    * version, domain event) so the campaign's history stays coherent. The
    * backend refuses it outside the debug/dev environment.
    */
+  const loadPlan = async () => {
+    if (!worldId) return
+    setPlanBusy(true)
+    setPlanError('')
+    setExplain(null)
+    try {
+      const data = await planRoom(worldId, campaignId || '')
+      setPlan(data)
+    } catch (err) {
+      setPlanError(err.message || '规划失败')
+      setPlan(null)
+    } finally {
+      setPlanBusy(false)
+    }
+  }
+
+  const explainRow = async (action, target) => {
+    if (!worldId) return
+    setPlanError('')
+    try {
+      const data = await explainAction(worldId, action, target, campaignId || '')
+      setExplain(data)
+    } catch (err) {
+      setPlanError(err.message || '解释失败')
+    }
+  }
+
   const progressObjective = async (questId, objectiveId) => {
     if (!campaignId) return
     setNotice('')
@@ -1751,6 +1790,26 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       report(err)
     } finally {
       setAuthorBusy(false)
+    }
+  }
+
+  const extractMemories = async () => {
+    if (!scenarioId || !memoryTarget || memoryBusy) return
+    setMemoryBusy(true)
+    setErrors([])
+    setNotice("")
+    setMemoryResult(null)
+    try {
+      const result = await extractKnowledge(scenarioId, {
+        campaignId: memoryTarget,
+        apply: !memoryDryRun,
+      })
+      setMemoryResult(result)
+      if (result.applied) setNotice("已写入 " + (result.created_ids || []).length + " 条知识")
+    } catch (err) {
+      report(err)
+    } finally {
+      setMemoryBusy(false)
     }
   }
 
@@ -2482,7 +2541,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30 mt-1">地点</div>
                   <div className="flex flex-wrap gap-2">
                     {(currentWork.locations || []).map((name) => (
-                      <Badge key={name} tone="info">{name}</Badge>
+                      <Badge key={name} tone="accent">{name}</Badge>
                     ))}
                   </div>
                   <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30 mt-1">角色</div>
@@ -2545,7 +2604,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {Object.entries(authorResult.counts || {}).map(([key, value]) => (
-                      <Badge key={key} tone="info">
+                      <Badge key={key} tone="accent">
                         {key} {value}
                       </Badge>
                     ))}
@@ -2576,6 +2635,86 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
             </div>
           )}
+          {tab === 'memory' && (
+            <div className="flex flex-col gap-5">
+              <SectionNote>
+                从这段冒险已经写下的叙事里提炼知识条目。系统只读取已提交的叙述文本，用确定性规则挑句子（提问不算事实，谈玩家本人的归入人物，其余归入事件），并跳过场景里已有的条目。默认只预览不写入；写入的只是知识库内容，规则与状态都不会被改动。
+              </SectionNote>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  className={inputClass + " max-w-[18rem]"}
+                  value={memoryTarget}
+                  onChange={(e) => setMemoryTarget(e.target.value)}
+                  aria-label="提取来源冒险"
+                >
+                  <option value="">选择冒险</option>
+                  {playthroughs.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 text-[11px] text-white/50">
+                  <input
+                    type="checkbox"
+                    checked={memoryDryRun}
+                    onChange={(e) => setMemoryDryRun(e.target.checked)}
+                  />
+                  只预览，不写入
+                </label>
+                <button
+                  className={primaryButton}
+                  disabled={memoryBusy || !scenarioId || !memoryTarget}
+                  onClick={extractMemories}
+                >
+                  {memoryBusy ? "提取中…" : memoryDryRun ? "预览" : "提取并写入"}
+                </button>
+                {!memoryTarget && (
+                  <span className="text-[11px] text-amber-300/70">先选一段冒险，提取才有文本可读。</span>
+                )}
+                {!scenarioId && (
+                  <span className="text-[11px] text-amber-300/70">先选一个场景。</span>
+                )}
+              </div>
+
+              {memoryResult && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone="accent">回合 {memoryResult.turns_read}</Badge>
+                    <Badge tone="accent">提案 {(memoryResult.proposals || []).length}</Badge>
+                    <Badge tone="accent">待写入 {(memoryResult.entries || []).length}</Badge>
+                    <Badge tone={memoryResult.applied ? "good" : "muted"}>
+                      {memoryResult.applied ? "已写入 " + (memoryResult.created_ids || []).length : "仅预览"}
+                    </Badge>
+                  </div>
+                  {(memoryResult.warnings || []).length > 0 && (
+                    <ul className="flex flex-col gap-1">
+                      {memoryResult.warnings.map((item, index) => (
+                        <li key={index} className="text-[11px] text-amber-200/70 leading-relaxed">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <ul className="flex flex-col gap-2">
+                    {(memoryResult.entries || []).map((entry, index) => (
+                      <li key={index} className="text-xs text-white/60">
+                        <span className="font-mono uppercase tracking-[0.2em] text-white/35 text-[10px]">
+                          {entry.layer}
+                        </span>
+                        <div className="text-white/90">{entry.title}</div>
+                        <div className="text-[11px] text-white/40">{entry.content}</div>
+                      </li>
+                    ))}
+                  </ul>
+                  {(memoryResult.entries || []).length === 0 && (
+                    <div className="text-[11px] text-white/35">没有新内容：这段冒险的叙述都已收录，或还没有可提炼的句子。</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {world && tab === 'debug' && (
             <div className="flex flex-col gap-5">
               <SectionNote>
@@ -2583,6 +2722,71 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 {!campaignId && ' 当前没有进行中的冒险，任务进度与事件历史为空。'}
               </SectionNote>
 
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex flex-wrap items-center gap-3 mb-2">
+                  <span className="text-sm font-bold text-white">交互预演</span>
+                  {plan && <Badge tone="muted">@ {(plan.allowed || []).length ? plan.allowed[0].label || plan.location_id : plan.location_id}</Badge>}
+                  {plan && <Badge tone="good">{(plan.allowed || []).length} 可行</Badge>}
+                  {plan && <Badge tone="warn">{(plan.blocked || []).length} 被拒</Badge>}
+                  <button className={ghostButton} onClick={loadPlan} disabled={planBusy}>
+                    {planBusy ? '推演中…' : plan ? '重新推演' : '推演当前地点'}
+                  </button>
+                </div>
+                <p className="text-xs text-white/40 mb-3">
+                  对当前地点的每个候选行动，用真实规则引擎在状态副本上判定一次，说明能做什么、为什么不能做、以及缺什么。只读，不写任何状态。
+                </p>
+                {planError && <p className="text-xs text-red-300">{planError}</p>}
+                {plan && (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-1">
+                      {(plan.allowed || []).map((row) => (
+                        <div key={`ok-${row.action}-${row.target}`} className="flex flex-wrap items-center gap-2 text-xs">
+                          <Badge tone="good">{row.action}</Badge>
+                          <span className="text-white/80">{row.label || row.target}</span>
+                          <span className="text-white/30">{row.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {(plan.blocked || []).length > 0 && (
+                      <div className="flex flex-col gap-1 border-t border-white/10 pt-2">
+                        {(plan.blocked || []).map((row) => (
+                          <div key={`no-${row.action}-${row.target}`} className="flex flex-wrap items-center gap-2 text-xs">
+                            <Badge tone="warn">{row.action}</Badge>
+                            <span className="text-white/60">{row.label || row.target}</span>
+                            <span className="text-white/30">{row.code}</span>
+                            <button className={tinyInput} onClick={() => explainRow(row.action, row.target)}>
+                              为什么
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {explain && (
+                  <div className="mt-3 rounded-xl border border-white/10 p-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span className="text-white/60">{explain.action} {explain.target}</span>
+                      <Badge tone={explain.ok ? 'good' : 'warn'}>{explain.code}</Badge>
+                    </div>
+                    <p className="text-white/50">{explain.message}</p>
+                    {(explain.requirements || []).map((req) => (
+                      <div key={`${req.kind}-${req.target}`} className="mt-2 text-white/70">
+                        需要 {req.label || req.target}（{req.kind}
+                        {req.distance >= 0 ? `，距离 ${req.distance} 步` : ''}）
+                        {(req.steps || []).length > 0 && (
+                          <span className="text-white/40">：{req.steps.join(' → ')}</span>
+                        )}
+                      </div>
+                    ))}
+                    {(explain.unplannable || []).length > 0 && (
+                      <p className="mt-2 text-white/40">
+                        无法自动规划：{explain.unplannable.map((u) => (u.label || u.target)).join('、')}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
               {campaignId && (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-2">

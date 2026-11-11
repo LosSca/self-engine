@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.db.game_state_store import GameStateStore
 from app.db.scenario_store import ScenarioStore
 from app.engines import story_engine
 from app.models.knowledge import (
@@ -27,7 +28,7 @@ from app.models.knowledge import (
     PlayConfig,
     PlayConfigUpdate,
 )
-from app.services import ai_generator, knowledge_service
+from app.services import ai_generator, knowledge_extractor, knowledge_service
 
 router = APIRouter(tags=["knowledge"])
 
@@ -37,6 +38,11 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 def _store() -> ScenarioStore:
     path = os.environ.get("SCENARIO_DB_PATH", os.path.join(_BACKEND_DIR, "scenarios.db"))
     return ScenarioStore(path)
+
+
+def _game_store() -> GameStateStore:
+    path = os.environ.get("GAME_STATE_DB_PATH", os.path.join(_BACKEND_DIR, "game_state.db"))
+    return GameStateStore(path)
 
 
 def _scenario_event_ids(scenario_id: str) -> Optional[set[str]]:
@@ -339,6 +345,55 @@ def _generation_router(store: ScenarioStore, preset_id: str):
     if preset_id and preset is None:
         raise HTTPException(status_code=400, detail=[f"unknown model preset '{preset_id}'"])
     return ai_generator.router_for(preset)
+
+
+class ExtractKnowledgeRequest(BaseModel):
+    """One extraction pass over a campaign's committed narration."""
+
+    campaign_id: str = Field(..., min_length=1, max_length=128)
+    apply: bool = False
+    refine: bool = False
+    preset_id: str = ""
+    limit: int = Field(20, ge=1, le=200)
+    language: str = "zh"
+
+
+@router.post("/scenarios/{scenario_id}/knowledge/extract")
+async def extract_knowledge(scenario_id: str, body: ExtractKnowledgeRequest):
+    """Propose knowledge entries from what the narrator already said.
+
+    The lane is a proposal lane: with apply=False nothing is written and the
+    caller gets the candidate entries back for review. With apply=True the
+    entries are stored as ordinary scenario knowledge - which no rule reads -
+    so a wrong proposal downgrades narration instead of corrupting the save.
+    """
+    store = _store()
+    try:
+        _require_scenario(store, scenario_id)
+        router = None
+        if body.refine:
+            router = _generation_router(store, body.preset_id)
+            if router is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="\u672a\u914d\u7f6e\u53ef\u7528\u6a21\u578b\uff1a\u8bf7\u5148\u8bbe\u7f6e\u4f9b\u5e94\u5546\u5bc6\u94a5\u6216\u672c\u5730\u6a21\u578b",
+                )
+        game_store = _game_store()
+        try:
+            return await knowledge_extractor.extract_from_campaign(
+                game_store,
+                store,
+                scenario_id,
+                body.campaign_id,
+                router=router,
+                apply=body.apply,
+                limit=body.limit,
+                language=body.language,
+            )
+        finally:
+            game_store.close()
+    finally:
+        store.close()
 
 
 @router.post("/scenarios/{scenario_id}/generate/knowledge")

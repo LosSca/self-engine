@@ -38,7 +38,7 @@ from app.models.game import (
     QuestDef,
     WorldDefinition,
 )
-from app.services import starter_worlds, world_service
+from app.services import interaction_planner, starter_worlds, world_service
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
 from app.services.knowledge_service import build_context
@@ -1899,6 +1899,174 @@ def get_action(request_id: str):
         )
     return row
 
+
+# -------------------------------------------------------------- interaction
+class PlanRowView(BaseModel):
+    """One candidate action and how the rules engine judged it."""
+
+    action: str
+    target: str
+    label: str = ""
+    ok: bool = False
+    code: str = ""
+    message: str = ""
+
+
+class RoomPlanResponse(BaseModel):
+    campaign_id: str = ""
+    world_id: str = ""
+    location_id: str = ""
+    version: int = 0
+    allowed: List[PlanRowView] = []
+    blocked: List[PlanRowView] = []
+
+
+class PreviewStepResult(BaseModel):
+    """What one previewed step would do, as decided by the rules engine."""
+
+    step: int
+    action: str
+    target: str = ""
+    params: Dict[str, Any] = {}
+    ok: bool = False
+    code: str = ""
+    message: str = ""
+    effects: List[Dict[str, Any]] = []
+    events: List[Dict[str, Any]] = []
+    changes: List[Dict[str, Any]] = []
+    effect_errors: List[str] = []
+    advanced: bool = False
+
+
+class PreviewChainResponse(BaseModel):
+    campaign_id: str = ""
+    world_id: str = ""
+    start_version: int = 0
+    steps: List[PreviewStepResult] = []
+    stopped_at: int = 0
+    simulated: bool = True
+    step_limit: int = 0
+
+
+class PreviewStep(BaseModel):
+    """One authored step of a previewed action chain."""
+
+    action: str = Field(..., min_length=1, max_length=32)
+    target: str = Field("", max_length=64)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PreviewActionsBody(BaseModel):
+    steps: List[PreviewStep] = Field(..., min_length=1, max_length=6)
+    campaign_id: str = Field("", max_length=128)
+
+
+class RequirementBody(BaseModel):
+    action: str = Field(..., min_length=1, max_length=32)
+    target: str = Field(..., min_length=1, max_length=64)
+    campaign_id: str = Field("", max_length=128)
+
+
+class RequirementTarget(BaseModel):
+    kind: str = ""
+    target: str = ""
+    label: str = ""
+
+
+class RequirementRow(BaseModel):
+    kind: str = ""
+    target: str = ""
+    label: str = ""
+    distance: int = -1
+    steps: List[str] = Field(default_factory=list)
+    blocked_by_door: str = ""
+    prerequisite: Optional[RequirementRow] = None
+    unlocks_door: str = ""
+
+
+RequirementRow.model_rebuild()
+
+
+class RequirementResponse(BaseModel):
+    campaign_id: str = ""
+    action: str = ""
+    target: str = ""
+    ok: bool = False
+    code: str = ""
+    message: str = ""
+    requirements: List[RequirementRow] = Field(default_factory=list)
+    unplannable: List[RequirementTarget] = Field(default_factory=list)
+    has_plan: bool = False
+
+
+def _plan_state(store: GameStateStore, world: WorldDefinition, campaign_id: str) -> GameState:
+    """The state a plan is computed against: the campaign, or a fresh sandbox."""
+    if campaign_id:
+        state = store.get_state(campaign_id)
+        if state is None:
+            raise HTTPException(
+                status_code=404, detail=f"unknown campaign '{campaign_id}'"
+            )
+        return state.model_copy(deep=True)
+    return world_service.build_initial_state(world, "__preview__")
+
+
+@router.post("/worlds/{world_id}/plan", response_model=RoomPlanResponse)
+def plan_world_room(world_id: str, campaign_id: str = Query("")):
+    """Every action possible in this room, decided by the rules engine.
+
+    Read-only.  Without a ``campaign_id`` the plan is computed against a fresh
+    starting state, which is what an editor wants while authoring: "on turn one,
+    what can a player do in this room, and why not the rest?"
+    """
+    store = _get_store()
+    try:
+        world = _world_or_404(store, world_id)
+        state = _plan_state(store, world, campaign_id)
+    finally:
+        store.close()
+    return interaction_planner.plan_room(world, state)
+
+
+@router.post("/worlds/{world_id}/preview-actions", response_model=PreviewChainResponse)
+def preview_world_actions(world_id: str, body: PreviewActionsBody):
+    """Replay a chain of actions on a copy: what would each step change?
+
+    Nothing is committed.  ``simulated`` is always true and ``start_version`` is
+    the version the chain started from, so the console can label the rows as
+    speculative and never confuse them with a real turn in the event log.
+    """
+    store = _get_store()
+    try:
+        world = _world_or_404(store, world_id)
+        state = _plan_state(store, world, body.campaign_id)
+    finally:
+        store.close()
+    try:
+        return interaction_planner.run_preview(
+            world, state, [step.model_dump() for step in body.steps]
+        )
+    except interaction_planner.PlanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/worlds/{world_id}/explain", response_model=RequirementResponse)
+def explain_world_action(world_id: str, body: RequirementBody):
+    """Why an action is blocked, and how far away the fix is.
+
+    Read-only.  Only requirements the player can satisfy by walking and picking
+    up are planned; everything else is returned in ``unplannable`` instead of
+    being guessed at.
+    """
+    store = _get_store()
+    try:
+        world = _world_or_404(store, world_id)
+        state = _plan_state(store, world, body.campaign_id)
+    finally:
+        store.close()
+    return interaction_planner.explain_requirement(
+        world, state, body.action, body.target
+    )
 
 # -------------------------------------------------------------------- events
 @router.post(
