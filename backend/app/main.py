@@ -21,6 +21,7 @@ from app.api.routes_game import router as game_router, _llm, apply_model_policy
 from app.api.routes_engine import router as engine_router
 from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
+from app.api.routes_works import router as works_router
 from app.engines.llm_router import POLICY_CHOICES, LLMProvider
 
 app = FastAPI(title="Project Lunar", version="0.5.0")
@@ -41,6 +42,7 @@ app.include_router(game_router, prefix="/api/game", tags=["game"])
 app.include_router(engine_router, prefix="/api/v1", tags=["engine"])
 app.include_router(characters_router, prefix="/api", tags=["characters"])
 app.include_router(knowledge_router, prefix="/api/v1", tags=["knowledge"])
+app.include_router(works_router, prefix="/api/v1", tags=["works"])
 
 
 @app.middleware("http")

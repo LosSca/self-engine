@@ -819,6 +819,45 @@ export async function fetchWorlds(scenarioId) {
   return jsonOrThrow(r, '读取世界列表失败')
 }
 
+export async function fetchWorks() {
+  const r = await fetch(`${V1}/works`)
+  return jsonOrThrow(r, '读取作品库失败')
+}
+
+export async function resolveWork(title, { presetId = '', allowModel = true } = {}) {
+  const r = await fetch(`${V1}/works/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, preset_id: presetId, allow_model: allowModel }),
+  })
+  return jsonOrThrow(r, '解析作品失败')
+}
+
+export async function enterWork({
+  workTitle,
+  characterName,
+  scenarioId = '',
+  campaignId = '',
+  worldId = '',
+  presetId = '',
+  allowModel = true,
+} = {}) {
+  const r = await fetch(`${V1}/works/enter`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      work_title: workTitle,
+      character_name: characterName,
+      scenario_id: scenarioId,
+      campaign_id: campaignId,
+      world_id: worldId,
+      preset_id: presetId,
+      allow_model: allowModel,
+    }),
+  })
+  return jsonOrThrow(r, '进入作品世界失败')
+}
+
 export async function fetchWorld(worldId) {
   const r = await fetch(`${V1}/worlds/${worldId}`)
   return jsonOrThrow(r, '读取世界定义失败')

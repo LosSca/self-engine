@@ -35,6 +35,8 @@ import {
   exportCampaign,
   importCampaign,
   generateWorldFromPrompt,
+  fetchWorks,
+  enterWork,
 } from '../api'
 import WorldMapGraph from './WorldMapGraph'
 import { WORLD_TEMPLATES } from '../data/worldTemplates'
@@ -116,6 +118,7 @@ const TABS = [
   ['quests', '任务'],
   ['actions', '行动'],
   ['debug', '调试'],
+  ['works', '作品穿越'],
 ]
 
 const inputClass =
@@ -1474,6 +1477,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [aiWorldPrompt, setAiWorldPrompt] = useState('')
   const [aiWorldBusy, setAiWorldBusy] = useState(false)
   const [builtinActions, setBuiltinActions] = useState([])
+  const [works, setWorks] = useState([])
+  const [worksBusy, setWorksBusy] = useState(false)
+  const [selectedWork, setSelectedWork] = useState('')
+  const [selectedCharacter, setSelectedCharacter] = useState('')
 
   const report = useCallback((err) => {
     if (Array.isArray(err && err.detail)) setErrors(err.detail)
@@ -1508,6 +1515,24 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
     fetchActionCatalogue()
     return undefined
   }, [open, tab, builtinActions.length, fetchActionCatalogue])
+
+  useEffect(() => {
+    if (!open || tab !== 'works' || works.length > 0) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const list = await fetchWorks()
+        if (cancelled) return
+        setWorks(list || [])
+        if (!selectedWork && list && list[0]) setSelectedWork(list[0].title)
+      } catch (err) {
+        if (!cancelled) report(err)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [open, tab, works.length, selectedWork, report])
 
   useEffect(() => {
     if (!open) return undefined
@@ -1629,6 +1654,51 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       report(err)
     } finally {
       setAiWorldBusy(false)
+    }
+  }
+
+  const loadWorks = async () => {
+    setWorksBusy(true)
+    setErrors([])
+    try {
+      const list = await fetchWorks()
+      setWorks(list || [])
+      if (!selectedWork || !(list || []).some((item) => item.title === selectedWork)) {
+        setSelectedWork((list && list[0] && list[0].title) || '')
+      }
+    } catch (err) {
+      report(err)
+    } finally {
+      setWorksBusy(false)
+    }
+  }
+
+  const currentWork = (works || []).find((item) => item.title === selectedWork) || null
+
+  const enterCurrentWork = async () => {
+    if (!currentWork || worksBusy) return
+    const character = currentWork.characters.find((item) => item.name === selectedCharacter) || currentWork.characters[0]
+    if (!character) return
+    setWorksBusy(true)
+    setErrors([])
+    setNotice('')
+    try {
+      const result = await enterWork({
+        workTitle: currentWork.title,
+        characterName: character.name,
+        scenarioId: scenarioId || '',
+        campaignId: campaignId || '',
+      })
+      const list = await fetchWorlds(scenarioId || undefined)
+      setWorlds(list || [])
+      setWorldId(result.world_id)
+      await loadWorld(result.world_id)
+      const pickNote = result.character_pick ? `，角色已记录为 ${result.character_pick.name}` : ''
+      setNotice(`已穿越到《${result.work.title}》：${result.world_name}（${result.locations} 地点）${pickNote}`)
+    } catch (err) {
+      report(err)
+    } finally {
+      setWorksBusy(false)
     }
   }
 
@@ -2294,6 +2364,89 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
           )}
 
           {world && activeKind && renderList(activeKind, catalog[activeKind])}
+
+          {tab === 'works' && (
+            <div className="flex flex-col gap-5">
+              <SectionNote>
+                从作品库里挑一部作品和一位角色，生成一个连通的初始世界并保存。作品档案决定地点与角色，模型只在作品不在库里时兜底。
+              </SectionNote>
+
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="flex flex-col gap-1 text-[10px] font-mono uppercase tracking-[0.2em] text-white/40">
+                  作品
+                  <select
+                    className={inputClass + ' min-w-[14rem]'}
+                    value={selectedWork}
+                    onChange={(e) => {
+                      setSelectedWork(e.target.value)
+                      setSelectedCharacter('')
+                    }}
+                    aria-label="作品"
+                  >
+                    {(works || []).map((item) => (
+                      <option key={item.title} value={item.title}>
+                        {item.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-[10px] font-mono uppercase tracking-[0.2em] text-white/40">
+                  角色
+                  <select
+                    className={inputClass + ' min-w-[14rem]'}
+                    value={selectedCharacter || (currentWork && currentWork.characters[0] ? currentWork.characters[0].name : '')}
+                    onChange={(e) => setSelectedCharacter(e.target.value)}
+                    aria-label="角色"
+                  >
+                    {((currentWork && currentWork.characters) || []).map((item) => (
+                      <option key={item.name} value={item.name}>
+                        {item.name}（{item.role || '角色'}）
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  onClick={enterCurrentWork}
+                  disabled={worksBusy || !currentWork}
+                  className={primaryButton}
+                >
+                  {worksBusy ? '生成中…' : '生成世界并进入'}
+                </button>
+                <button onClick={loadWorks} className="text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase">
+                  刷新作品库
+                </button>
+              </div>
+
+              {currentWork && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-2">
+                  <div className="text-sm font-bold text-white">
+                    {currentWork.title}
+                    <span className="ml-2 text-[10px] font-mono uppercase tracking-[0.2em] text-white/35">
+                      {currentWork.medium} · {currentWork.source}
+                    </span>
+                  </div>
+                  {currentWork.summary && <p className="text-xs text-white/60 leading-relaxed">{currentWork.summary}</p>}
+                  {currentWork.tone && <p className="text-[11px] text-white/40">基调：{currentWork.tone}</p>}
+                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30 mt-1">地点</div>
+                  <div className="flex flex-wrap gap-2">
+                    {(currentWork.locations || []).map((name) => (
+                      <Badge key={name} tone="info">{name}</Badge>
+                    ))}
+                  </div>
+                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30 mt-1">角色</div>
+                  <ul className="flex flex-col gap-1">
+                    {(currentWork.characters || []).map((item) => (
+                      <li key={item.name} className="text-xs text-white/60">
+                        <span className="text-white/90 font-bold">{item.name}</span>
+                        {item.role ? <span className="text-white/40"> · {item.role}</span> : null}
+                        {item.description ? <div className="text-[11px] text-white/40">{item.description}</div> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           {world && tab === 'debug' && (
             <div className="flex flex-col gap-5">
