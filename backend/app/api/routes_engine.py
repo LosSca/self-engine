@@ -971,7 +971,7 @@ def _commit_reviewed(
         report.rejected.append(proposal.id)
         service.record(report)
         return report
-    report = service.commit(report, world, draft=draft)
+    report = service.commit(report, world, draft=draft, applied=applied)
     if proposal.status == evo.STATUS_AUTO:
         proposal.status = evo.STATUS_COMMITTED
     service.record(report)

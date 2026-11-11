@@ -196,3 +196,66 @@ def test_proposals_are_listed_and_filterable(client, world_id):
         "/api/v1/worlds/{0}/evolution/proposals?status=rejected".format(world_id)
     ).json()
     assert filtered == []
+
+
+def test_a_claim_with_no_op_is_never_reported_as_committed(client, world_id):
+    """Nothing wrote an op for this claim, so nothing may call it committed."""
+    from app.api import routes_engine
+    from app.services import world_evolution as evo
+
+    store = routes_engine._get_store()
+    try:
+        world = store.get_world(world_id)
+    finally:
+        store.close()
+    service = evo.WorldEvolutionService(store=none_store(), persist=lambda w: None)
+    proposal = evo.EvolutionProposal(
+        id="evo_noop",
+        kind="world_canon",
+        statement="The moon is made of salt.",
+        confidence=0.99,
+        world_id=world_id,
+    )
+    assert proposal.payload.get("op") is None
+    assert service._eligible(proposal) is True
+
+    report = evo.EvolutionReport(world_id=world_id)
+    report.proposals.append(proposal)
+    report.pending.append(proposal.id)
+    report = service.commit(report, world, draft=world.model_copy(deep=True), applied=[])
+    assert report.committed == []
+    assert proposal.status == evo.STATUS_PENDING
+
+
+class none_store:
+    """A recorder that keeps nothing: this test only exercises commit()."""
+
+    def record_proposal(self, proposal):
+        return {}
+
+
+def test_a_claim_the_world_already_has_is_never_called_committed(client, world_id):
+    """The conflict check refuses it, so nothing may be reported as committed."""
+    from app.api import routes_engine
+    from app.services import world_evolution as evo
+
+    payload = _propose(
+        client,
+        world_id,
+        statements=[{
+            """text""": """The Old Chapel still stands at the crossroads.""",
+            """kind""": """location""",
+            """confidence""": 0.95,
+            """entities""": ["""Old Chapel"""],
+        }],
+        commit=True,
+        auto_commit=0.0,
+    ).json()
+    assert payload["""committed"""] == []
+    assert payload["""rejected"""]
+    store = routes_engine._get_store()
+    try:
+        rows = store.list_proposals(world_id=world_id, limit=5)
+    finally:
+        store.close()
+    assert rows[0]["""status"""] == evo.STATUS_REJECTED

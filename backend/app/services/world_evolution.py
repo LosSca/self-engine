@@ -216,6 +216,29 @@ class EvolutionReport:
             "error": self.error,
         }
 
+
+
+def _carried(proposal: EvolutionProposal, applied: Sequence[Any]) -> bool:
+    """Whether this claim actually reached the staged draft.
+
+    stage_ops returns plain dicts of kind/summary, not references to the
+    proposals, so the claim name is what we can match on.
+    """
+    name = _claim_name(proposal)
+    if not name:
+        return False
+    wanted = " ".join(name.split()).lower()
+    op = str(proposal.payload.get("op") or "")
+    for item in applied or ():
+        if not isinstance(item, dict):
+            continue
+        if op and str(item.get("kind") or "") != op:
+            continue
+        summary = item.get("summary") or ""
+        if wanted and wanted in " ".join(str(summary).split()).lower():
+            return True
+    return False
+
 def proposal_id(world_id: str, statement: str, kind: str = "") -> str:
     """Stable id, so the same claim twice does not become two proposals."""
     seed = "{0}|{1}|{2}".format(world_id or "", normalize_kind(kind), " ".join(str(statement or "").split()).lower())
@@ -581,7 +604,12 @@ class WorldEvolutionService:
             return world, [], ["staging failed: {0}: {1}".format(type(exc).__name__, exc)]
         return draft, applied, list(warnings)
     def commit(
-        self, report: EvolutionReport, world: Any, *, draft: Any = None
+        self,
+        report: EvolutionReport,
+        world: Any,
+        *,
+        draft: Any = None,
+        applied: Optional[Sequence[Any]] = None,
     ) -> EvolutionReport:
         """Persist the world draft, but only if every reference still resolves."""
         if draft is None or draft is world:
@@ -608,11 +636,17 @@ class WorldEvolutionService:
             report.error = "{0}: {1}".format(type(exc).__name__, exc)
             logger.warning("world evolution commit failed: %s", exc)
             return report
+        # Optimistic when the caller did not say what was staged; strict when it did,
+        # so a claim that never reached the draft is not reported as committed.
         for proposal in report.proposals:
-            if proposal.status == STATUS_PENDING and proposal.canonical and proposal.id:
-                proposal.status = STATUS_AUTO
-                report.committed.append(proposal.id)
+            if proposal.status != STATUS_PENDING or not proposal.canonical or not proposal.id:
+                continue
+            if applied is not None and not _carried(proposal, applied):
+                continue
+            proposal.status = STATUS_AUTO
+            report.committed.append(proposal.id)
         return report
+
     def _eligible(self, proposal: EvolutionProposal) -> bool:
         return (
             proposal.status == STATUS_PENDING
@@ -677,10 +711,16 @@ class WorldEvolutionService:
             if proposal.status == STATUS_PENDING and proposal.id not in {p.id for p in eligible}:
                 report.pending.append(proposal.id)
         if eligible and commit:
-            statuses = {p.id: p.status for p in report.proposals}
             draft, applied, warnings = self._stage(world, eligible)
             report.warnings.extend(warnings)
-            report = self.commit(report, world, draft=draft)
+            report = self.commit(report, world, draft=draft, applied=applied)
+            for proposal in eligible:
+                if proposal.status == STATUS_PENDING and not _carried(proposal, applied):
+                    proposal.status = STATUS_REJECTED
+                    proposal.error = "the claim could not be staged: " + (
+                        report.warnings[0] if report.warnings else "no op was applied"
+                    )
+                    report.rejected.append(proposal.id)
         self.record(report)
         return report
 
@@ -710,7 +750,7 @@ class WorldEvolutionService:
             report.rejected.append(proposal.id)
             self.record(report)
             return report
-        report = self.commit(report, world, draft=draft)
+        report = self.commit(report, world, draft=draft, applied=applied)
         if proposal.status == STATUS_AUTO:
             proposal.status = STATUS_COMMITTED
         self.record(report)
