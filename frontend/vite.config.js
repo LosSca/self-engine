@@ -5,8 +5,15 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '')
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+    ],
     build: {
+      // 注意：`npm run build` 的产物 dist/index.html 里曾残留源文件的
+      // <script type="module" src="/src/main.jsx">。浏览器会再请求一次 /src/main.jsx，
+      // 拿到 index.html 当模块执行 → 首屏白屏。本机沙箱会重排插件顺序，构建钩子不可靠，
+      // 所以「生产预览」交给 scripts/serve-dist.mjs：它托管 dist 时也会过滤掉这一行
+      // （见该脚本的 stripDevEntry）。正常 Vite 构建本身就会删掉它。
       rollupOptions: {
         output: {
           // 第三方库单独成块：它们的版本变化远慢于业务代码，缓存命中率更高，

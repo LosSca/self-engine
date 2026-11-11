@@ -19,7 +19,7 @@ start-mobile.bat 已删除，它们的能力改由本文件的参数承接（见
 用法：
     python launch.py                  # 本地开发：后端 8000 + 前端 5173，并打开浏览器
     python launch.py --mobile         # 手机/局域网访问（等价 --host 0.0.0.0）
-    python launch.py --prod           # 预览生产构建（vite preview 提供 frontend/dist）
+    python launch.py --prod           # 生产构建 + 自带静态服务器托管（页面真的能渲染）
     python launch.py --debug          # 后端 --reload + debug 日志，并转储 LLM 调用
     python launch.py --backend-only   # 只起后端（旧的 start_backend.bat）
     python launch.py --frontend-only  # 只起前端（旧的 start_frontend.bat）
@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -57,6 +58,8 @@ LOGS = ROOT / ".logs"
 
 BACKEND_PORT = 8000
 FRONTEND_PORT = 5173
+PROD_PORT = 4173
+SERVE_DIST = ROOT / "scripts" / "serve-dist.mjs"
 DEFAULT_HOST = "127.0.0.1"
 WILDCARD_HOSTS = {"0.0.0.0", "::", ""}
 HEALTH_URL = "http://127.0.0.1:%d/api/health" % BACKEND_PORT
@@ -76,7 +79,7 @@ BANNER = """
 EPILOG = """三种典型用法：
   本地开发      python launch.py                （或双击 start.bat）
   手机/局域网   python launch.py --mobile       （等价 --host 0.0.0.0，会打印局域网地址）
-  预览构建产物  cd frontend && npm run build    然后  python launch.py --prod
+  预览构建产物  python launch.py --prod          （自动 npm run build；加 --rebuild 强制重建）
 
 自检/CI 用 --no-window：不开新窗口、日志写 .logs/、Ctrl+C 一并停掉子进程。
 """
@@ -101,8 +104,13 @@ def display_host(host: str) -> str:
     return DEFAULT_HOST if host in WILDCARD_HOSTS else host
 
 
-def frontend_url(host: str) -> str:
-    return "http://%s:%d" % (display_host(host), FRONTEND_PORT)
+def frontend_url(host: str, prod: bool = False) -> str:
+    return "http://%s:%d" % (display_host(host), PROD_PORT if prod else FRONTEND_PORT)
+
+
+def frontend_port(prod: bool) -> int:
+    """--prod 由自带静态服务器托管（4173），开发模式才是 vite dev 的 5173。"""
+    return PROD_PORT if prod else FRONTEND_PORT
 
 
 def is_lan_ipv4(ip: str) -> bool:
@@ -209,17 +217,31 @@ def npm_command(args: list[str]) -> list[str]:
     return ["npm", *args]
 
 
+def node_exe() -> str:
+    return shutil.which("node") or "node"
+
+
 def frontend_command(host: str, prod: bool) -> list[str]:
-    """开发模式跑 vite dev；--prod 跑 vite preview 提供 frontend/dist。
+    """开发模式跑 vite dev；--prod 用 scripts/serve-dist.mjs 托管 frontend/dist。
 
-    vite.config.js 只声明了 server.proxy，但 vite 的 preview 会回落到
-    server.proxy（vite 7: proxy: preview.proxy ?? server.proxy），所以预览模式
-    下 /api 与 /media 仍然被转发到后端，不需要另建配置。
-    --strictPort：端口被占用时直接失败，避免“等就绪”等到的其实是别人的进程。
+    为什么 --prod 不用 vite preview：preview 是一串中间件，任何一处插件顺序变化都可能
+    把 dist 里的 index.html 原样吐回去（本机沙箱就遇到过：预览页把源文件的
+    /src/main.jsx 又带出来，浏览器拿到 index.html 当模块执行 → 白屏）。
+    自带的小静态服务器只做三件事：找文件、SPA 回退、把 /api 与 /media 反代到后端，
+    行为可读可测。
+
+    --strictPort 只对 vite dev 有意义：端口被占用时直接失败，避免“等就绪”等到的其实
+    是别人的进程。
     """
-    script = "preview" if prod else "dev"
-    return npm_command(["run", script, "--", "--host", host, "--port", str(FRONTEND_PORT), "--strictPort"])
-
+    if prod:
+        return [
+            node_exe(),
+            str(SERVE_DIST),
+            str(DIST),
+            str(PROD_PORT),
+            "http://%s:%d" % (display_host(host), BACKEND_PORT),
+        ]
+    return npm_command(["run", "dev", "--", "--host", host, "--port", str(FRONTEND_PORT), "--strictPort"])
 
 def service_command(kind: str, py: str, host: str, prod: bool, debug: bool) -> tuple[list[str], Path]:
     """单个服务的启动命令与工作目录。"""
@@ -387,19 +409,40 @@ def print_failure_help(what: str, kind: str | None = None, show_log: bool = Fals
     say("  · 常见问题见 docs/launch.md")
 
 
-def preflight_prod() -> bool:
-    """--prod 需要已构建好的 frontend/dist，缺失时明确告诉用户先 build。"""
+def build_frontend() -> bool:
+    """跑一次 `npm run build`，把 frontend/dist 刷新成当前源码。
+
+    为什么要自动构建：--prod 托管的是 dist 里的旧文件，源码改了但没重新 build 时，
+    浏览器看到的是过期界面（最容易表现为“改了半天没反应”）。构建只需几秒，
+    放在启动路径里比让用户记着敲 npm run build 更可靠。
+    """
+    say("[构建] frontend/dist 需要刷新，正在执行 npm run build …")
+    try:
+        subprocess.run(
+            npm_command(["run", "build"]),
+            cwd=str(FRONTEND),
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        say("[错误] 前端构建失败：%s" % exc)
+        print_failure_help("前端")
+        return False
+    return True
+
+
+def preflight_prod(rebuild: bool = False) -> bool:
+    """--prod 需要已构建好的 frontend/dist；缺失或要求重建时先跑一次 npm run build。"""
+    has_dist = (DIST / "index.html").is_file()
+    if not has_dist:
+        say("[提示] 没有找到 frontend/dist/index.html，先构建前端。")
+    if rebuild or not has_dist:
+        if not build_frontend():
+            return False
     if (DIST / "index.html").is_file():
         return True
-    say("[错误] --prod 需要前端构建产物，但没有找到 frontend/dist/index.html。")
-    say("       请先构建前端，再重试：")
-    say("         cd frontend")
-    say("         npm run build")
-    say("         cd ..")
-    say("         python launch.py --prod")
-    say("       （只想跑源码开发模式的话去掉 --prod 即可，vite dev 不需要 dist。）")
+    say("[错误] 构建结束仍没有 frontend/dist/index.html，请手动执行：")
+    say("         cd frontend && npm run build")
     return False
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -424,8 +467,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--prod",
         action="store_true",
-        help="预览生产构建：用 vite preview 提供 frontend/dist（不再热更新）；dist 不存在时提示先"
-        "执行 npm run build 并以非零退出。默认仍是 vite dev。",
+        help="生产构建模式：先 npm run build，再用 scripts/serve-dist.mjs 托管 frontend/dist"
+        "（不再热更新，端口 4173）。默认仍是 vite dev。",
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="--prod 启动前先重新执行 npm run build（默认只在 dist 缺失时自动构建）。",
     )
     parser.add_argument("--backend-only", action="store_true", help="只启动后端（8000），不起前端。")
     parser.add_argument("--frontend-only", action="store_true", help="只启动前端（5173），假定后端已就绪。")
@@ -465,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
     say("[环境] 解释器: %s" % py)
     say("[环境] 后端目录: %s" % BACKEND)
     say("[环境] 前端目录: %s" % FRONTEND)
-    say("[环境] 模式: %s（%s）" % ("预览构建产物" if args.prod else "开发服务器", frontend_url(host) if not args.frontend_only else "-"))
+    say("[环境] 模式: %s（%s）" % ("预览构建产物" if args.prod else "开发服务器", frontend_url(host, args.prod) if not args.frontend_only else "-"))
     say("[环境] 绑定地址: %s" % host)
 
     want_backend = not args.frontend_only
@@ -473,11 +521,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- 预检：先判定清楚再启动任何进程，避免半途失败留下孤儿进程 ----
     if want_frontend:
-        if args.prod and not preflight_prod():
+        if args.prod and not preflight_prod(rebuild=args.rebuild):
             return 1
-        if not (FRONTEND / "node_modules").is_dir():
+        if not (FRONTEND / "node_modules").is_dir() and not args.prod:
             say("[错误] frontend/node_modules 不存在，请先执行  cd frontend && npm install")
             print_failure_help("前端")
+            return 1
+        if args.prod and not shutil.which("node"):
+            say("[错误] --prod 需要 node 来托管 frontend/dist，但 PATH 里找不到 node。")
             return 1
     if want_backend and port_open(BACKEND_PORT) and not http_ok(HEALTH_URL):
         say("[错误] 端口 %d 已被其他进程占用，但它不是本项目的后端。" % BACKEND_PORT)
@@ -502,10 +553,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- 前端 ----
     if want_frontend:
-        if port_open(FRONTEND_PORT):
-            say("[2/3] 前端已在运行: %s" % frontend_url(host))
+        if port_open(frontend_port(args.prod)):
+            say("[2/3] 前端已在运行: %s" % frontend_url(host, args.prod))
         else:
-            say("[2/3] 启动前端: %s（%s，host=%s）" % (frontend_url(host), "vite preview" if args.prod else "vite dev", host))
+            say(
+                "[2/3] 启动前端: %s（%s，host=%s）"
+                % (frontend_url(host, args.prod), "serve-dist" if args.prod else "vite dev", host)
+            )
             children.append(spawn_service("frontend", py, host, args.prod, args.debug, args.no_window))
             started_frontend = True
     else:
@@ -520,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
             ok = False
     if started_frontend and ok:
         say("[3/3] 等待前端就绪")
-        if not wait_until(lambda: port_open(FRONTEND_PORT), 120):
+        if not wait_until(lambda: port_open(frontend_port(args.prod)), 120):
             print_failure_help("前端", "frontend", show_log=args.no_window)
             ok = False
 
@@ -536,21 +590,24 @@ def main(argv: list[str] | None = None) -> int:
     say("========================================")
     say("  已就绪：")
     if want_frontend:
-        say("  前端    %s" % frontend_url(host))
+        say("  前端    %s" % frontend_url(host, args.prod))
     if want_backend:
         say("  后端API http://%s:%d/docs" % (display_host(host), BACKEND_PORT))
         say("  健康检查 %s" % HEALTH_URL)
     if want_frontend and args.prod:
-        say("  说明    --prod 预览的是 frontend/dist 的构建产物；改源码后需重新 npm run build")
+        say("  说明    --prod 托管的是 frontend/dist 的构建产物；改源码后重跑本命令（或加 --rebuild）即可刷新")
 
     if host not in WILDCARD_HOSTS and host != DEFAULT_HOST:
-        say("  局域网  前端 http://%s:%d  后端 http://%s:%d/docs" % (host, FRONTEND_PORT, host, BACKEND_PORT))
+        say(
+            "  局域网  前端 http://%s:%d  后端 http://%s:%d/docs"
+            % (host, frontend_port(args.prod), host, BACKEND_PORT)
+        )
     elif host in WILDCARD_HOSTS:
         addrs = lan_ipv4_addresses()
         say("  局域网/手机访问（同一 WiFi 下）：")
         if addrs:
             for ip in addrs:
-                say("    前端    http://%s:%d" % (ip, FRONTEND_PORT))
+                say("    前端    http://%s:%d" % (ip, frontend_port(args.prod)))
             say("    后端API http://%s:%d/docs" % (addrs[0], BACKEND_PORT))
             say("    手机浏览器打开上面的“前端”地址即可；首次访问若被拦截，")
             say("    请在 Windows 防火墙里允许 python.exe / node.exe 访问“专用网络”。")
@@ -562,7 +619,7 @@ def main(argv: list[str] | None = None) -> int:
     say()
 
     if want_frontend and not args.no_browser and not args.no_window:
-        webbrowser.open(frontend_url(host))
+        webbrowser.open(frontend_url(host, args.prod))
 
     if args.no_window:
         # 前台模式：本进程即“看门狗”，Ctrl+C 时一并结束子进程。

@@ -469,9 +469,19 @@ start.bat           # Windows
 两端脚本都只是调用 `launch.py` 的薄封装，所以 `python launch.py` 等价。
 
 只需这一条命令：`launch.py` 探测解释器 → 起后端（`127.0.0.1:8000`）→
-起前端（`127.0.0.1:5173`）→ 等健康检查 → 打开浏览器。打开
-**http://127.0.0.1:5173** 即可开始，API 文档在 <http://127.0.0.1:8000/docs>。
+起前端 → 等健康检查 → 打开浏览器。API 文档在 <http://127.0.0.1:8000/docs>。
 关掉启动器窗口即停止两端，不需要自己开两个终端跑 `uvicorn` 和 `npm run dev`。
+
+两种前端模式：
+
+| 命令 | 前端 | 端口 | 适合 |
+|------|------|------|------|
+| `start.bat` / `python launch.py` | vite dev（热更新） | 5173 | 改前端代码时 |
+| `start.bat --prod` | `npm run build` + 自带静态服务器托管 `frontend/dist` | 4173 | 演示、桌面快捷方式 |
+
+**桌面快捷方式默认走 `--prod`**：某些受限环境里 vite dev 无法在浏览器端预打包依赖，
+裸导入会 404 导致白屏；`--prod` 交付的是一份已经打包好的 js，在任何环境下都能渲染。
+想回到热更新就在参数里加 `--dev`。细节见 [`docs/launch.md`](docs/launch.md)。
 
 常用参数（传给 `launch.py`）：`--debug`（后端 reload + 调用转储）、
 `--backend-only` / `--frontend-only`、`--no-browser`、
@@ -514,6 +524,7 @@ start.bat           # Windows
 shujia/
 ├── launch.py                    # 通用启动器（前后端编排、健康检查、浏览器）
 ├── start.bat                    # Windows 入口（纯 ASCII，调用 launch.py）
+├── scripts/serve-dist.mjs       # --prod 的前端静态托管 + /api 反代
 ├── scripts/start.sh             # macOS / Linux 启动入口（调用 launch.py）
 ├── scripts/start-dev.ps1        # PowerShell 开发启动脚本
 ├── install.bat / install.sh     # 一键安装（含可选 Neo4j 容器）
@@ -771,7 +782,7 @@ npm --prefix frontend run build
 | LLM 调度 | 部分 | 判定由确定性规则承担，没有 LLM judge；超时/重试未按功能独立配置 |
 | 记忆与历史 | 部分 | 规则链路只有确定性滚动摘要 + 可选 summary 预设；无统一 NPC 知识库视图 |
 | 模型配置 | 部分 | 预设的角色覆盖仍以叙事为主 |
-| 前端 | **未验证** | 当前环境的 `vite build` 不可用（预览钩子导致配置模块解析失败），前端只做过逐文件语法检查，**没有在浏览器里被自动化验证过** |
+| 前端 | 部分 | `vite build` 已可运行（2999 modules → `frontend/dist`），构建产物由 `scripts/serve-dist.mjs` 托管并逐路由验证过 200；但没有浏览器自动化，交互仍是人工验证 |
 | 旧聊天链路 | 待日落 | `LEGACY_APPLY_ITEM_TAGS` 默认 0，已不写权威状态，但代码与前端标记剥离逻辑仍在 |
 | 叙事语言 | 部分 | 只支持中/英二选一；世界工坊未暴露 `language` 字段 |
 | 作品库 | 部分 | 内置六部作品，未做联网检索；模型补写依赖已配置模型 |
@@ -788,6 +799,8 @@ SQLite 单写者（高并发回以版本冲突重试）、知识为词法相似�
    `graphiti-core>=0.5.0` 又要求 `pydantic>=2.8.2` 而 `requirements.txt` 钉的是 `2.8.0`。
    上游未动；本地开发时去掉这两个钉版本即可（安装脚本按原文件执行，遇到同样问题需手动处理）。
 2. **pytest 必须设 `TEMP`/`TMP` 并关掉缓存提供者**，见上一节的命令。
+3. **受限环境里 `vite dev` 可能白屏**（浏览器端依赖预打包被拦，裸导入 404）。这不是本项目
+   的代码问题，改用 `--prod` 即可；桌面快捷方式已经默认 `--prod`。
 
 ---
 

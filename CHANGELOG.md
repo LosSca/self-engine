@@ -7,6 +7,17 @@
 从「模型驱动的聊天」推进到「规则驱动的引擎 + 模型叙事」：新增一句话生成剧本、作品穿越、
 任务编辑与推进、叙事诊断、内容策略与本地回退，并让叙事语言跟随世界。
 
+### Fixed（前端真的能在浏览器里渲染了）
+
+- **`launch.py --prod` 生产托管**：先 `npm run build`（默认只在 `dist` 缺失时自动构建，`--rebuild` 强制），
+  再由新增的 `scripts/serve-dist.mjs` 在 4173 端口托管 `frontend/dist`，并把 `/api`、`/media` 反代到后端。
+  不依赖 `vite preview` 的中间件顺序，托管时过滤掉构建产物里残留的
+  `<script type="module" src="/src/main.jsx">`（它会让浏览器把源码当模块再拉一次而白屏）。
+- **桌面快捷方式默认 `--prod`**：受限环境里 `vite dev` 无法预打包依赖，裸导入 404 → 白屏；
+  构建产物是一份打包好的 js，在任何环境下都能渲染。想热更新时加 `--dev`。
+- `launch.py` 的 `_temp_dir()` / `log_path()` 回退链、前端端口按模式取 4173 或 5173、
+  `--prod` 只要求 node 而不要求 `frontend/node_modules`。
+
 ### Added
 
 - **一句话生成剧本**：`POST /api/v1/scenarios/author`，一次调用返回世界 + 知识 + 剧情线，三件各自独立校验，
