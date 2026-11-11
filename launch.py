@@ -251,13 +251,16 @@ def _temp_dir() -> Path:
 
 
 def log_path(kind: str) -> Path:
-    """日志文件位置：优先 .logs/，不可写时退到临时目录，绝不因为写不了日志而起不来。"""
-    if writable_dir(LOGS):
-        return LOGS / LOG_NAMES[kind]
-    fallback = _temp_dir() / "lunar-logs"
-    if writable_dir(fallback):
-        return fallback / LOG_NAMES[kind]
-    return LOGS / LOG_NAMES[kind]
+    """日志文件位置：.logs/ → 临时目录/lunar-logs → 仓库根目录。
+
+    最后一级必须真的能创建，否则 open() 在服务启动时就抛错，看起来完全像「服务起不来」。
+    日志放仓库根目录（.gitignore 已覆盖 *.log）总比启动失败好。
+    """
+    candidates = (LOGS, _temp_dir() / "lunar-logs", ROOT)
+    for directory in candidates:
+        if writable_dir(directory):
+            return directory / LOG_NAMES[kind]
+    return Path(tempfile.mkdtemp(prefix="lunar-")) / LOG_NAMES[kind]
 
 
 def spawn_service(
