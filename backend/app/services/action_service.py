@@ -50,7 +50,12 @@ from app.models.game import (
 )
 from app.models.knowledge import ScenarioPlayContext
 from app.services.knowledge_service import build_context
-from app.services.narrative_service import TemplateNarrator, preset_router, render_fallback
+from app.services.narrative_service import (
+    TemplateNarrator,
+    capture_diagnostics,
+    preset_router,
+    render_fallback,
+)
 from app.services.summary_service import SUMMARY_EVERY_TURNS, summarize
 
 
@@ -71,6 +76,23 @@ FACT_KINDS = {
     "quest_progress": "quest_progress",
 }
 
+
+def _diagnostics_payload(narrative: NarrativeResult) -> Dict[str, Any]:
+    """Describe the narrator call for a stored event, compactly.
+
+    The block excerpts are kept: they are the only record of what the model
+    was told, and without them a reviewer cannot explain a surprising line
+    after the scenario has been edited. They are already truncated by
+    `capture_diagnostics`, so the row stays small.
+    """
+    diagnostics = getattr(narrative, "diagnostics", None)
+    if diagnostics is None:
+        return {}
+    payload = diagnostics.model_dump(mode="json")
+    # An empty capture is not worth a row of nulls.
+    if not diagnostics.blocks and not diagnostics.provider and not diagnostics.skipped:
+        return {}
+    return payload
 
 def _settled_event_rows(
     executions, quest_updates, version: int
@@ -701,7 +723,13 @@ class ActionService:
         propagating, so a flaky model cannot undo a rules-decided turn.
         """
         if not request.narrate:
-            return NarrativeResult(status="skipped"), []
+            # Record that the caller asked for no prose, so the debug panel can
+            # tell "narrate=false" apart from "the narrator was configured",
+            # while the capture itself still costs nothing.
+            cap = capture_diagnostics(None, None, skipped=True)
+            return NarrativeResult(
+                status="skipped", diagnostics=cap
+            ), []
         knowledge: List[Dict[str, Any]] = []
         context_entries: List[str] = []
         options: Optional[Dict[str, Any]] = None
@@ -802,6 +830,9 @@ class ActionService:
                         text=fallback,
                         model="fallback",
                         error=narrative.error,
+                        # The model call did happen; keeping its capture is
+                        # what lets a reviewer see why it was rejected.
+                        diagnostics=narrative.diagnostics,
                     ),
                     context_entries,
                 )
@@ -1090,6 +1121,7 @@ class ActionService:
                     "payload": {
                         "text": narrative.text,
                         "model": getattr(narrative, "model", ""),
+                        "diagnostics": _diagnostics_payload(narrative),
                     },
                     "state_version": new_state.version,
                 }

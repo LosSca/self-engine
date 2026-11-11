@@ -1096,11 +1096,51 @@ class EventExecution(BaseModel):
     depth: int = 0
 
 
+class NarrativeBlock(BaseModel):
+    """One piece of context handed to the narrator, for the debug console.
+
+    The id is what the engine knows the block by (a knowledge entry id, a
+    history record id); title and layer are what a person reads. The excerpt
+    is deliberately short: the debug panel is for spotting WHICH context was
+    used, and the full text stays in the scenario store.
+    """
+
+    id: str = ""
+    layer: str = ""
+    title: str = ""
+    excerpt: str = ""
+
+
+class NarrativeDiagnostics(BaseModel):
+    """What the narrator actually saw and which model answered.
+
+    Recorded next to every turn so a reviewer can answer "why did it say
+    that" without re-running the model: the settings are the ones actually
+    sent, and nothing here can influence the committed state.
+    """
+
+    provider: str = ""
+    model: str = ""
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    timeout: float = 0.0
+    language: str = ""
+    content_policy: str = ""
+    #: True when a preset promoted the turn to a different route (slot model).
+    preset_routed: bool = False
+    #: True when diagnostics were captured but the turn was not narrated.
+    skipped: bool = False
+    blocks: List[NarrativeBlock] = Field(default_factory=list)
+    #: Which committed facts the prompt was given, counted by source.
+    fact_counts: Dict[str, int] = Field(default_factory=dict)
+
 class NarrativeResult(BaseModel):
     status: Literal["skipped", "ok", "failed"] = "skipped"
     text: str = ""
     error: str = ""
     model: str = ""
+    #: Populated on every turn; empty only when the caller disabled capture.
+    diagnostics: Optional[NarrativeDiagnostics] = None
 
 
 class ActionResult(BaseModel):

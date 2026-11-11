@@ -20,6 +20,8 @@ from app.models.game import (
     Effect,
     EventExecution,
     GameState,
+    NarrativeBlock,
+    NarrativeDiagnostics,
     NarrativeResult,
     RuleOutcome,
     WorldDefinition,
@@ -57,6 +59,79 @@ def _last_error_text(error: Optional[BaseException]) -> str:
     if error is None:
         return ""
     return f"{type(error).__name__}: {error}"
+
+
+#: How much of a context block the debug panel keeps. Long enough to recognise
+#: the passage, short enough that a turn does not carry whole canon entries.
+BLOCK_EXCERPT_CHARS = 160
+
+
+def capture_blocks(knowledge: Optional[Sequence[Mapping]]) -> List[NarrativeBlock]:
+    """Summarise the context a narrator is about to be given.
+
+    Only already-committed or authored material is described here, and only
+    for reading back later: the excerpt never re-enters the prompt.
+    """
+    blocks: List[NarrativeBlock] = []
+    for block in knowledge or ():
+        if not isinstance(block, Mapping):
+            continue
+        content = block.get("content")
+        excerpt = " ".join(str(content or "").split())[:BLOCK_EXCERPT_CHARS]
+        blocks.append(
+            NarrativeBlock(
+                id=str(block.get("id") or ""),
+                layer=str(block.get("layer") or block.get("kind") or ""),
+                title=str(block.get("title") or ""),
+                excerpt=excerpt,
+            )
+        )
+    return blocks
+
+
+def capture_diagnostics(
+    knowledge: Optional[Sequence[Mapping]] = None,
+    options: Optional[Mapping] = None,
+    *,
+    provider: str = "",
+    model: str = "",
+    timeout: float = 0.0,
+    default_temperature: Optional[float] = None,
+    default_max_tokens: Optional[int] = None,
+    default_language: str = "",
+    skipped: bool = False,
+    fact_counts: Optional[Mapping[str, int]] = None,
+) -> NarrativeDiagnostics:
+    """Describe the narrator call for the debug console.
+
+    Everything is best effort: an odd option value is recorded as a blank
+    field rather than raising, because diagnostics must never break a turn.
+    """
+    opts = options if isinstance(options, Mapping) else {}
+    language = opts.get("language")
+    language = language.strip() if isinstance(language, str) else ""
+    policy = opts.get("content_policy")
+    policy = policy.strip().lower() if isinstance(policy, str) else ""
+    routed = bool(opts.get("provider") or opts.get("model"))
+    temperature = opts.get("temperature")
+    if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+        temperature = default_temperature
+    max_tokens = opts.get("max_tokens")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool):
+        max_tokens = default_max_tokens
+    return NarrativeDiagnostics(
+        provider=str(opts.get("provider") or provider or ""),
+        model=str(opts.get("model") or model or ""),
+        temperature=float(temperature) if isinstance(temperature, (int, float)) else None,
+        max_tokens=max_tokens if isinstance(max_tokens, int) else None,
+        timeout=float(timeout or 0.0),
+        language=language or str(default_language or ""),
+        content_policy=policy,
+        preset_routed=routed,
+        skipped=skipped,
+        blocks=capture_blocks(knowledge),
+        fact_counts={str(k): int(v) for k, v in (fact_counts or {}).items()},
+    )
 
 
 def preset_router(options: Optional[dict]):
@@ -404,7 +479,18 @@ class TemplateNarrator:
             progress = state.quests.get(quest_id)
             if progress is not None and progress.status == "completed":
                 parts.append(f"Quest completed: {_quest_title(world, quest_id)}.")
-        return NarrativeResult(status="ok", text=" ".join(parts).strip(), model="template")
+        return NarrativeResult(
+            status="ok",
+            text=" ".join(parts).strip(),
+            model="template",
+            diagnostics=capture_diagnostics(
+                knowledge,
+                None,
+                provider="template",
+                model="template",
+                skipped=True,
+            ),
+        )
 
 
 #: How many turns of committed history the narrator may see by default.
@@ -609,6 +695,16 @@ class LLMNarrator:
             request, outcome, state, world, executions, knowledge,
             language=language, system_override=system_override,
         )
+        diagnostics = capture_diagnostics(
+            knowledge,
+            options,
+            provider=str(getattr(getattr(self.router, "config", None), "provider", "") or ""),
+            model=str(getattr(getattr(self.router, "config", None), "model", "") or ""),
+            timeout=self.timeout,
+            default_temperature=self.temperature,
+            default_max_tokens=self.max_tokens,
+            default_language=self.language,
+        )
         max_tokens = self.max_tokens
         temperature = self.temperature
         sampler_kwargs: dict = {}
@@ -675,14 +771,35 @@ class LLMNarrator:
                     raise
         except asyncio.TimeoutError:
             return NarrativeResult(
-                status="failed", error=f"narrator timed out after {self.timeout}s"
+                status="failed",
+                error=f"narrator timed out after {self.timeout}s",
+                diagnostics=diagnostics,
             )
         except Exception as exc:  # noqa: BLE001 - narrative must never break the turn
-            return NarrativeResult(status="failed", error=f"{type(exc).__name__}: {exc}")
+            return NarrativeResult(
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                diagnostics=diagnostics,
+            )
         cleaned = _CONTROL_TAG.sub("", text or "").strip()
         if not cleaned:
-            return NarrativeResult(status="failed", error="narrator returned empty text")
-        return _verified(world, outcome, cleaned, executions_effects)
+            return NarrativeResult(
+                status="failed",
+                error="narrator returned empty text",
+                diagnostics=diagnostics,
+            )
+        verified = _verified(world, outcome, cleaned, executions_effects)
+        # The route that actually answered wins over the one that was planned:
+        # a refusal reroute changes the policy, and a reviewer needs to see it.
+        if isinstance(verified, NarrativeResult) and verified.diagnostics is None:
+            verified = verified.model_copy(
+                update={
+                    "diagnostics": diagnostics.model_copy(
+                        update={"content_policy": policy}
+                    )
+                }
+            )
+        return verified
 
 
 def build_narrator(router=None, **kwargs) -> "TemplateNarrator | LLMNarrator":
