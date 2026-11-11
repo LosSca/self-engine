@@ -10,6 +10,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GAME_STATE_DB_PATH", str(tmp_path / "game_state.db"))
     monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
     monkeypatch.setenv("ENGINE_NARRATOR", "template")
+    # Patch every store path first: reloading app.main rebuilds routes_game,
+    # whose stores are opened at import time.
+    monkeypatch.setenv("LLM_TRACE_DB_PATH", str(tmp_path / "traces.db"))
     import app.main as main
 
     importlib.reload(main)

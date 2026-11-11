@@ -4,17 +4,30 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main_module
+# Imported inside the fixture: a module-scope import would load routes_game
+# and open its SQLite stores before any test patches the paths, which leaves
+# the rest of the suite writing into this checkout's backend/*.db.
+
 from app.engines.llm_router import LLMProvider
 
 
 @pytest.fixture()
-def client():
+def main_module(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenarios.db"))
+    monkeypatch.setenv("GAME_STATE_DB_PATH", str(tmp_path / "game_state.db"))
+    monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
+    monkeypatch.setenv("LLM_TRACE_DB_PATH", str(tmp_path / "traces.db"))
+    import app.main as module
+    return module
+
+
+@pytest.fixture()
+def client(main_module):
     return TestClient(main_module.app)
 
 
 @pytest.fixture(autouse=True)
-def _restore_policy():
+def _restore_policy(main_module):
     config = main_module._llm.config
     snapshot = (
         config.content_policy,
@@ -47,7 +60,7 @@ def test_get_settings_reports_the_policy_surface(client):
     assert "local_route_available" in body
 
 
-def test_policy_switch_round_trips(client):
+def test_policy_switch_round_trips(client, main_module):
     response = client.post(
         "/api/settings",
         json={
@@ -66,7 +79,7 @@ def test_policy_switch_round_trips(client):
     assert config.local_fallback_on_refusal is True
 
 
-def test_omitting_the_policy_leaves_the_switch_alone(client):
+def test_omitting_the_policy_leaves_the_switch_alone(client, main_module):
     main_module._llm.config.content_policy = "nsfw"
     response = client.post(
         "/api/settings",

@@ -18,6 +18,8 @@ def test_get_traces_for_unknown_campaign_returns_empty_list(client):
 
 
 def test_delete_traces_for_unknown_campaign_returns_deleted_count(client):
+    from app.api import routes_game
+    print("TRACEDB", routes_game._trace_store._conn.execute("PRAGMA database_list").fetchall())
     r = client.delete("/api/game/does-not-exist/traces")
     assert r.status_code == 200
     assert "deleted" in r.json()

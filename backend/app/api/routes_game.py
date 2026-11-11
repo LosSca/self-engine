@@ -404,6 +404,20 @@ class PlayerActionRequest(BaseModel):
 # app/engines/item_proposals.py).
 
 
+def _context_window_quietly(campaign_id: str) -> str:
+    """Build the world-memory window, tolerating a store that cannot be read.
+
+    Generation endpoints and timeskip treat memory as enrichment: on a fresh
+    or unreadable event store the turn still has to run, so the window just
+    comes back empty instead of turning the request into a 500.
+    """
+    try:
+        return _memory.build_context_window(campaign_id)
+    except Exception:
+        logger.warning("world memory window unavailable for %s", campaign_id, exc_info=True)
+        return ""
+
+
 def _game_state_db_path() -> str:
     return os.environ.get(
         "GAME_STATE_DB_PATH", os.path.join(_BACKEND_DIR, "game_state.db")
@@ -1210,7 +1224,7 @@ async def crystallize_memory(campaign_id: str):
 
 @router.post("/{campaign_id}/generate")
 async def generate_content(campaign_id: str, req: GenerateRequest):
-    world_ctx = _memory.build_context_window(campaign_id)
+    world_ctx = _context_window_quietly(campaign_id)
     if req.type == "npc":
         npc = await _plot_generator.generate_npc(world_ctx, language=req.language)
         return asdict(npc)
@@ -1230,7 +1244,7 @@ async def inject_npc_seed(campaign_id: str, req: GenerateRequest):
     if campaign_id not in _sessions:
         raise HTTPException(404, "No active session for this campaign")
     session = _sessions[campaign_id]
-    world_ctx = _memory.build_context_window(campaign_id)
+    world_ctx = _context_window_quietly(campaign_id)
     existing_names = []
     if session._npc_minds:
         existing_names = [m.name for m in session._npc_minds.get_all_minds(campaign_id)]
@@ -1254,7 +1268,7 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
         location="world",
         entities=[],
     )
-    world_ctx = _memory.build_context_window(campaign_id)
+    world_ctx = _context_window_quietly(campaign_id)
     session_language = _sessions[campaign_id].language if campaign_id in _sessions else "en"
     world_changes = await _world_reactor.process_tick(
         campaign_id=campaign_id,

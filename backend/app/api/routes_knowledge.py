@@ -59,7 +59,12 @@ def _scenario_event_ids(scenario_id: str) -> Optional[set[str]]:
     )
     if not os.path.exists(path):
         return None
-    store = GameStateStore(path)
+    # This helper only reads. Opening read-only keeps a migration from firing
+    # on an unrelated save, which would make every write here a schema change.
+    try:
+        store = GameStateStore(path, migrate=False)
+    except Exception:  # pragma: no cover - schema older than this build
+        return None
     try:
         worlds = [
             item for item in store.list_worlds()

@@ -13,6 +13,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
     monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenario.db"))
     monkeypatch.setenv("ENGINE_DEBUG_TOOLS", "1")
+    monkeypatch.setenv("LLM_TRACE_DB_PATH", str(tmp_path / "traces.db"))
     import importlib
 
     import app.main as main

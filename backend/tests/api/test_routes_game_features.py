@@ -8,6 +8,9 @@ from types import SimpleNamespace
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenarios.db"))
     monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
+    # routes_game opens its trace store at import time, so a module loaded by an
+    # earlier test file would otherwise keep that file's (deleted) database.
+    monkeypatch.setenv("LLM_TRACE_DB_PATH", str(tmp_path / "traces.db"))
     from app.main import app
     return TestClient(app)
 

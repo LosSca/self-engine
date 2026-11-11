@@ -877,6 +877,280 @@ async def author_scenario(body: AuthorScenarioRequest):
         scenario_store.close()
 
 
+class EvolutionStatementView(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+    kind: str = ""
+    confidence: float = 0.5
+    entities: List[str] = Field(default_factory=list)
+
+
+class EvolutionProposeRequest(BaseModel):
+    text: str = Field("", max_length=8000)
+    statements: List[EvolutionStatementView] = Field(default_factory=list)
+    campaign_id: str = ""
+    observer: str = "player"
+    source: str = ""
+    auto_commit: Optional[float] = None
+    #: Write the validated draft back. False makes this a safe dry run, which
+    #: is what the editor shows while an author is still deciding.
+    commit: bool = False
+
+
+class EvolutionProposalView(BaseModel):
+    id: str
+    kind: str
+    statement: str
+    confidence: float
+    status: str
+    origin: str = ""
+    source: str = ""
+    observer: str = ""
+    canonical: bool = False
+    personal: bool = False
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+    error: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class EvolutionResponse(BaseModel):
+    world_id: str
+    campaign_id: str = ""
+    proposals: List[EvolutionProposalView] = Field(default_factory=list)
+    committed: List[str] = Field(default_factory=list)
+    pending: List[str] = Field(default_factory=list)
+    rejected: List[str] = Field(default_factory=list)
+    conflicts: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    degraded: bool = False
+    error: str = ""
+
+
+def _commit_reviewed(
+    store: Any, write_world: Any, world: Any, row: Dict[str, Any]
+) -> Any:
+    """Commit exactly the proposal a human approved, not newer ones."""
+    from app.services import world_evolution as evo
+
+    # A human approved this one: confidence is the model's hesitation, not the
+    # reviewer's, so eligibility here is the canonical check alone.
+    service = evo.WorldEvolutionService(store, persist=write_world, auto_commit=0.0)
+    proposal = _proposal_from_row(row)
+    report = evo.EvolutionReport.empty(
+        world_id=str(row.get("world_id") or ""),
+        campaign_id=str(row.get("campaign_id") or ""),
+    )
+    proposal.status = evo.STATUS_PENDING
+    report.proposals.append(proposal)
+    if not service._eligible(proposal):
+        proposal.status = evo.STATUS_REJECTED
+        proposal.error = "not committable: kind={0} confidence={1}".format(
+            proposal.kind, round(proposal.confidence, 2)
+        )
+        report.rejected.append(proposal.id)
+        service.record(report)
+        return report
+    draft, applied, warnings = service._stage(world, [proposal])
+    report.warnings.extend(warnings)
+    if not applied:
+        proposal.status = evo.STATUS_REJECTED
+        proposal.error = warnings[0] if warnings else "draft did not change"
+        report.rejected.append(proposal.id)
+        service.record(report)
+        return report
+    report = service.commit(report, world, draft=draft)
+    if proposal.status == evo.STATUS_AUTO:
+        proposal.status = evo.STATUS_COMMITTED
+    service.record(report)
+    return report
+
+
+def _evolution_service(store: Any, write_world: Any, auto_commit: Optional[float]) -> Any:
+    """Build the service around the world writer, never around a store slot."""
+    from app.services import world_evolution
+
+    kwargs: Dict[str, Any] = {"persist": write_world}
+    if auto_commit is not None:
+        kwargs["auto_commit"] = auto_commit
+    return world_evolution.WorldEvolutionService(store, **kwargs)
+
+
+def _world_writer(game_store: Any) -> Any:
+    """Persist a validated draft through the same path the editor uses."""
+
+    def write(world: Any) -> None:
+        world_service.save_world(game_store, world)
+
+    return write
+
+
+def _evolution_statements(body: EvolutionProposeRequest) -> List[Any]:
+    """Classify free text deterministically; explicit statements win."""
+    from app.engines import system_agent
+
+    if body.statements:
+        return [
+            system_agent.Statement(
+                text=item.text,
+                kind=item.kind or "canonical_fact",
+                confidence=item.confidence,
+                entities=list(item.entities),
+            )
+            for item in body.statements
+        ]
+    if not body.text.strip():
+        return []
+    return list(system_agent.classify_locally(body.text).statements)
+
+
+def _evolution_response(report: Any) -> EvolutionResponse:
+    return EvolutionResponse(
+        world_id=report.world_id,
+        campaign_id=report.campaign_id,
+        proposals=[EvolutionProposalView(**item) for item in report.to_dict()["proposals"]],
+        committed=list(report.committed),
+        pending=list(report.pending),
+        rejected=list(report.rejected),
+        conflicts=list(report.conflicts),
+        warnings=list(report.warnings),
+        degraded=report.degraded,
+        error=report.error,
+    )
+
+@router.post("/worlds/{world_id}/evolution/propose", response_model=EvolutionResponse)
+def propose_world_evolution(world_id: str, body: EvolutionProposeRequest):
+    """Draft what a turn would change. commit defaults to False."""
+    game_store = _get_store()
+    try:
+        world = _world_or_404_detail(world_id)
+        service = _evolution_service(game_store, _world_writer(game_store), body.auto_commit)
+        report = service.run(
+            world,
+            _evolution_statements(body),
+            campaign_id=body.campaign_id,
+            observer=body.observer,
+            source=body.source,
+            commit=body.commit,
+        )
+        return _evolution_response(report)
+    finally:
+        game_store.close()
+
+
+@router.get(
+    "/worlds/{world_id}/evolution/proposals",
+    response_model=List[EvolutionProposalView],
+)
+def list_world_evolution_proposals(
+    world_id: str,
+    status: str = "",
+    kind: str = "",
+    limit: int = 100,
+):
+    """The audit trail: what was proposed, what happened to it, and why."""
+    store = _get_store()
+    try:
+        rows = store.list_proposals(
+            world_id=world_id, status=status, kind=kind, limit=limit
+        )
+    finally:
+        store.close()
+    return [EvolutionProposalView(**_proposal_view(row)) for row in rows]
+
+@router.post(
+    "/worlds/{world_id}/evolution/proposals/{proposal_id}/approve",
+    response_model=EvolutionResponse,
+)
+def approve_world_evolution_proposal(world_id: str, proposal_id: str):
+    """Commit one pending proposal after a human decision."""
+    game_store = _get_store()
+    try:
+        row = game_store.get_proposal(proposal_id)
+        if row is None or row.get("world_id") != world_id:
+            raise HTTPException(status_code=404, detail="unknown proposal")
+        if row.get("status") != "pending":
+            raise HTTPException(
+                status_code=409, detail="proposal is {0}".format(row.get("status"))
+            )
+        world = _world_or_404_detail(world_id)
+        service = _evolution_service(game_store, _world_writer(game_store), None)
+        report = _commit_reviewed(
+            game_store, _world_writer(game_store), world, row
+        )
+        return _evolution_response(report)
+    finally:
+        game_store.close()
+
+
+@router.post(
+    "/worlds/{world_id}/evolution/proposals/{proposal_id}/reject",
+    response_model=EvolutionProposalView,
+)
+def reject_world_evolution_proposal(
+    world_id: str, proposal_id: str, reason: str = ""
+):
+    """Refuse a proposal and keep the reason next to it."""
+    store = _get_store()
+    try:
+        row = store.get_proposal(proposal_id)
+        if row is None or row.get("world_id") != world_id:
+            raise HTTPException(status_code=404, detail="unknown proposal")
+        row["status"] = "rejected"
+        row["error"] = reason or "rejected by reviewer"
+        store.record_proposal(row)
+        updated = store.get_proposal(proposal_id) or row
+    finally:
+        store.close()
+    return EvolutionProposalView(**_proposal_view(updated))
+
+def _proposal_from_row(row: Dict[str, Any]) -> Any:
+    from app.services import world_evolution
+
+    return world_evolution.EvolutionProposal(
+        id=row.get("id", ""),
+        kind=row.get("kind", ""),
+        statement=row.get("statement", ""),
+        confidence=row.get("confidence", 0.5),
+        world_id=row.get("world_id", ""),
+        campaign_id=row.get("campaign_id", ""),
+        origin=row.get("origin", ""),
+        source=row.get("source", ""),
+        observer=row.get("observer", ""),
+        status=row.get("status", "pending"),
+        payload=row.get("payload") or {},
+        evidence=row.get("evidence") or [],
+        warnings=row.get("warnings") or [],
+        error=row.get("error", ""),
+        result=row.get("result") or {},
+        created_at=row.get("created_at", ""),
+    )
+
+
+def _proposal_view(row: Dict[str, Any]) -> Dict[str, Any]:
+    from app.services import world_evolution as evo
+
+    kind = evo.normalize_kind(row.get("kind", ""))
+    return {
+        "id": row.get("id", ""),
+        "kind": kind,
+        "statement": row.get("statement", ""),
+        "confidence": float(row.get("confidence") or 0.0),
+        "status": row.get("status", "pending"),
+        "origin": row.get("origin", ""),
+        "source": row.get("source", ""),
+        "observer": row.get("observer", ""),
+        "canonical": evo.is_canonical(kind),
+        "personal": evo.is_personal(kind),
+        "payload": row.get("payload") or {},
+        "warnings": row.get("warnings") or [],
+        "error": row.get("error", ""),
+        "result": row.get("result") or {},
+        "created_at": row.get("created_at", ""),
+        "updated_at": row.get("updated_at", ""),
+    }
+
 @router.get("/worlds/{world_id}", response_model=WorldDefinition)
 def get_world(world_id: str):
     store = _get_store()

@@ -5,9 +5,10 @@ exist to prove three things: every hand-built route declares a real model
 rather than Dict[str, Any], the published OpenAPI schema matches what the
 routes actually return, and a contract break is impossible to ship silently.
 """
+import sys
+
 import pytest
 
-from app.main import app
 
 
 API = "/api/v1"
@@ -32,6 +33,10 @@ TYPED_PATHS = [
     ("get", "/api/v1/campaigns/{campaign_id}/requests"),
     ("get", "/api/v1/agents"),
     ("get", "/api/v1/campaigns/{campaign_id}/agent-calls"),
+    ("post", "/api/v1/worlds/{world_id}/evolution/propose"),
+    ("get", "/api/v1/worlds/{world_id}/evolution/proposals"),
+    ("post", "/api/v1/worlds/{world_id}/evolution/proposals/{proposal_id}/approve"),
+    ("post", "/api/v1/worlds/{world_id}/evolution/proposals/{proposal_id}/reject"),
     ("post", "/api/v1/worlds/{world_id}/plan"),
     ("post", "/api/v1/worlds/{world_id}/preview-actions"),
     ("post", "/api/v1/worlds/{world_id}/explain"),
@@ -49,6 +54,11 @@ TYPED_PATHS = [
 
 
 def _schema() -> dict:
+    # Imported lazily: a module-scope import would open routes_game's SQLite
+    # stores before any test patches their paths, so the rest of the suite would
+    # write into this checkout instead of a temporary directory.
+    from app.main import app
+
     return app.openapi()
 
 
@@ -141,7 +151,9 @@ def test_validation_actually_runs_on_the_way_out():
             return {"campaign_id": campaign_id}
 
         routes_engine.get_campaign_lane = broken
-        app.dependency_overrides.clear()
+        from app.main import app as _app
+
+        _app.dependency_overrides.clear()
         # FastAPI captured the endpoint at import time; drive the response model
         # directly instead of swapping the whole route table.
         model = routes_engine.LaneResponse
@@ -163,11 +175,13 @@ def _requests_client(tmp_path, monkeypatch):
     monkeypatch.setenv("GAME_STATE_DB_PATH", str(tmp_path / "state.db"))
     monkeypatch.setenv("EVENT_DB_PATH", str(tmp_path / "events.db"))
     monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenario.db"))
-    import importlib
-
+    monkeypatch.setenv("LLM_TRACE_DB_PATH", str(tmp_path / "traces.db"))
+    # Reloading is needed for a fresh app; every store path is patched first,
+    # because routes_game opens its stores at import time.
+    del sys.modules["app.api.routes_game"]
+    del sys.modules["app.main"]
     import app.main as main
 
-    importlib.reload(main)
     from fastapi.testclient import TestClient
 
     return TestClient(main.app)

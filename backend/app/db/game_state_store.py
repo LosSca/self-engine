@@ -26,7 +26,7 @@ from app.models.game import GameState, WorldDefinition
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 def _worlds_disagree(snapshot_json: str, current_world_id: str) -> bool:
     """True when a stored snapshot described a different world than the live one."""
@@ -132,11 +132,111 @@ _MIGRATIONS: Dict[int, List[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_agent_calls_campaign "
         "ON agent_calls(campaign_id, created_at)",
     ],
+    # Phase 3 (world evolution): every proposal a player interaction produces is
+    # stored with its evidence, its normalized kind and the outcome of the
+    # commit, so canon can always be traced back to who proposed it.
+    4: [
+        "CREATE TABLE IF NOT EXISTS evolution_proposals ("
+        "    id TEXT PRIMARY KEY,"
+        "    world_id TEXT NOT NULL DEFAULT '',"
+        "    campaign_id TEXT NOT NULL DEFAULT '',"
+        "    kind TEXT NOT NULL,"
+        "    status TEXT NOT NULL,"
+        "    origin TEXT NOT NULL DEFAULT '',"
+        "    statement TEXT NOT NULL DEFAULT '',"
+        "    confidence REAL NOT NULL DEFAULT 0,"
+        "    source TEXT NOT NULL DEFAULT '',"
+        "    observer TEXT NOT NULL DEFAULT '',"
+        "    payload_json TEXT NOT NULL DEFAULT '{}',"
+        "    evidence_json TEXT NOT NULL DEFAULT '[]',"
+        "    warnings_json TEXT NOT NULL DEFAULT '[]',"
+        "    error TEXT NOT NULL DEFAULT '',"
+        "    result_json TEXT NOT NULL DEFAULT '{}',"
+        "    created_at TEXT NOT NULL,"
+        "    updated_at TEXT NOT NULL"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_evolution_proposals_world "
+        "ON evolution_proposals(world_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_evolution_proposals_campaign "
+        "ON evolution_proposals(campaign_id, created_at)",
+    ],
 }
-
 
 def _now() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _json_dump(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return "null"
+
+
+def _json_load(raw: Any, fallback: Any) -> Any:
+    try:
+        return json.loads(raw or "")
+    except (TypeError, ValueError):
+        return fallback
+
+
+#: Flat row column -> the name the same value has on a decoded proposal dict.
+_COLUMN_ALIASES = {
+    "payload": "payload_json",
+    "evidence": "evidence_json",
+    "warnings": "warnings_json",
+    "result": "result_json",
+}
+
+
+def _proposal_row(proposal: Any) -> Dict[str, Any]:
+    """Normalise a proposal object or dict into one flat row."""
+    if isinstance(proposal, dict):
+        data = dict(proposal)
+    else:
+        data = dict(getattr(proposal, "__dict__", {}) or {})
+    stamp = _now()
+    return {
+        "id": str(data.get("id") or uuid.uuid4()),
+        "world_id": str(data.get("world_id") or ""),
+        "campaign_id": str(data.get("campaign_id") or ""),
+        "kind": str(data.get("kind") or "unknown"),
+        "status": str(data.get("status") or "pending"),
+        "origin": str(data.get("origin") or ""),
+        "statement": str(data.get("statement") or "")[:2000],
+        "confidence": float(data.get("confidence") or 0.0),
+        "source": str(data.get("source") or ""),
+        "observer": str(data.get("observer") or ""),
+        "payload_json": _json_dump(data.get("payload") or {}),
+        "evidence_json": _json_dump(data.get("evidence") or []),
+        "warnings_json": _json_dump(data.get("warnings") or []),
+        "error": str(data.get("error") or "")[:2000],
+        "result_json": _json_dump(data.get("result") or {}),
+        "created_at": str(data.get("created_at") or stamp),
+        "updated_at": stamp,
+    }
+
+
+def _proposal_dict(row: Any) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "world_id": row["world_id"],
+        "campaign_id": row["campaign_id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "origin": row["origin"],
+        "statement": row["statement"],
+        "confidence": row["confidence"],
+        "source": row["source"],
+        "observer": row["observer"],
+        "payload": _json_load(row["payload_json"], {}),
+        "evidence": _json_load(row["evidence_json"], []),
+        "warnings": _json_load(row["warnings_json"], []),
+        "error": row["error"],
+        "result": _json_load(row["result_json"], {}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 class StateConflictError(RuntimeError):
@@ -155,7 +255,7 @@ class StateConflictError(RuntimeError):
 class GameStateStore:
     """Thin, explicit SQLite store. No ORM, no hidden global state."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, *, migrate: bool = True):
         self.db_path = db_path
         parent = os.path.dirname(os.path.abspath(db_path))
         if parent:
@@ -164,7 +264,8 @@ class GameStateStore:
         self._conn = sqlite3.connect(db_path, timeout=BUSY_TIMEOUT_SECONDS, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
-        self._migrate()
+        if migrate:
+            self._migrate()
 
     # ------------------------------------------------------------------ schema
     def _get_schema_version(self) -> int:
@@ -561,6 +662,120 @@ class GameStateStore:
                 created_at or _now(),
             ),
         )
+
+    # ------------------------------------------------------ evolution proposals
+    def record_proposal(self, proposal: Any) -> Dict[str, Any]:
+        """Append or update one world-evolution proposal.
+
+        Proposals are the audit trail of *decisions*, not game state: they are
+        written in their own transaction, and a failure is logged rather than
+        raised, because losing an audit row must never lose a turn. The row is
+        keyed by the proposal id, so a proposal moves through
+        pending -> committed/auto_committed/rejected in place.
+        """
+        record = _proposal_row(proposal)
+        existing = self.get_proposal(record["id"])
+        if existing is not None:
+            # A status change carries only the status: merge it onto what was
+            # already stored instead of blanking the fields it did not repeat.
+            merged = dict(existing)
+            merged["status"] = record["status"]
+            if record["error"]:
+                merged["error"] = record["error"]
+            # A dict decoded from the table already holds decoded values, so
+            # only the columns need keeping. A dataclass carries raw values,
+            # and only the fields the caller actually set may overwrite.
+            stored = isinstance(proposal, dict)
+            attributes = getattr(proposal, "__dict__", {}) or {}
+            if stored or "confidence" in attributes:
+                merged["confidence"] = proposal.get("confidence") if stored else attributes["confidence"]
+            for column in ("payload", "evidence", "warnings", "result"):
+                if stored or column in attributes:
+                    value = proposal.get(column) if stored else attributes[column]
+                    merged[column] = value if value is not None else merged.get(column)
+            record.update(
+                {
+                    "payload_json": _json_dump(merged["payload"]),
+                    "evidence_json": _json_dump(merged["evidence"]),
+                    "warnings_json": _json_dump(merged["warnings"]),
+                    "result_json": _json_dump(merged["result"]),
+                    "error": merged["error"],
+                    "status": merged["status"],
+                    "confidence": merged["confidence"],
+                    "created_at": merged["created_at"],
+                }
+            )
+        try:
+            with self._lock, self._conn:
+                self._conn.execute(
+                    "INSERT INTO evolution_proposals (id, world_id, campaign_id,"
+                    " kind, status, origin, statement, confidence, source, observer,"
+                    " payload_json, evidence_json, warnings_json, error, result_json,"
+                    " created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(id) DO UPDATE SET status=excluded.status,"
+                    " payload_json=excluded.payload_json,"
+                    " warnings_json=excluded.warnings_json,"
+                    " error=excluded.error, result_json=excluded.result_json,"
+                    " confidence=excluded.confidence, updated_at=excluded.updated_at",
+                    (
+                        record["id"],
+                        record["world_id"],
+                        record["campaign_id"],
+                        record["kind"],
+                        record["status"],
+                        record["origin"],
+                        record["statement"],
+                        record["confidence"],
+                        record["source"],
+                        record["observer"],
+                        record["payload_json"],
+                        record["evidence_json"],
+                        record["warnings_json"],
+                        record["error"],
+                        record["result_json"],
+                        record["created_at"],
+                        record["updated_at"],
+                    ),
+                )
+        except Exception:  # noqa: BLE001 - the audit trail is best effort
+            logger.warning("failed to record proposal %s", record["id"], exc_info=True)
+        return record
+
+    def get_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM evolution_proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        return _proposal_dict(row) if row else None
+
+    def list_proposals(
+        self,
+        *,
+        world_id: str = "",
+        campaign_id: str = "",
+        status: str = "",
+        kind: str = "",
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Newest first. Every filter is optional; an unknown filter matches none."""
+        clauses: List[str] = []
+        args: List[Any] = []
+        for column, value in (
+            ("world_id", world_id),
+            ("campaign_id", campaign_id),
+            ("status", status),
+            ("kind", kind),
+        ):
+            if value:
+                clauses.append(f"{column} = ?")
+                args.append(value)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        args.append(max(1, min(int(limit or 100), 500)))
+        rows = self._conn.execute(
+            f"SELECT * FROM evolution_proposals{where} ORDER BY created_at DESC, id DESC LIMIT ?",
+            tuple(args),
+        ).fetchall()
+        return [_proposal_dict(row) for row in rows]
 
     # ------------------------------------------------------------ agent calls
     def record_agent_call(
