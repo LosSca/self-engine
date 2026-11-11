@@ -5,6 +5,14 @@
     <link rel="icon" type="image/png" href="/self-reference-mark.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="自指引擎：规则决定事实、事件记录变化、状态保存结果的浏览器文字 RPG 引擎。" />
+    <!--
+      浏览器里没有 `process`。React（以及 @vitejs/plugin-react 注入的自动运行时）的 CJS 入口
+      用 `process.env.NODE_ENV` 选择生产/开发版本，没有这行垫片时产物第一行就抛
+      `ReferenceError: process is not defined`，整页空白。
+      为什么放在 HTML 而不是 vite 的 define：本机构建链的配置求值路径会绕开 vite.config.js，
+      写在那里的 define 不生效，而这里 100% 进产物、且对开发/生产构建一致。
+    -->
+    <script>window.process = window.process || { env: { NODE_ENV: "production" } };</script>
     <title>自指引擎 · 可配置文字 RPG 引擎</title>
   </head>
   <body>

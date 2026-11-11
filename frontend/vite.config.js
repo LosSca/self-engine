@@ -5,6 +5,16 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '')
 
   return {
+    // React（以及 @vitejs/plugin-react 注入的自动运行时）依赖 `process.env.NODE_ENV` 来判断
+    // 该导出开发版还是生产版。浏览器里没有 process，构建时不替换就会在首屏直接抛
+    // `ReferenceError: process is not defined`（白屏，且 React 内部的开发期分支也会被留下）。
+    // 这里显式定义它；同时 frontend/index.html 里还有一行 window.process 垫片，
+    // 因为本机某些构建链会绕开本文件（配置由外部 stub 提供），define 不生效。
+    define: {
+      // 注意：这里**不要**再单独写 "process.env": "{}" —— 更长的键优先，它会把上面那条
+      // NODE_ENV 的替换整个吃掉，React 又会退回用 process 判断。
+      "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV || mode),
+    },
     plugins: [
       react(),
     ],

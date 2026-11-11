@@ -131,6 +131,15 @@
 
 仍为空白时按 F12 看 Console 第一条红色错误，并看 `.logs/frontend.log` 的最后几行。
 
+已修过的一条典型错误：`Uncaught ReferenceError: process is not defined at requireJsxRuntime`。
+浏览器里没有 `process`，而 React 的 CJS 入口用 `process.env.NODE_ENV` 选生产/开发版本，
+产物第一行就会抛。修法是 `frontend/index.html` 里的一行垫片：
+
+    <script>window.process = window.process || { env: { NODE_ENV: "production" } };</script>
+
+它必须写在 `<head>` 里、排在打包脚本之前。`vite.config.js` 的 `define` 也写了同样的替换，
+但本机构建链的配置求值会绕开那个文件（配置由外部 stub 提供），只有 HTML 里的这行一定生效。
+
 ### 3. 等待前端就绪超时
 
 `--no-window` 模式下，超时后 launch.py 会直接把该服务日志的**最后几行**打出来，先看那里。
