@@ -85,3 +85,34 @@
   .hero-header.hero-header { margin-bottom: 2rem; }
   .hero-emblem.hero-emblem-mark { margin-bottom: 1.25rem; }
 }
+
+/* ---- 工具停靠区（右侧边栏面板） ----
+   各工具组件原本按全屏模态编写（fixed inset-0 + 居中/靠右卡片）。
+   停靠到 380px 侧边栏后，把外层遮罩重置为静态块级容器，让卡片填满 dock。 */
+.tool-dock-host {
+  padding: 0.75rem;
+}
+.tool-dock-host > .fixed,
+.tool-dock-host > div.fixed,
+.tool-dock-host > div[class*="fixed"] {
+  position: static !important;
+  inset: auto !important;
+  z-index: auto !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  padding: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+.tool-dock-host > div[class*="fixed"] > div {
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: none !important;
+  border-radius: 1rem;
+}

@@ -23,7 +23,9 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // 组件通过 props 传入并只在大写标签位置使用（<Icon />），
+      // 基础 no-unused-vars 不认 JSX 中的变量引用，这里额外放行这种用法。
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]' }],
     },
   },
 ])

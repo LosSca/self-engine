@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useGameStore } from './store'
 import { fetchScenarios, exportScenario, fetchCampaigns, createCampaign, checkNeo4j, deleteCampaign, deleteScenario, fetchSetupState } from './api'
 import ErrorBoundary from './components/ErrorBoundary'
+import Sidebar from './components/Sidebar'
 import { ALL_TYPES, WORLD_TYPE_LABELS } from './lib/scenarioTypes'
 
 // 编辑器与游戏画布占了主包一半以上，首屏只需要首页。
@@ -505,6 +506,15 @@ function PlayGate() {
   )
 }
 
+// 首页 / 编辑器 / 角色库共用「左侧边栏 + 右侧内容」的外壳。
+// 边栏自身滚动，内容区独立滚动，两者互不影响。
+const AppShell = ({ children }) => (
+  <div className="flex h-screen bg-black overflow-hidden">
+    <Sidebar variant="app" />
+    <div className="flex-1 min-w-0 h-full overflow-y-auto custom-scrollbar">{children}</div>
+  </div>
+)
+
 export default function App() {
   useEffect(() => {
     useGameStore.getState().restoreSettings()
@@ -514,22 +524,26 @@ export default function App() {
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<AppShell><Home /></AppShell>} />
           <Route
             path="/create"
             element={
-              <Suspense fallback={<ChunkFallback />}>
-                <ScenarioBuilder onCreated={() => window.location.href = '/'} />
-              </Suspense>
+              <AppShell>
+                <Suspense fallback={<ChunkFallback />}>
+                  <ScenarioBuilder onCreated={() => window.location.href = '/'} />
+                </Suspense>
+              </AppShell>
             }
           />
           <Route path="/play" element={<PlayGate />} />
           <Route
             path="/characters"
             element={
-              <Suspense fallback={<ChunkFallback />}>
-                <CharacterLibrary open onClose={() => window.location.href = '/'} />
-              </Suspense>
+              <AppShell>
+                <Suspense fallback={<ChunkFallback />}>
+                  <CharacterLibrary open onClose={() => window.location.href = '/'} />
+                </Suspense>
+              </AppShell>
             }
           />
         </Routes>
