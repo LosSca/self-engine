@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useGameStore } from './store'
 import { fetchScenarios, exportScenario, fetchCampaigns, createCampaign, checkNeo4j, deleteCampaign, deleteScenario, fetchSetupState } from './api'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -80,21 +80,38 @@ function Home() {
       .catch(() => {})
   }, [])
 
-  const warnIfNeo4jDown = async () => {
-    const ok = await checkNeo4j()
-    if (!ok) {
-      alert(
-        '未检测到 Neo4j 服务。\n\n' +
-        '本次游玩期间世界地图不可用，实体关系与图谱数据不会写入。\n\n' +
-        '如需启用，请用 Docker 启动 Neo4j：\n' +
-        'docker-compose up -d neo4j'
-      )
+  // Neo4j 是可选依赖：地图与地点本身存在 SQLite 里，只有图谱增强
+  // （实体关系写入、图谱视图）需要它。缺它不影响开局，所以这里只做一次
+  // 非阻塞探测，在首页出一条可关闭的提示，不再每次点「开始冒险」都弹 alert。
+  const [graphHint, setGraphHint] = useState(false)
+  const graphHintChecked = useRef(false)
+
+  useEffect(() => {
+    if (graphHintChecked.current) return
+    graphHintChecked.current = true
+    let dismissed = false
+    try {
+      dismissed = localStorage.getItem('lunar_graphHintDismissed') === '1'
+    } catch {
+      // 本地存储不可用时当作没关过
+    }
+    if (dismissed) return
+    checkNeo4j()
+      .then((ok) => { if (!ok) setGraphHint(true) })
+      .catch(() => setGraphHint(true))
+  }, [])
+
+  const dismissGraphHint = () => {
+    setGraphHint(false)
+    try {
+      localStorage.setItem('lunar_graphHintDismissed', '1')
+    } catch {
+      // 存不进去也照样关掉这一次
     }
   }
 
   const playCampaign = async (scenario) => {
     try {
-      await warnIfNeo4jDown()
       const campaigns = campaignsMap[scenario.id] || []
       if (campaigns.length > 0) {
         // 继续最近一次冒险；切到另一段冒险时必须丢弃上一段的聊天缓存。
@@ -118,7 +135,6 @@ function Home() {
   const startNewCampaign = async (scenario) => {
     if (!confirm('开始一段新的冒险？当前进度会被单独保存，不会被覆盖。')) return
     try {
-      await warnIfNeo4jDown()
       const campaign = await createCampaign(scenario.id)
       setActiveScenario(scenario)
       setActiveCampaignId(campaign.id)
@@ -176,6 +192,31 @@ function Home() {
       <div className="hero-mask absolute inset-0 bg-gradient-to-t from-black via-black/60 to-black/90 pointer-events-none"></div>
 
       <div className="w-full max-w-5xl px-4 sm:px-8 relative z-10 flex flex-col items-center">
+
+        {/* Neo4j 缺失提示：可选依赖，不阻塞任何玩法，可永久关闭 */}
+        {graphHint && (
+          <div
+            role="status"
+            className="hero-emblem mb-8 w-full max-w-2xl flex items-start gap-4 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] px-5 py-4 text-left backdrop-blur-xl"
+          >
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-bold tracking-[0.2em] uppercase text-amber-300/80 mb-2">
+                图谱服务未连接
+              </p>
+              <p className="text-xs leading-relaxed text-white/50">
+                没有检测到 Neo4j。地图、地点、物品与任务都照常工作，只有「实体关系图谱」这一层不会写入。
+                需要的话可以用 Docker 启动它；不启动也能完整游玩。
+              </p>
+            </div>
+            <button
+              onClick={dismissGraphHint}
+              className="shrink-0 px-3 py-1.5 rounded-xl border border-white/10 text-white/40 hover:text-white hover:border-white/40 transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
+              title="不再提示"
+            >
+              知道了
+            </button>
+          </div>
+        )}
 
         <header className="hero-header mb-12 flex flex-col items-center text-center">
           {/* 引擎标识：自指螺旋。深色用白螺旋 / 浅色用黑螺旋，均为透明底 PNG，
