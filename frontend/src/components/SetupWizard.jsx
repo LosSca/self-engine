@@ -65,7 +65,8 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     [libraryCharacters],
   )
 
-  const pickCharacter = (c) => {
+  const pickCharacter = (choice) => {
+    const c = choice.raw || choice
     setCharacterId(c.id)
     const looks = c.looks || []
     const portrait = looks.find((l) => l.image_url) || looks[0]
@@ -79,6 +80,30 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
   )
   const looks = character?.looks || []
   const selectedLook = looks.find((l) => l.id === lookId) || null
+  // 服装与表情两档都用扁平 map：嵌套的筛选 + map 会让 JSX 降级器产不出语法。
+  const outfits = Array.from(new Set(looks.map((l) => l.outfit)))
+  // 降级器处理不了括号里的三元表达式，所以这一段用 && 而不写 `cond ? <a/> : <b/>`。
+  const hasArt = Boolean(selectedLook?.image_url)
+  const hasNoLook = looks.length === 0
+  const shownLooks = looks.filter((l) => !selectedLook || l.outfit === selectedLook.outfit)
+  // onChange 里只调一个函数：降级器会把内联的语句块和箭头搅在一起。
+  const pickOutfit = (outfit) => {
+    const match = looks.find((l) => l.outfit === outfit)
+    if (match) setLookId(match.id)
+  }
+  // 角色卡片的派生数据放在渲染外：map 里直接读构造好的字段，避免嵌套 JSX。
+  const characterChoices = characters.map((c) => {
+    const art = (c.looks || []).find((l) => l.image_url) || (c.looks || [])[0] || null
+    return {
+      id: c.id,
+      name: c.name,
+      role: c.role || (c.is_player ? '玩家角色' : '角色'),
+      art: art?.image_url || '',
+      inLibrary: libraryIds.has(c.id),
+      active: c.id === (character?.id || ''),
+      raw: c,
+    }
+  })
   // 任何一个角色都能进这一步：没有立绘的角色照样可以让玩家点名。
   const showCharacterStage = Boolean(character)
   const total = ordered.length + (showCharacterStage ? 1 : 0)
@@ -308,52 +333,44 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
 
               {pickerOpen && (
                 <div className="mb-6 grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {characters.map((c) => {
-                    const art = (c.looks || []).find((l) => l.image_url) || (c.looks || [])[0] || null;
-                    const active = c.id === character.id;
-                    return (
-                      <button
-                        type="button"
-                        key={c.id}
-                        onClick={() => pickCharacter(c)}
-                        className={
-                          'text-left rounded-2xl border overflow-hidden transition-all ' +
-                          (active
-                            ? 'bg-white/[0.08] border-white/40'
-                            : 'bg-white/[0.02] border-white/10 hover:border-white/25')
-                        }
-                      >
-                        <span className="block h-28 bg-white/5 flex items-center justify-center">
-                          {art?.image_url ? (
-                            <img src={art.image_url} alt={c.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] text-white/20">无立绘</span>
-                          )}
+                  {characterChoices.map((c) => (
+                    <button
+                      type="button"
+                      key={c.id}
+                      onClick={() => pickCharacter(c)}
+                      className={
+                        'text-left rounded-2xl border overflow-hidden transition-all ' +
+                        (c.active
+                          ? 'bg-white/[0.08] border-white/40'
+                          : 'bg-white/[0.02] border-white/10 hover:border-white/25')
+                      }
+                    >
+                      <span className="block h-28 bg-white/5 flex items-center justify-center">
+                        {c.art && <img src={c.art} alt={c.name} className="w-full h-full object-cover" />}
+                        {!c.art && <span className="text-[10px] text-white/30">无立绘</span>}
+                      </span>
+                      <span className="block px-3 py-2">
+                        <span className="block text-xs text-white truncate">{c.name}</span>
+                        <span className="block text-[10px] text-white/35 truncate">
+                          {c.role}
+                          {c.inLibrary ? ' · 库' : ''}
                         </span>
-                        <span className="block px-3 py-2">
-                          <span className="block text-xs text-white truncate">{c.name}</span>
-                          <span className="block text-[10px] text-white/35 truncate">
-                            {c.role || (c.is_player ? '玩家角色' : '角色')}
-                            {libraryIds.has(c.id) ? ' · 库' : ''}
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
+                      </span>
+                    </button>
+                  ))}
                 </div>
               )}
 
               <div className="flex flex-col sm:flex-row gap-8 mb-10">
                 <div className="w-40 h-56 rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden flex items-center justify-center shrink-0 mx-auto sm:mx-0">
-                  {selectedLook?.image_url ? (
+                  {hasArt && (
                     <img
                       src={selectedLook.image_url}
                       alt={character.name}
                       className="w-full h-full object-cover"
                     />
-                  ) : (
-                    <span className="text-white/20 text-xs">暂无立绘</span>
                   )}
+                  {!hasArt && <span className="text-white/20 text-xs">暂无立绘</span>}
                 </div>
 
                 <div className="flex-1">
@@ -362,7 +379,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                     <div className="text-xs text-white/40 mt-1">
                       {character.role || '玩家角色'}
                     </div>
-                    {looks.length === 0 && (
+                    {hasNoLook && (
                       <p className="text-[10px] text-white/30 mt-2 leading-relaxed">
                         这个角色还没有立绘，叙事照常进行，只是不会被画进插图。可以在角色库里补一张。
                       </p>
@@ -374,7 +391,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                     )}
                   </div>
 
-                  <div className={(looks.length > 0 ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'hidden')}>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2">
                         服装
@@ -382,12 +399,9 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                       <select
                         className={inputBase + ' text-sm py-3'}
                         value={selectedLook?.outfit || ''}
-                        onChange={(e) => {
-                          const match = looks.find((l) => l.outfit === e.target.value)
-                          if (match) setLookId(match.id)
-                        }}
+                        onChange={(e) => pickOutfit(e.target.value)}
                       >
-                        {Array.from(new Set(looks.map((l) => l.outfit))).map((outfit) => (
+                        {outfits.map((outfit) => (
                           <option key={outfit} value={outfit} className="bg-neutral-900">
                             {outfit}
                           </option>
@@ -403,19 +417,18 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                         value={selectedLook?.id || ''}
                         onChange={(e) => setLookId(e.target.value)}
                       >
-                        {looks
-                          .filter((l) => !selectedLook || l.outfit === selectedLook.outfit)
-                          .map((look) => (
-                            <option key={look.id} value={look.id} className="bg-neutral-900">
-                              {look.expression || '默认'}
-                            </option>
-                          ))}
+                        {shownLooks.map((look) => (
+                          <option key={look.id} value={look.id} className="bg-neutral-900">
+                            {look.expression || '默认'}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
                 </div>
               </div>
             </>
+
           ) : (
             <>
               <div className="mb-10">

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-hook-order.mjs && vite build",
+    "build": "node scripts/check-hook-order.mjs && vite build && node ../scripts/fix-fragment-calls.mjs dist/assets",
     "lint": "eslint .",
     "preview": "vite preview",
     "check:hooks": "node scripts/check-hook-order.mjs",

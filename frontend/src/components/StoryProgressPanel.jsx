@@ -126,33 +126,29 @@ export default function StoryProgressPanel({ open, onClose, story, engineBound, 
             {packs.length > 0 && (
               <div className="flex flex-col gap-2">
                 <span className="text-[11px] uppercase tracking-[0.2em] text-white/40">小事件包</span>
-                {packs.map((pack) => {
-                  const isArmed = armed.includes(pack.id)
-                  const isFired = fired.includes(pack.id)
-                  return (
-                    <div key={pack.id} className="rounded-xl border border-white/10 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-white/80">{pack.title || pack.id}</span>
-                        <span
-                          className={`text-[10px] px-2 py-0.5 rounded-full border ${
-                            isArmed
-                              ? 'text-cyan-300 border-cyan-400/40 bg-cyan-400/10'
-                              : isFired
-                                ? 'text-emerald-300/70 border-emerald-400/30'
-                                : 'text-white/25 border-white/10'
-                          }`}
-                        >
-                          {isArmed ? '已启用' : isFired ? '已触发' : '未启用'}
-                        </span>
-                      </div>
-                      {pack.summary && <p className="text-[11px] text-white/40 mt-1">{pack.summary}</p>}
-                      <p className="text-[10px] text-white/25 mt-1">
-                        事件 {(pack.event_ids || []).length} 个 · {pack.once === false ? '可重复' : '一次性'}
-                        {pack.enabled === false ? ' · 已停用' : ''}
-                      </p>
+                {packs.map((pack) => (
+                  <div key={pack.id} className="rounded-xl border border-white/10 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-white/80">{pack.title || pack.id}</span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                          armed.includes(pack.id)
+                            ? 'text-cyan-300 border-cyan-400/40 bg-cyan-400/10'
+                            : fired.includes(pack.id)
+                              ? 'text-emerald-300/70 border-emerald-400/30'
+                              : 'text-white/25 border-white/10'
+                        }`}
+                      >
+                        {armed.includes(pack.id) ? '已启用' : fired.includes(pack.id) ? '已触发' : '未启用'}
+                      </span>
                     </div>
-                  )
-                })}
+                    {pack.summary && <p className="text-[11px] text-white/40 mt-1">{pack.summary}</p>}
+                    <p className="text-[10px] text-white/25 mt-1">
+                      事件 {(pack.event_ids || []).length} 个 · {pack.once === false ? '可重复' : '一次性'}
+                      {pack.enabled === false ? ' · 已停用' : ''}
+                    </p>
+                  </div>
+                ))}
               </div>
             )}
           </>
