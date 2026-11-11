@@ -72,5 +72,6 @@ local/
 # Desktop shell build artifacts
 desktop/node_modules/
 desktop/web/
+desktop/target/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/

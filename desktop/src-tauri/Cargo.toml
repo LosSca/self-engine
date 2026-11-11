@@ -9,10 +9,13 @@ rust-version = "1.77"
 
 [lib]
 name = "self_engine_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 不声明 cdylib：本壳只由 main.rs 链接成 exe，而 MinGW 的 ld 在导出
+# 上万符号时会报 "export ordinal too large"。
+crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
 
 [dependencies]
 tauri = { version = "2", features = [] }

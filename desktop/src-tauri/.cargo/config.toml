@@ -1,0 +1,4 @@
+# 本机（Windows）若没有 MSVC Build Tools，就用 MinGW 的 gcc 做链接器。
+# 常规环境装了 Visual Studio C++ 工具链时，用默认的 x86_64-pc-windows-msvc 即可，此文件无副作用。
+[target.x86_64-pc-windows-gnu]
+linker = "gcc"

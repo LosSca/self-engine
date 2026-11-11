@@ -47,3 +47,8 @@ npm run build                                 # 3b. 出安装包（NSIS/MSI/dmg/
   下一步是 `PyInstaller --onedir` 把 `launch.py` + backend 打成 `resources/backend/`，
   再用 `bundle.resources` 分发（壳的代码不需要改，只是 `repo_root()` 会解析到资源目录）。
 - 目前每次启动都会尝试拉起后端；如果 8000 端口已经有本项目后端在跑，启动器会直接复用。
+- **必须用 MSVC 工具链（`rustup default stable-x86_64-pc-windows-msvc` + Visual Studio
+  "使用 C++ 的桌面开发"）。** 用 MinGW（`x86_64-pc-windows-gnu`）虽然能编译通过，但
+  WebView2 会在创建窗口时返回 `HRESULT 0x8000FFFF（灾难性故障）`——这是 Tauri 的已知
+  限制，不是本壳的 bug。`src-tauri/.cargo/config.toml` 里给 gnu 目标准备了 gcc 链接器
+  配置，仅用于在没装 VS 的机器上确认代码能编译，不用于发布。
