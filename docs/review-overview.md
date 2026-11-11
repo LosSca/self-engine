@@ -171,4 +171,4 @@ npm --prefix frontend run build
 | 地图导航 | `frontend/src/components/WorldMapModal.jsx` |
 | 背包 | `frontend/src/components/InventoryPanel.jsx` |
 
-历史审计（2026-10-28，状态已过时）见 `docs/audit_systems_13.md`。
+历史审计（2026-10-28）的原始记录已从仓库移除；当前状态以本文件和 `docs/phase0_audit.md` 为准。

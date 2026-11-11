@@ -1,0 +1,15 @@
+{
+  "name": "self-engine-desktop",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "scripts": {
+    "stage": "node scripts/stage-web.mjs",
+    "dev": "node scripts/stage-web.mjs && tauri dev",
+    "build": "node scripts/stage-web.mjs && tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

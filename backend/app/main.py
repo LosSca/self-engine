@@ -26,12 +26,18 @@ from app.engines.llm_router import POLICY_CHOICES, LLMProvider, custom_route_ava
 
 app = FastAPI(title="Project Lunar", version="0.5.0")
 
+# 允许的来源：vite dev（5173）、静态托管（4173），以及桌面壳的 tauri://localhost。
+# 需要额外来源时用 LUNAR_CORS_ORIGINS（逗号分隔）追加，桌面壳就是这样起后端的。
+_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:4173",
+] + [o.strip() for o in os.environ.get("LUNAR_CORS_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

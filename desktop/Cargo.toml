@@ -1,0 +1,22 @@
+[package]
+name = "self-engine-desktop"
+version = "0.5.0"
+description = "Self-Reference Engine desktop shell (Tauri)"
+authors = ["LosSca"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "self_engine_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 起后端子进程（python -m uvicorn）用
+tauri-plugin-shell = "2"

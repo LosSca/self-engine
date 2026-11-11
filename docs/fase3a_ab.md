@@ -12,7 +12,7 @@ tudo idêntico exceto o bloco de regras anti-tic:
 - **OLD** — regras de proibição+exemplo (pink-elephant), verbatim do commit `b718ba5`.
 - **NEW** — regras afirmativas da FASE 3a (`PROSE TEXTURE`).
 
-Constantes entre braços: cenário (One Piece clone, `scenario_clone_op/…pt-br.json`),
+Constantes entre braços: cenário (qualquer `scenario-*.json` exportado, ver `SCENARIO` em `backend/scripts/tic_harness.py`),
 14 story cards, mesma sequência de **18 inputs** de jogador (mini-aventura desenhada para
 eliciar os 4 tics), provider **DeepSeek V4 flash** (o mesmo do baseline FASE 0), continuidade
 de histórico dentro do braço. Swap OLD↔NEW por âncoras de fronteira no template — só o miolo
