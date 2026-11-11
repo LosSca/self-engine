@@ -19,6 +19,11 @@ const checks = [
   ["宿主传入 getAgentCalls", "src/components/GameCanvas.jsx", "fetchAgentCalls={getAgentCalls}"],
   ["API 路由 /agents", "src/api.js", "${V1}/agents"],
   ["API 路由 agent-calls", "src/api.js", "/agent-calls?"],
+  ["世界演化页签", "src/components/WorldStudio.jsx", "['evolution', '世界演化']"],
+  ["演化面板接入", "src/components/WorldStudio.jsx", "tab === 'evolution'"],
+  ["演化面板读提案", "src/components/WorldStudio.jsx", "fetchEvolutionProposals"],
+  ["API 路由 evolution/propose", "src/api.js", "/evolution/propose"],
+  ["API 路由 evolution/approve", "src/api.js", "/approve"],
 ];
 
 const forbidden = [

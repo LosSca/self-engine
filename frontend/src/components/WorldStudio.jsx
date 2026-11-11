@@ -38,6 +38,10 @@ import {
   generateWorldFromPrompt,
   authorScenario,
   extractKnowledge,
+  proposeWorldEvolution,
+  fetchEvolutionProposals,
+  approveEvolutionProposal,
+  rejectEvolutionProposal,
   planRoom,
   explainAction,
   proposeWorldEdits,
@@ -129,6 +133,7 @@ const TABS = [
   ['works', '作品穿越'],
   ['memory', '记忆提炼'],
   ['chat', '对话补全'],
+  ['evolution', '世界演化'],
 ]
 
 const inputClass =
@@ -1462,6 +1467,195 @@ const TAB_KIND = {
   events: 'event',
   quests: 'quest',
   actions: 'action',
+}
+
+const EVOLUTION_STATUS = {
+  pending: ['待定', 'warn'],
+  committed: ['已采纳', 'good'],
+  auto: ['自动采纳', 'good'],
+  rejected: ['已驳回', 'bad'],
+}
+
+function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [rows, setRows] = useState([])
+  const [report, setReport] = useState(null)
+
+  const load = useCallback(async () => {
+    if (!worldId) {
+      setRows([])
+      return
+    }
+    try {
+      const list = await fetchEvolutionProposals(worldId, { limit: 100 })
+      setRows(Array.isArray(list) ? list : [])
+      setError('')
+    } catch (err) {
+      setError(err?.message || '读取提案失败')
+    }
+  }, [worldId])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const propose = async (commit) => {
+    if (!draft.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      const payload = await proposeWorldEvolution(worldId, {
+        statements: [{ text: draft.trim(), kind: '', confidence: 0.6 }],
+        campaignId: campaignId || '',
+        commit,
+      })
+      setReport(payload)
+      if (commit && onCommitted) onCommitted()
+      await load()
+    } catch (err) {
+      setError(err?.message || '提案失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const act = async (fn, id) => {
+    setBusy(true)
+    setError('')
+    try {
+      await fn(worldId, id)
+      if (onCommitted) onCommitted()
+      await load()
+    } catch (err) {
+      setError(err?.message || '操作失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pendingCount = rows.filter((row) => row.status === 'pending').length
+
+  return (
+    <div className="flex flex-col gap-5">
+      <SectionNote>
+        世界演化把「玩家或模型声称的事实」变成可审核的提案。提案只有在世界文档校验通过、并且有人在这里采纳之后才会写入；
+        传闻与个人猜测永远不进正史。判定全部来自确定性代码，模型只负责把一句话说成提案。
+      </SectionNote>
+
+      {!worldId && <p className="text-xs text-white/40">先选择一个世界。</p>}
+
+      {worldId && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-bold text-white">提交一条声称</span>
+            {pendingCount > 0 && <Badge tone="warn">{pendingCount} 条待定</Badge>}
+            {world?.world_id && <Badge tone="muted">{world.world_id}</Badge>}
+          </div>
+          <textarea
+            className={inputClass}
+            rows={2}
+            placeholder="例如：Old Chapel 仍然立在十字路口北侧。"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <button className={ghostButton} onClick={() => propose(false)} disabled={busy || !draft.trim()}>
+              {busy ? '推演中…' : '只生成提案（不写世界）'}
+            </button>
+            <button className={primaryButton} onClick={() => propose(true)} disabled={busy || !draft.trim()}>
+              提案并尝试自动采纳
+            </button>
+            <span className="text-[10px] text-white/30">自动采纳只接受高置信度且校验通过的正史类事实</span>
+          </div>
+          {error && <p className="text-xs text-red-300">{error}</p>}
+        </div>
+      )}
+
+      {report && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-bold text-white">本次推演结果</span>
+            <Badge tone="good">采纳 {(report.committed || []).length}</Badge>
+            <Badge tone="warn">待定 {(report.pending || []).length}</Badge>
+            <Badge tone="bad">驳回 {(report.rejected || []).length}</Badge>
+            {report.degraded && <Badge tone="bad">模型降级</Badge>}
+          </div>
+          {(report.conflicts || []).length > 0 && (
+            <ul className="text-[11px] text-amber-300/80 list-disc list-inside">
+              {(report.conflicts || []).map((line, i) => <li key={`cf-${i}`}>{line}</li>)}
+            </ul>
+          )}
+          {(report.warnings || []).length > 0 && (
+            <ul className="text-[11px] text-white/50 list-disc list-inside">
+              {(report.warnings || []).map((line, i) => <li key={`rw-${i}`}>{line}</li>)}
+            </ul>
+          )}
+          {report.error && <p className="text-xs text-red-300">{report.error}</p>}
+        </div>
+      )}
+
+      {worldId && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-bold text-white">提案记录</span>
+            <button className={ghostButton} onClick={load} disabled={busy}>
+              刷新
+            </button>
+          </div>
+          {rows.length === 0 ? (
+            <p className="text-xs text-white/40">还没有提案。这个世界的断言历史会出现在这里，包括被驳回的。</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {rows.map((row) => {
+                const [label, tone] = EVOLUTION_STATUS[row.status] || [row.status, 'muted']
+                return (
+                  <div key={row.id} className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2 flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={tone}>{label}</Badge>
+                      <span className="text-[10px] font-mono text-white/30">{row.kind}</span>
+                      {row.canonical && <Badge tone="accent">正史</Badge>}
+                      {row.personal && <Badge tone="muted">个人</Badge>}
+                      <span className="text-[10px] font-mono text-white/25 ml-auto">
+                        {(Number(row.confidence) || 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-white/75">{row.statement}</div>
+                    {row.error && <div className="text-[10px] text-rose-300/80">{row.error}</div>}
+                    {(row.warnings || []).length > 0 && (
+                      <ul className="text-[10px] text-amber-300/70 list-disc list-inside">
+                        {row.warnings.map((line, i) => <li key={`w-${i}`}>{line}</li>)}
+                      </ul>
+                    )}
+                    {row.status === 'pending' && (
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <button
+                          className={primaryButton}
+                          onClick={() => act(approveEvolutionProposal, row.id)}
+                          disabled={busy}
+                        >
+                          采纳
+                        </button>
+                        <button
+                          className={ghostButton}
+                          onClick={() => act((w, id) => rejectEvolutionProposal(w, id, '作者驳回'), row.id)}
+                          disabled={busy}
+                        >
+                          驳回
+                        </button>
+                        <span className="text-[10px] text-white/30">采纳前会重新校验整份世界文档</span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
@@ -2887,6 +3081,14 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 </div>
               )}
             </div>
+          )}
+          {tab === 'evolution' && (
+            <EvolutionStudio
+              worldId={worldId}
+              campaignId={campaignId}
+              world={world}
+              onCommitted={() => loadWorld(worldId)}
+            />
           )}
           {world && tab === 'debug' && (
             <div className="flex flex-col gap-5">

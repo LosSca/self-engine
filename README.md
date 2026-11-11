@@ -36,7 +36,7 @@
 - 当前版本：**0.5.0**（`backend/app/main.py` 与 `frontend/package.json` 一致）
 - 运行时：Python + FastAPI 后端、React + Vite 前端、SQLite 存储
 - 语言：界面与内容中文优先；**叙事语言跟随世界文档的 `language` 字段**，未声明时为英文
-- 规模：135 个路由，其中 `/api/v1` 引擎链路 80 个，其余为旧聊天链路（24）、情景（14）、角色（7）与全局设置
+- 规模：146 个路由，其中 `/api/v1` 引擎链路 92 个，其余为旧聊天链路（27）、情景、角色与全局设置
 - 范围：以规则链路 `/api/v1` 为准；`/api/game` 旧聊天链路仍在维护，用于未绑定世界的冒险
 - 模型：**不配置任何密钥也能完整游玩**——确定性叙事器按世界语言产出文本
 
@@ -46,7 +46,9 @@
 |----------|--------|-----------|
 | 一句话生成世界、知识、主线 | 世界工坊「剧本生成」页签，或 `POST /api/v1/scenarios/author` | 需要 |
 | 借用已有作品的世界与角色 | 世界工坊「作品穿越」页签，六部内置作品，也可让模型补写 | 内置作品不需要 |
-| 从零手做一套世界 | 世界工坊十个页签：地图 / 剧本生成 / 物品 / 门 / 实体 / 事件 / 任务 / 行动 / 调试 / 作品穿越 | 不需要 |
+| 从零手做一套世界 | 世界工坊十三个页签：地图 / 剧本生成 / 物品 / 门 / 实体 / 事件 / 任务 / 行动 / 调试 / 作品穿越 / 记忆提炼 / 对话补全 / 世界演化 | 不需要 |
+| 让玩家一句话被写进正史 | 世界演化页签：断言 → 提案 → 采纳，校验不过的不进世界 | 不需要 |
+| 换个模型只换一个角色 | `AGENTS_NARRATIVE_MODEL` 等环境变量，或调试台「模型调用」页签看路由 | 不需要 |
 | 换一个起步世界 | `GET /api/v1/world-presets`：奇幻村庄、轨道站、雾镇、荒野营地 | 不需要 |
 | 让模型写得更好 | 设置面板选供应商与预设；上游拒绝时可自动改走本地模型 | 需要 |
 
@@ -58,7 +60,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口，另有文本解析、知识、叙事、世界编辑、AI 生成、作品库 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 四个 SQLite 存储，各自的 `SCHEMA_VERSION` 与迁移 |
-| `backend/tests/` | pytest 1451 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest 1625 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记与交付审查（`docs/delivery_review.md`） |
 
@@ -268,6 +270,47 @@ add_door 未通过校验：door 'ghost_door' requires unknown key item 'nope'
 判定全部来自真实的 `RulesEngine.evaluate` 与 `event_engine`，状态是深拷贝，**没有任何写回**。
 预演若自己实现一套规则，迟早会和真实链路漂移；若真写进去，就违反「只有行动服务能改权威状态」。
 所以它只读。
+### 世界演化：断言变成提案，对话长成世界
+
+玩家或模型说出的「事实」不再直接进正史。`backend/app/services/world_evolution.py` 把一句话变成
+一条**提案**（`kind` + `confidence` + `payload` + `evidence`），先做冲突检查（世界里已有同名地点就不再建一个），
+再把通过检查的正史类提案丢给 `authoring_session.stage_ops` 在**世界副本**上校验读改写；校验不过的提案
+保持 `pending` 或转 `rejected`，**不会**被记进「已采纳」。传闻、猜测这类个人类断言永远不进正史。
+
+```text
+POST /api/v1/worlds/{w}/evolution/propose            只草案，commit 默认 false
+GET  /api/v1/worlds/{w}/evolution/proposals          审计轨迹：每条断言与它的下场
+POST /api/v1/worlds/{w}/evolution/proposals/{p}/approve
+POST /api/v1/worlds/{w}/evolution/proposals/{p}/reject?reason=...
+```
+
+「已采纳」只在 `applied` 里真的出现这条提案时才写，所以报告不会把一次失败说成成功；
+采纳时会重新校验整份世界文档，引用悬空就 400。世界工坊的「世界演化」页签就是这套接口的界面：
+提交一句话、看提案、逐条采纳或驳回，驳回原因就留在记录里。
+
+### 角色路由：模型按角色选，不写死在代码里
+
+`backend/app/engines/agent_router.py` 让引擎按**角色**（`narrative` / `system` / `memory`）找模型：
+
+```env
+AGENTS_SYSTEM_MODEL=...        # 回答 system 角色的模型
+AGENTS_SYSTEM_PROVIDER=...     # 可选供应商覆盖
+AGENTS_SYSTEM_ENABLED=0        # 整个角色关掉
+AGENTS_SYSTEM_TIMEOUT=45       # 单次调用秒数
+AGENTS_NARRATIVE_* / AGENTS_MEMORY_*   # 同样的开关
+```
+
+每读一次环境、每个角色独立，未配置的角色退回主模型——所以一个从没听过「角色」的部署行为不变。
+`AgentRuntime.ask()` 永不抛异常：调用失败返回带 `error` 的空答案并降级到下一个角色，
+一回合不会因为模型挂了而失败。每次调用写进 `game_state.db` 的 `agent_calls` 表，
+调试台的「模型调用」页签读它，`GET /api/v1/agents` 只看配置与可用性，**从不回显密钥**。
+
+### 时间只在玩家行动时走
+
+`backend/app/engines/game_clock.py` 的 `Clock` 由 `ActionService` 在应用效果时推进：
+每个行动带 `duration_minutes`，回合结果多出 `minutes_spent` 与 `clock`，`GameState` 多出 `day` / `minute`。
+暂停的战役不花时间，恢复时也不补算——因为没有墙钟时间可供追赶，离线世界模拟在结构上就不存在。
+
 ### 任务：定义可编辑，进度由事实推进
 
 任务有目标、前置任务、接受条件、失败条件与奖励。`GET|POST|PATCH /api/v1/worlds/{w}/quests`
@@ -330,9 +373,10 @@ add_door 未通过校验：door 'ghost_door' requires unknown key item 'nope'
 
 ### 编辑器与调试台
 
-- **世界工坊**（九个页签）：地图、剧本生成、物品、门、实体、事件、任务、行动、调试、作品穿越——
+- **世界工坊**（十三个页签）：世界地图、剧本生成、物品、门、实体、事件、任务、行动、调试、作品穿越、记忆提炼、对话补全、世界演化——
   每次保存都跑完整世界校验；事件可校验、可模拟（模拟不改真实状态）；调试页有状态差异与快照回滚。
-- **调试台**（三个页签）：调用追踪（旧链路的 trace）、叙事与上下文（新的 diagnostics）、行动记录（request 列表与单条详情）。
+- **调试台**（四个页签）：调用追踪（旧链路的 trace）、叙事与上下文（`narrative.diagnostics`）、
+  行动记录（request 列表与单条详情）、模型调用（哪个角色由哪个模型回答 + 每次调用记录）。
 - 所有能改状态的调试能力都受 `ENGINE_DEBUG_TOOLS` 限制，生产环境默认关闭并返回 403。
 
 ---
@@ -397,6 +441,13 @@ NEO4J_PASSWORD=
 # 上游拒绝时自动改走本地模型重试一次
 # LOCAL_FALLBACK_ON_REFUSAL=1
 
+# 角色路由：让不同角色由不同模型回答（不写就全部退回主模型）
+# AGENTS_NARRATIVE_MODEL=
+# AGENTS_SYSTEM_MODEL=
+# AGENTS_MEMORY_MODEL=
+# AGENTS_SYSTEM_ENABLED=0
+# AGENTS_SYSTEM_TIMEOUT=45
+
 # 调试/作者工具：手动推进任务目标、回滚快照、修复状态都受它控制
 # ENGINE_DEBUG_TOOLS=0
 
@@ -448,8 +499,8 @@ start.bat           # Windows
 - **行动预演**：提交前可先看判定结果（`POST /campaigns/{id}/actions/preview`），预演不写状态。
 - **自然语言**：文字行动由 `text_action_service` 解析成同一个 `ActionRequest`，解析失败回到按钮，
   不会「模型理解成什么就是什么」。
-- **调试台三个页签**：调用追踪（旧链路 trace）、叙事与上下文（`narrative.diagnostics`）、
-  行动记录（request 列表与单条详情含状态差异）。
+- **调试台四个页签**：调用追踪（旧链路 trace）、叙事与上下文（`narrative.diagnostics`）、
+  行动记录（request 列表与单条详情含状态差异）、模型调用（角色路由与调用记录）。
 - **内容策略**在设置面板切换；切到「NSFW（本地）」后叙事整条走本地模型。
 
 前端状态用 Zustand（`frontend/src/store.js`），接口在 `frontend/src/api.js`；页面按路由懒加载。
@@ -478,6 +529,12 @@ shujia/
 │   ├── stage11_quest_editor.md   # 任务编辑与手动推进
 │   ├── stage13_narrative_debug_console.md # 叙事诊断与调试台
 │   ├── stage14_world_language.md # 叙事语言跟随世界
+│   ├── phase0_audit.md          # 阶段 0：真实链路审计与风险登记
+│   ├── phase3_world_evolution.md# 断言 → 提案 → 采纳
+│   ├── phase4_memory_provenance.md # 记忆晶体的来源与可信度
+│   ├── phase5_game_clock.md     # 只在行动时推进的时间
+│   ├── phase6_integration_review.md # 六个场景跑成测试
+│   ├── phase7_completeness_review.md # 逐条核验「承诺 vs 证据」
 │   ├── local_model_ninfer.md    # 本地模型接入
 │   ├── postgres-migration.md    # SQLite → PostgreSQL 一次性导出
 │   └── ...                      # 各阶段设计与审计记录
@@ -512,16 +569,22 @@ shujia/
 `world_reactor`、`inventory_engine`、`item_proposals`、`opening_generator`、`llm_router`、
 `graph_engine`、`graphiti_engine`、`auditor_engine`。
 
+**agent 层**（阶段 1–5）：`agent_router`（按角色路由模型，`AGENTS_<ROLE>_*` 决定用哪个，代码里没有一个模型名）、
+`system_agent`（先确定性分类，只有长断言才问模型）、`npc_dossier`（NPC 是每回合按数据拼出来的档案）、
+`player_context`（带 `fact` / `canon` / `belief` / `guess` / `history` 标签的分层上下文）、
+`game_clock`（只有玩家行动才推进的时间）。
+
 **services/**：`action_service`（唯一写入口）、`text_action_service`（自然语言 → `ActionRequest`）、
 `knowledge_service`、`narrative_service`、`narrator_factory`、`intent_advisor`、`world_service`、
-`world_editor`、`starter_worlds`、`summary_service`、`state_diagnostics`、`ai_generator`、
-`card_images`、`scenario_service`、`scenario_interpolation`、`game_session`。
+`world_editor`、`world_evolution`（断言 → 校验过的提案 → 可审核落盘）、
+`authoring_session`（一句话变成编辑操作）、`scenario_author`、`starter_worlds`、`summary_service`、
+`state_diagnostics`、`ai_generator`、`card_images`、`scenario_service`、`scenario_interpolation`、`game_session`。
 
 ---
 
 ## API 概览
 
-全部接口挂在 `/api` 下，共 **135 个路由**；设置 `API_TOKEN` 后除健康检查外都要求
+全部接口挂在 `/api` 下，共 **146 个路由**（`/api/v1` 92 个、旧聊天链路 `/api/game` 27 个、其余 27 个）；设置 `API_TOKEN` 后除健康检查外都要求
 `Authorization: Bearer <token>` 或 `X-API-Token`。完整清单与请求/响应结构见 <http://127.0.0.1:8000/docs>，
 `/api/v1` 的每条路由都有类型化响应模型，并由 `backend/tests/api/test_routes_contracts.py` 守住。
 
@@ -538,6 +601,7 @@ shujia/
 | GET | `/campaigns/{id}/state` | 权威状态（含 `version`） |
 | GET | `/campaigns/{id}/requests` | 该战役的请求记录（含 `applied/rejected/duplicate`） |
 | GET | `/actions/{request_id}` | 按幂等键查单条请求与结果 |
+| GET | `/campaigns/{id}/agent-calls` | 该战役的模型调用记录 |
 | GET | `/campaigns/{id}/events` | 领域事件（可回放，支持 `after_version`） |
 | GET | `/campaigns/{id}/event-executions` | 事件执行记录 |
 | GET | `/campaigns/{id}/quest-progress` | 任务进度（读权威状态拼装） |
@@ -562,6 +626,12 @@ shujia/
 | PUT/DELETE | `/worlds/{w}/{locations,items,doors,entities,events,quests}/{item_id}` | 资源级编辑 |
 | PUT/DELETE | `/worlds/{w}/custom-actions/{action_id}` | 世界声明的自定义行动 |
 | GET | `/worlds/{id}/map` | 地图数据 |
+| GET | `/agents` | 每个角色（narrative/system/memory）由哪个模型回答、是否配置；不回显密钥 |
+| GET | `/campaigns/{id}/agent-calls` | 该战役的模型调用记录（角色、任务、供应商、模型、耗时、是否降级） |
+| POST | `/worlds/{w}/evolution/propose` | 断言 → 提案（`commit` 默认 false，只草案） |
+| GET | `/worlds/{w}/evolution/proposals` | 提案审计轨迹（状态、置信度、驳回原因） |
+| POST | `/worlds/{w}/evolution/proposals/{p}/approve` | 采纳一条提案（先重新校验整份世界文档） |
+| POST | `/worlds/{w}/evolution/proposals/{p}/reject` | 驳回并记录原因 |
 | GET | `/local-model` | 本地模型可用性 |
 
 ### 作品库 `/api/v1`（世界穿越）
@@ -604,6 +674,8 @@ shujia/
 | GET | `/{cid}/world-graph`、`/{cid}/graph-search` | 图谱快照与搜索 |
 | GET/DELETE | `/{cid}/traces` | LLM 调用追踪 |
 | POST | `/{cid}/timeskip`、`/{cid}/rewind`、`/{cid}/regenerate-opening` | 时间跳转、回退、重生成开场 |
+| POST | `/{cid}/pause`、`/{cid}/resume` | 暂停/恢复：暂停的战役不推进游戏时间 |
+| GET | `/{cid}/clock` | 游戏内时间与是否冻结 |
 
 ### 情景与战役 `/api/scenarios`
 
@@ -633,7 +705,7 @@ shujia/
 
 返回 `ActionResult`：`status`（`applied` / `rejected` / `duplicate` / `conflict`）、`ok`、`code`、
 `message`、`state_version`、`effects_applied`、`events_fired`、`quests`、`story_nodes_entered`、
-`narrative`（含 `diagnostics`）与提交后的 `state`。
+`narrative`（含 `diagnostics`）与提交后的 `state`；阶段 5 起还带 `minutes_spent` 与 `clock`（老客户端可忽略）。
 
 `request_id` 是幂等键：同一个 id 重放返回 `duplicate` 与**同一份**结果，不会重复扣物品或发奖励。
 
@@ -658,16 +730,21 @@ npm --prefix frontend run build
 > `TEMP` / `TMP` 必须设置：pytest 默认临时目录在部分 Windows 环境下不可写；
 > `-p no:cacheprovider` 同理，避免 `.pytest_cache` 写入失败。
 
-- 最近一次全量：**1451 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 130 秒。
+- 最近一次全量：**1625 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 130 秒。
 - 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 项），覆盖 m00001 第九节的 14 条：
   建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/叙事失败不回滚/
   非法事件配置/模拟只读/中文世界读中文。
 - 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层，
-  包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放、内容策略与本地回退等。
+  包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放、内容策略与本地回退、
+  角色路由与降级、NPC 档案的知识隔离、演化提案的「未写入不叫已采纳」、游戏时钟暂停即冻结等。
+- 六个架构场景跑成测试：`backend/tests/services/test_architecture_acceptance.py`（NPC 对话、玩家补世界、
+  世界长剧情、知识隔离、离开游戏、模型失败），每个都打到真实入口与真实 SQLite。
+- 前端两条静态检查进 CI 等效的位置：`npm --prefix frontend run check:hooks`（hook 顺序）与
+  `check:agents`（调试台与演化面板的接线，防止「静默无数据」）。
 - 前端构建会先执行 `frontend/scripts/check-hook-order.mjs`，防止 `useCallback` 未声明就进依赖数组；
   页面全部懒加载，发布包由 `vite build` 产出到 `frontend/dist`。
 - 数据层：`scenarios.db` / `game_state.db` / `events.db` / `traces.db`，
-  `SCHEMA_VERSION` 分别为 12 / 2 / 2 / 1，打开旧库时按版本迁移；路径可用环境变量覆盖。
+  `SCHEMA_VERSION` 分别为 12 / 4 / 2 / 1（game_state.db 在阶段 3/5 各加一张表，纯增量迁移），打开旧库时按版本迁移；路径可用环境变量覆盖。
 
 ---
 
@@ -689,6 +766,8 @@ npm --prefix frontend run build
 | 旧聊天链路 | 待日落 | `LEGACY_APPLY_ITEM_TAGS` 默认 0，已不写权威状态，但代码与前端标记剥离逻辑仍在 |
 | 叙事语言 | 部分 | 只支持中/英二选一；世界工坊未暴露 `language` 字段 |
 | 作品库 | 部分 | 内置六部作品，未做联网检索；模型补写依赖已配置模型 |
+| 世界演化 | 部分 | 提案与采纳已有界面，但只能新增，不能改字段或删除；故事线不在演化链路里 |
+| 角色路由 | 部分 | 三个角色（narrative / system / memory），没有按 NPC 单独分配模型 |
 
 风险登记里的三条 P1：服务默认无鉴权（本机使用，需要共享时设 `API_TOKEN`）、
 SQLite 单写者（高并发回以版本冲突重试）、知识为词法相似度而非语义召回。

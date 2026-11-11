@@ -22,6 +22,38 @@
 - **叙事语言**：`WorldDefinition.language` 决定描述语言，确定性叙事器、效果描述与模型调用三处都遵守。
 - **起步世界预设**：奇幻村庄、轨道站、雾镇、荒野营地，中英双语，`GET /api/v1/world-presets`。
 
+### Added（第三轮：六个架构阶段）
+
+- **角色路由**（阶段 1）：`app/engines/agent_router.py` 按角色（narrative / system / memory）选模型，
+  全部走 `AGENTS_<ROLE>_*` 环境变量，代码里没有一个模型名；`AgentRuntime.ask()` 永不抛异常，
+  失败降级到下一角色，并把每次调用记进 `agent_calls` 表。`GET /api/v1/agents` 只报配置与可用性，从不回显密钥。
+  `app/engines/system_agent.py` 先做确定性分类，只有长断言才问模型。
+- **NPC 档案与分层玩家上下文**（阶段 2）：`app/engines/npc_dossier.py` 让 NPC 变成每回合按数据拼出来的档案
+  （性格、心情、秘密、知道与不知道的事）；`app/engines/player_context.py` 给上下文打
+  `fact` / `canon` / `belief` / `guess` / `history` 标签。两个 NPC 共用一个引擎，各自只看到被允许知道的。
+- **世界演化**（阶段 3）：`app/services/world_evolution.py` 把断言变成提案——
+  `POST /worlds/{w}/evolution/propose`、`GET .../proposals`、`.../approve`、`.../reject`。
+  提案在世界副本上经 `authoring_session.stage_ops` 校验，**没有真的写入就不叫已采纳**；
+  传闻与个人猜测永不进正史。世界工坊新增「世界演化」页签（共 13 个）。
+- **记忆来源**（阶段 4）：四层记忆晶体每条带 `source` / `observer` / `confidence` / `witnessed_names`，
+  叙事提示里用 `provenance_label()` 标出「谁说的、多可信」。
+- **游戏时钟**（阶段 5）：`app/engines/game_clock.py` 只在玩家行动时推进，暂停的战役不花时间；
+  `ActionResult` 多出 `minutes_spent` / `clock`，`GameState` 多出 `day` / `minute`（都有默认值，旧存档照常打开）。
+  新接口 `POST /api/game/{id}/pause`、`/resume`、`GET /api/game/{id}/clock`。
+- **六个场景跑成测试**（阶段 6）：`backend/tests/services/test_architecture_acceptance.py`
+  用真实入口与真实 SQLite 覆盖 NPC 对话、玩家补世界、世界长剧情、知识隔离、离开游戏、模型失败。
+
+### Changed
+
+- 数据库 `game_state.db` SCHEMA_VERSION 2 → 4：新增 `agent_calls`（v3）与 `evolution_proposals`（v4），
+  纯增量、打开旧库时自动迁移，没有删除或改写任何历史行。
+- 调试台新增「模型调用」页签（角色路由 + 每次调用记录）；前端接线由 `scripts/check-agent-wiring.mjs` 守住。
+
+### Fixed
+
+- 演化提案的「已采纳」只在 `applied` 里真的出现这条提案时才写：
+  之前即使 `stage_ops` 因校验失败没写进草稿，报告也会说成功。
+
 ### Added（第二轮）
 
 - **对话式补全世界**：`POST /api/v1/worlds/{w}/authoring/propose` 把一句话变成校验过的编辑提案，
@@ -31,10 +63,12 @@
   模型只做改写，写入只进知识库；`apply=false` 为试运行且完全幂等。
 - **只读交互预演**：`POST /api/v1/worlds/{w}/plan`、`/preview-actions`、`/explain`，
   判定全部来自真实 `RulesEngine` 与 `event_engine`，状态深拷贝，不写回。
+
 ### Changed
 
 - `/api/v1` 全部路由改为类型化响应模型，并新增契约测试 `tests/api/test_routes_contracts.py`。
-- 世界工坊十个页签，调试台三个页签；README 重写（路由清单、行动结果形态、编辑器与调试入口）。
+- 世界工坊页签增至 13 个（新增记忆提炼、对话补全、世界演化），调试台增至 4 个（新增模型调用）；
+  README 重写（路由清单、行动结果形态、编辑器与调试入口）。
 
 ### Fixed
 
@@ -43,7 +77,8 @@
 
 ### Tests
 
-- 后端：1493 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`。
+- 后端：1625 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`，
+  架构六场景见 `backend/tests/services/test_architecture_acceptance.py`。
 - 前端：本环境无法 `vite build`，只做了逐文件语法检查；这一项仍未验证。
 ## [0.5.0] - 2026-11-01
 

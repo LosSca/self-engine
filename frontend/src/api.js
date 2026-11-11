@@ -1257,3 +1257,52 @@ export async function commitWorldEdits(worldId, proposal) {
   })
   return jsonOrThrow(r, '保存世界改动失败')
 }
+
+/**
+ * World evolution: what a turn claims about the world, as reviewable proposals.
+ * `commit` defaults to false on the server, so proposing writes nothing.
+ */
+export async function proposeWorldEvolution(worldId, { statements = [], campaignId = '', observer = 'player', source = '', commit = false, autoCommit = null } = {}) {
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/evolution/propose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      statements,
+      campaign_id: campaignId,
+      observer,
+      source,
+      commit,
+      auto_commit: autoCommit,
+    }),
+  })
+  return jsonOrThrow(r, '生成世界演化提案失败')
+}
+
+/** The audit trail: every proposal, its status, and why. Read-only. */
+export async function fetchEvolutionProposals(worldId, { status = '', kind = '', limit = 100 } = {}) {
+  const q = new URLSearchParams()
+  if (status) q.set('status', status)
+  if (kind) q.set('kind', kind)
+  q.set('limit', String(limit))
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/evolution/proposals?${q}`)
+  return jsonOrThrow(r, '读取演化提案失败')
+}
+
+/** Commit one pending proposal. Re-validates the world before writing. */
+export async function approveEvolutionProposal(worldId, proposalId) {
+  const r = await fetch(
+    `${V1}/worlds/${encodeURIComponent(worldId)}/evolution/proposals/${encodeURIComponent(proposalId)}/approve`,
+    { method: 'POST' }
+  )
+  return jsonOrThrow(r, '采纳演化提案失败')
+}
+
+/** Refuse a proposal and keep the reason next to it. */
+export async function rejectEvolutionProposal(worldId, proposalId, reason = '') {
+  const q = reason ? `?reason=${encodeURIComponent(reason)}` : ''
+  const r = await fetch(
+    `${V1}/worlds/${encodeURIComponent(worldId)}/evolution/proposals/${encodeURIComponent(proposalId)}/reject${q}`,
+    { method: 'POST' }
+  )
+  return jsonOrThrow(r, '驳回演化提案失败')
+}
