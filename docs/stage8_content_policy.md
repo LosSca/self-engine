@@ -72,9 +72,10 @@ POST /api/settings
 backend/tests/engines/test_llm_router_policy.py      20 项：识别、主动路由、被动路由、流式哨兵
 backend/tests/services/test_narrator_content_policy.py 4 项：叙事层重试与不重试
 backend/tests/api/test_settings_content_policy.py     5 项：设置接口往返与非法值
+backend/tests/engines/test_narrator_stream_policy.py  6 项：流式哨兵不转发、重发本地、关闭/不可达/本地也拒绝
 ```
 
-全量后端：`1386 passed, 8 skipped`。
+全量后端：`1392 passed, 8 skipped`。
 
 ## 本地验证
 
