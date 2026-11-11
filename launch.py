@@ -242,13 +242,22 @@ def writable_dir(path: Path) -> bool:
         return False
 
 
+def _temp_dir() -> Path:
+    """系统临时目录；某些受限环境里 tempfile 一个候选目录都探不到，此时退到仓库内。"""
+    try:
+        return Path(tempfile.gettempdir())
+    except OSError:
+        return ROOT / ".tmp"
+
+
 def log_path(kind: str) -> Path:
-    """日志文件位置：优先 .logs/，不可写时退到系统临时目录，绝不因为写不了日志而起不来。"""
+    """日志文件位置：优先 .logs/，不可写时退到临时目录，绝不因为写不了日志而起不来。"""
     if writable_dir(LOGS):
         return LOGS / LOG_NAMES[kind]
-    fallback = Path(tempfile.gettempdir()) / "lunar-logs"
-    writable_dir(fallback)
-    return fallback / LOG_NAMES[kind]
+    fallback = _temp_dir() / "lunar-logs"
+    if writable_dir(fallback):
+        return fallback / LOG_NAMES[kind]
+    return LOGS / LOG_NAMES[kind]
 
 
 def spawn_service(
