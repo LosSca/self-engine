@@ -192,3 +192,37 @@ def test_acceptance_invalid_event_and_simulation_is_read_only(client):
     assert after["version"] == 0
     assert after["doors"]["warehouse_door"] is False
     assert "warehouse_opened" not in after["flags"]
+
+
+def test_acceptance_chinese_world_reads_in_chinese_even_without_a_model(client, monkeypatch):
+    """A world authored in Chinese must not switch to English prose.
+
+    The scene here has no narration preset and is played on the deterministic
+    narrator, which is exactly the path a fresh installation takes before any
+    provider key is configured: without the world's own language the settled
+    sentences came back in English under Chinese location names.
+    """
+    payload = village_world_data()
+    payload["language"] = "zh"
+    payload["locations"][0]["name"] = "村中广场"
+    payload["locations"][1]["name"] = "林间小路"
+    _create_world(client, payload)
+    _bind(client, "camp-zh")
+
+    looked = _act(client, "camp-zh", "zh-look", "look")
+    assert looked["status"] == "applied"
+    moved = client.post(
+        f"{API}/campaigns/camp-zh/actions",
+        json={
+            "campaign_id": "camp-zh",
+            "request_id": "zh-move",
+            "action": "move",
+            "target_id": "forest_edge",
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    body = moved.json()
+    assert body["status"] == "applied"
+    if body["narrative"]["model"] == "template":
+        assert "林间小路" in body["narrative"]["text"], body["narrative"]
+        assert "You arrive" not in body["narrative"]["text"]

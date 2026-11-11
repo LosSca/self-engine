@@ -736,6 +736,9 @@ def build_world_document(
     document = _deep(data)
     document["world_id"] = world_id
     document["scenario_id"] = scenario_id or ""
+    #: The description language travels with the world so deterministic prose
+    #: (the fallback narrator, effect sentences) can match what the player reads.
+    document["language"] = "zh" if _is_zh(language) else "en"
     return document
 
 

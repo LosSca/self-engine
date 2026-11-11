@@ -351,6 +351,9 @@ class WorldDefinition(BaseModel):
 
     world_id: str = Field(..., min_length=1, max_length=64)
     scenario_id: str = ""
+    #: Description language of this world (e.g. "zh", "en"). It only picks the
+    #: locale of deterministic prose; rules never read it.
+    language: str = Field(default="", max_length=16)
     name: str = Field(..., min_length=1, max_length=200)
     description: str = ""
     start_location_id: str = Field(..., min_length=1, max_length=64)

@@ -367,13 +367,20 @@ class ActionService:
         return blocks, [block["id"] for block in blocks], options
 
     def _narrate_options(
-        self, knowledge: List[Dict[str, Any]], options: Optional[Dict[str, Any]]
+        self,
+        knowledge: List[Dict[str, Any]],
+        options: Optional[Dict[str, Any]],
+        world: Optional[WorldDefinition] = None,
     ) -> Dict[str, Any]:
         """Pass authored knowledge only to narrators that accept it.
 
         Third-party or older narrators keep working unchanged: an unsupported
         keyword would raise TypeError mid-turn, which must never fail an action.
         """
+        if world is not None:
+            # The world decides the prose language, so a scene authored in
+            # Chinese reads in Chinese even when no preset sets one.
+            options = self._language_option(world, options)
         if not knowledge and options is None:
             return {}
         try:
@@ -388,6 +395,23 @@ class ActionService:
         if "options" in params:
             extra["options"] = options
         return extra
+
+    @staticmethod
+    def _language_option(
+        world: WorldDefinition, options: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Fill in the prose language from the world when nothing set it.
+
+        A scene preset or an explicit option still wins: this only supplies the
+        default, and only when the world actually says what language it is in.
+        """
+        language = (world.language or "").strip()
+        if not language:
+            return dict(options or {})
+        merged = dict(options or {})
+        if not merged.get("language"):
+            merged["language"] = "zh" if language.lower().startswith("zh") else language
+        return merged
 
     # --------------------------------------------------------------- execute
     async def execute(self, request: ActionRequest) -> ActionResult:
@@ -592,7 +616,7 @@ class ActionService:
                     outcome,
                     state,
                     world,
-                    **self._narrate_options(knowledge, options),
+                    **self._narrate_options(knowledge, options, world),
                 )
             except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
                 narrative = NarrativeResult(
@@ -785,7 +809,7 @@ class ActionService:
                 world,
                 executions,
                 [update.quest_id for update in quest_updates],
-                **self._narrate_options(knowledge, options),
+                **self._narrate_options(knowledge, options, world),
                 executions_effects=event_effects,
             )
         except TypeError as exc:
@@ -804,7 +828,7 @@ class ActionService:
                     world,
                     executions,
                     [update.quest_id for update in quest_updates],
-                    **self._narrate_options(knowledge, options),
+                    **self._narrate_options(knowledge, options, world),
                 )
             except Exception as inner:  # noqa: BLE001
                 return (

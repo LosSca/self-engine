@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.models.game import ActionRequest, GameState, NarrativeResult, RuleOutcome, WorldDefinition
+from app.models.game import ActionRequest, Effect, GameState, NarrativeResult, RuleOutcome, WorldDefinition
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services.world_service import build_initial_state
 from tests.support import village_world
@@ -260,3 +260,61 @@ async def test_narrator_forwards_sillytavern_samplers():
     assert kwargs["top_p"] == 0.9 and kwargs["top_k"] == 60
     assert kwargs["repetition_penalty"] == 1.1
     assert kwargs["stop"] == ["\nUser:"]
+
+
+def _chinese_world() -> WorldDefinition:
+    """The same demo village, authored in Chinese."""
+    data = village_world().model_dump(mode="json")
+    data["language"] = "zh"
+    return WorldDefinition.model_validate(data)
+
+
+async def test_template_narrator_speaks_the_world_language():
+    world = _chinese_world()
+    state = build_initial_state(world, "camp-zh")
+    request = ActionRequest(campaign_id="camp-zh", request_id="zh-1", action="look")
+    # No message and one committed effect: the prose has nothing to repeat, so
+    # the sentence that comes back is entirely the narrator's own.
+    outcome = RuleOutcome(
+        ok=True,
+        code="door_unlocked",
+        message="",
+        effects=[Effect(kind="move_player", target="forest_edge")],
+    )
+
+    result = await TemplateNarrator().narrate(request, outcome, state, world)
+
+    assert result.status == "ok"
+    assert "你来到" in result.text, result.text
+    assert "You arrive" not in result.text
+
+
+async def test_engine_hands_the_world_language_to_the_model():
+    # The world document is the fallback source of the language: a scene that
+    # never set one still gets prose in the language its author wrote.
+    from app.services.action_service import ActionService
+
+    world = _chinese_world()
+    options = ActionService._language_option(world, None)
+    assert options == {"language": "zh"}
+    # An authored preset still wins over the world default.
+    authored = ActionService._language_option(world, {"language": "en"})
+    assert authored["language"] == "en"
+    english = village_world()
+    assert ActionService._language_option(english, None) == {}
+
+
+async def test_engine_prose_never_carries_a_legacy_item_tag():
+    from app.services.narrative_service import strip_prose_tags
+
+    prose = "You take it. [ITEM_ADD:brass_key|key|picked up] The door waits."
+    assert strip_prose_tags(prose) == "You take it. The door waits."
+    # A normal bracketed aside is not a control tag and must survive.
+    assert strip_prose_tags("(the wind drops)") == "(the wind drops)"
+
+    world, state, request, outcome = _setup()
+    router = StubRouter(reply="You listen. [ITEM_LOSE:iron_key] Nothing moves.")
+    result = await LLMNarrator(router).narrate(request, outcome, state, world)
+    assert result.status == "ok", result.error
+    assert "ITEM_LOSE" not in result.text
+    assert result.text == "You listen. Nothing moves."

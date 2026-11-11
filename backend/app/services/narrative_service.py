@@ -209,6 +209,37 @@ def _item_name(world: WorldDefinition, item_id: str) -> str:
     return item.name if item else item_id
 
 
+def _localise(world: Optional[WorldDefinition], english: str, chinese: str) -> str:
+    """Pick the description language from the world, not from the caller.
+
+    ``render_fallback`` is also reached through the legacy game lane, which
+    knows nothing about world documents, so ``world`` is optional and an
+    unknown language stays English.
+    """
+    if world is not None and (world.language or "").lower().startswith("zh"):
+        return chinese
+    return english
+
+
+def _is_chinese_world(world: Optional[WorldDefinition]) -> bool:
+    """True when this world is written in Chinese (its prose should be too)."""
+    return _localise(world, "en", "zh") == "zh"
+
+
+#: Tags the legacy LLM lane still turns into item state. They are only ever
+#: read there; prose generated for a rule-driven turn is stripped of them so a
+#: model cannot smuggle a state change into a turn the engine already decided.
+_PROSE_TAG_NAMES = "ITEM_ADD|ITEM_USE|ITEM_LOSE|ITEM_REMOVE|ITEM_GIVE"
+
+
+def strip_prose_tags(text: str) -> str:
+    """Remove control tags from engine prose, keeping every other character."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"\[(?:" + _PROSE_TAG_NAMES + r")[^\]]*\]", " ", text)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
 def _door_name(world: WorldDefinition, door_id: str) -> str:
     door = next((d for d in world.doors if d.id == door_id), None)
     return door.name if door else door_id
@@ -230,20 +261,28 @@ def describe_effects(
     sentences: List[str] = []
     for effect in effects:
         if effect.kind == "give_item":
-            sentences.append(f"You now carry the {_item_name(world, effect.target)}.")
+            name = _item_name(world, effect.target)
+            sentences.append(_localise(world, f"You now carry the {name}.", f"你收下了{name}。"))
         elif effect.kind == "remove_item":
-            sentences.append(f"The {_item_name(world, effect.target)} is gone.")
+            name = _item_name(world, effect.target)
+            sentences.append(_localise(world, f"The {name} is gone.", f"{name}不再在你身上。"))
         elif effect.kind == "move_player":
             location = _location(world, effect.target)
             sentences.append(
-                f"You arrive at {location.name}." if location else "You move on."
+                _localise(world, f"You arrive at {location.name}.", f"你来到{location.name}。")
+                if location
+                else _localise(world, "You move on.", "你继续前行。")
             )
         elif effect.kind == "open_door":
-            sentences.append(f"The {_door_name(world, effect.target)} opens.")
+            door = _door_name(world, effect.target)
+            sentences.append(_localise(world, f"The {door} opens.", f"{door}打开了。"))
         elif effect.kind == "close_door":
-            sentences.append(f"The {_door_name(world, effect.target)} closes.")
+            door = _door_name(world, effect.target)
+            sentences.append(_localise(world, f"The {door} closes.", f"{door}关上了。"))
         elif effect.kind == "set_flag":
-            sentences.append(f"Something changes: {effect.target}.")
+            sentences.append(
+                _localise(world, f"Something changes: {effect.target}.", "局势变了。")
+            )
     return sentences
 
 
@@ -372,7 +411,11 @@ def render_fallback(
     written freely.
     """
     if not outcome.ok:
-        return outcome.message or f"The {outcome.code.replace('_', ' ')}."
+        return outcome.message or _localise(
+            world,
+            f"The {outcome.code.replace('_', ' ')}.",
+            "这件事没有做成。",
+        )
     sentences = describe_effects(world, state, outcome.effects)
     for execution in executions:
         if execution.status == "fired" and execution.name:
@@ -494,13 +537,18 @@ class TemplateNarrator:
                     _event_description(world, execution)
                     or f"({execution.name or execution.event_id}.)"
                 )
+        chinese = _is_chinese_world(world)
         for quest_id in quest_updates:
             progress = state.quests.get(quest_id)
             if progress is not None and progress.status == "completed":
-                parts.append(f"Quest completed: {_quest_title(world, quest_id)}.")
+                title = _quest_title(world, quest_id)
+                parts.append(
+                    f"任务完成：{title}。" if chinese else f"Quest completed: {title}."
+                )
+        joiner = "" if chinese else " "
         return NarrativeResult(
             status="ok",
-            text=" ".join(parts).strip(),
+            text=strip_prose_tags(joiner.join(parts)).strip(),
             model="template",
             diagnostics=capture_diagnostics(
                 knowledge,
@@ -802,7 +850,10 @@ class LLMNarrator:
                 error=f"{type(exc).__name__}: {exc}",
                 diagnostics=diagnostics.model_copy(update={"content_policy": policy}),
             )
-        cleaned = _CONTROL_TAG.sub("", text or "").strip()
+        # Two passes on purpose: the broad one drops every bracketed control tag,
+        # `strip_prose_tags` the item-tag spellings the legacy lane parses. Engine
+        # prose must never carry a marker that another lane would act on.
+        cleaned = strip_prose_tags(_CONTROL_TAG.sub("", text or "")).strip()
         if not cleaned:
             return NarrativeResult(
                 status="failed",
