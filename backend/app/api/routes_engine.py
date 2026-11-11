@@ -38,7 +38,7 @@ from app.models.game import (
     QuestDef,
     WorldDefinition,
 )
-from app.services import interaction_planner, starter_worlds, world_service
+from app.services import authoring_session, interaction_planner, starter_worlds, world_service
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
 from app.services.knowledge_service import build_context
@@ -1898,6 +1898,158 @@ def get_action(request_id: str):
             status_code=404, detail=f"unknown request_id '{request_id}'"
         )
     return row
+
+
+# --------------------------------------------------------------- authoring
+class AuthoringTurn(BaseModel):
+    """One message of the authoring conversation."""
+
+    role: str = Field("user", pattern="^(user|assistant)$")
+    text: str = Field("", max_length=4000)
+
+
+class AuthoringProposeBody(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    history: List[AuthoringTurn] = Field(default_factory=list, max_length=40)
+    preset_id: str = Field("", max_length=64)
+    language: str = Field("中文", max_length=16)
+
+
+class AuthoringOpView(BaseModel):
+    kind: str
+    summary: str = ""
+
+
+class AuthoringChangeView(BaseModel):
+    label: str
+    before: int = 0
+    after: int = 0
+
+
+class AuthoringProposalResponse(BaseModel):
+    """A staged edit proposal. Nothing has been written yet."""
+
+    status: str = "proposed"
+    reply: str = ""
+    world_id: str = ""
+    ops: List[AuthoringOpView] = []
+    changes: List[AuthoringChangeView] = []
+    knowledge_titles: List[str] = []
+    counts: Dict[str, int] = {}
+    warnings: List[str] = []
+    empty: bool = False
+
+
+class AuthoringCommitBody(BaseModel):
+    proposal: Dict[str, Any]
+    expected_world_id: str = Field("", max_length=64)
+
+
+class AuthoringCommitResponse(BaseModel):
+    status: str = "committed"
+    world_saved: bool = False
+    world_id: str = ""
+    knowledge_ids: List[str] = []
+    warnings: List[str] = []
+
+
+def _authoring_world(store, world_id: str):
+    try:
+        return _world_or_404(store, world_id)
+    finally:
+        store.close()
+
+
+def _authoring_proposal(body: Any) -> Any:
+    """Validate a reviewed proposal back into the draft the planner produced.
+
+    The client round-trips the proposal, so it must not be trusted: the world
+    part is re-parsed as a WorldDefinition and re-checked for references before
+    anything is written.
+    """
+    from app.models.game import WorldDefinition
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="proposal must be an object")
+    world_payload = body.get("world")
+    draft = None
+    if world_payload is not None:
+        try:
+            draft = WorldDefinition.model_validate(world_payload)
+        except Exception as exc:  # noqa: BLE001 - client supplied
+            raise HTTPException(status_code=400, detail=f"proposal world is invalid: {exc}")
+    entries = []
+    for item in body.get("knowledge") or []:
+        try:
+            entries.append(KnowledgeEntryCreate.model_validate(item))
+        except Exception as exc:  # noqa: BLE001 - client supplied
+            raise HTTPException(status_code=400, detail=f"proposal knowledge is invalid: {exc}")
+    return {"world": draft, "knowledge": entries}
+
+
+@router.post("/worlds/{world_id}/authoring/propose", response_model=AuthoringProposalResponse)
+async def propose_world_edits(world_id: str, body: AuthoringProposeBody):
+    """Turn one sentence into staged, validated edits. Writes nothing."""
+    from app.services import ai_generator
+
+    store = _get_store();
+    try:
+        world = _world_or_404(store, world_id)
+        scenario_store = _get_scenario_store()
+        try:
+            existing = scenario_store.list_knowledge(world.scenario_id) if world.scenario_id else []
+        finally:
+            scenario_store.close()
+    finally:
+        store.close()
+    router = ai_generator.router_for(body.preset_id or None)
+    if router is None:
+        raise HTTPException(
+            status_code=503,
+            detail="未配置可用模型：请先设置供应商密钥或本地模型",
+        )
+    history = [{"role": turn.role, "text": turn.text} for turn in body.history]
+    try:
+        reply, proposal = await authoring_session.propose_edits(
+            router, body.message, world, existing, history, body.language
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="模型超时，未产生任何提案")
+    ops = [AuthoringOpView(**op) for op in proposal.get("ops") or []]
+    return AuthoringProposalResponse(
+        reply=reply,
+        world_id=world.world_id,
+        ops=ops,
+        changes=[AuthoringChangeView(**row) for row in proposal.get("changes") or []],
+        knowledge_titles=list(proposal.get("knowledge_titles") or []),
+        counts=dict(proposal.get("world_summary") or {}),
+        warnings=list(proposal.get("warnings") or []),
+        empty=bool(proposal.get("empty")),
+    )
+
+
+@router.post("/worlds/{world_id}/authoring/commit", response_model=AuthoringCommitResponse)
+def commit_world_edits(world_id: str, body: AuthoringCommitBody):
+    """Write a proposal the author approved. Never touches a campaign state."""
+    draft = _authoring_proposal(body.proposal)
+    store = _get_store();
+    try:
+        world = _world_or_404(store, world_id)
+        if draft["world"] is not None and draft["world"].world_id != world.world_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"proposal targets world '{draft['world'].world_id}', not '{world.world_id}'",
+            )
+        scenario_store = _get_scenario_store()
+        try:
+            result = authoring_session.commit_proposal(
+                draft, world, scenario_store, store, world.scenario_id
+            )
+        finally:
+            scenario_store.close()
+    finally:
+        store.close()
+    return AuthoringCommitResponse(**result)
 
 
 # -------------------------------------------------------------- interaction

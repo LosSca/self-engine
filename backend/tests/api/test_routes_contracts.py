@@ -33,6 +33,8 @@ TYPED_PATHS = [
     ("post", "/api/v1/worlds/{world_id}/plan"),
     ("post", "/api/v1/worlds/{world_id}/preview-actions"),
     ("post", "/api/v1/worlds/{world_id}/explain"),
+    ("post", "/api/v1/worlds/{world_id}/authoring/propose"),
+    ("post", "/api/v1/worlds/{world_id}/authoring/commit"),
     ("get", "/api/v1/worlds/{world_id}/quests"),
     ("post", "/api/v1/worlds/{world_id}/quests"),
     ("get", "/api/v1/worlds/{world_id}/quests/{quest_id}"),

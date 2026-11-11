@@ -40,6 +40,8 @@ import {
   extractKnowledge,
   planRoom,
   explainAction,
+  proposeWorldEdits,
+  commitWorldEdits,
   fetchWorks,
   enterWork,
 } from '../api'
@@ -126,6 +128,7 @@ const TABS = [
   ['debug', '调试'],
   ['works', '作品穿越'],
   ['memory', '记忆提炼'],
+  ['chat', '对话补全'],
 ]
 
 const inputClass =
@@ -1500,6 +1503,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   const [planBusy, setPlanBusy] = useState(false)
   const [planError, setPlanError] = useState('')
   const [explain, setExplain] = useState(null)
+  const [chatLog, setChatLog] = useState([])
+  const [chatDraft, setChatDraft] = useState('')
+  const [chatProposal, setChatProposal] = useState(null)
+  const [chatBusy, setChatBusy] = useState(false)
+  const [chatError, setChatError] = useState('')
 
   const report = useCallback((err) => {
     if (Array.isArray(err && err.detail)) setErrors(err.detail)
@@ -1669,6 +1677,48 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       setExplain(data)
     } catch (err) {
       setPlanError(err.message || '解释失败')
+    }
+  }
+
+  const sendChat = async () => {
+    const message = chatDraft.trim()
+    if (!message || !worldId) return
+    setChatBusy(true)
+    setChatError('')
+    const history = chatLog.map((turn) => ({ role: turn.role, text: turn.text }))
+    try {
+      const data = await proposeWorldEdits(worldId, message, { history })
+      setChatLog((log) => [
+        ...log,
+        { role: 'user', text: message },
+        { role: 'assistant', text: data.reply || '（没有说明）', warnings: data.warnings || [] },
+      ])
+      setChatDraft('')
+      setChatProposal(data)
+    } catch (err) {
+      setChatError(err.message || '生成失败')
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  const commitChatProposal = async () => {
+    if (!chatProposal || !worldId) return
+    setChatBusy(true)
+    setChatError('')
+    try {
+      const result = await commitWorldEdits(worldId, chatProposal)
+      if (result.world_saved) {
+        setChatLog((log) => [...log, { role: 'assistant', text: '已写入世界：' + chatProposal.ops.map((op) => op.summary).join('、') }])
+        await selectWorld(worldId)
+      } else {
+        setChatLog((log) => [...log, { role: 'assistant', text: '没有写入：' + (result.warnings || []).join('、') }])
+      }
+      setChatProposal(null)
+    } catch (err) {
+      setChatError(err.message || '保存失败')
+    } finally {
+      setChatBusy(false)
     }
   }
 
@@ -2711,6 +2761,129 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   {(memoryResult.entries || []).length === 0 && (
                     <div className="text-[11px] text-white/35">没有新内容：这段冒险的叙述都已收录，或还没有可提炼的句子。</div>
                   )}
+                </div>
+              )}
+            </div>
+          )}
+          {tab === 'chat' && (
+            <div className="flex flex-col gap-5">
+              <SectionNote>
+                用一句话不断补全这个世界：说「加一条通往河边的小路」「这扇门需要黄铜钥匙」，系统会把它变成具体的编辑操作。模型只能提出操作，所有改动都先在副本上校验，确认无误才写入世界文档；游戏状态、任务进度、存档一律不动。
+              </SectionNote>
+
+              {!worldId && <p className="text-xs text-white/40">先选择一个世界。</p>}
+
+              {worldId && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                  {chatLog.length === 0 ? (
+                    <p className="text-xs text-white/40">还没有对话。试试：「在广场东边加一条通往河边的小路，并写一条关于这条河的设定」。</p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {chatLog.map((turn, index) => (
+                        <div
+                          key={`turn-${index}`}
+                          className={`rounded-xl px-3 py-2 text-xs ${turn.role === 'user' ? 'bg-white/10 text-white' : 'bg-white/[0.03] text-white/70 border border-white/10'}`}
+                        >
+                          <div className="text-[10px] text-white/30 mb-1">{turn.role === 'user' ? '你' : '助手'}</div>
+                          <div>{turn.text}</div>
+                          {(turn.warnings || []).length > 0 && (
+                            <ul className="mt-1 text-[10px] text-amber-300/70 list-disc list-inside">
+                              {(turn.warnings || []).map((line, i) => <li key={`w-${i}`}>{line}</li>)}
+                            </ul>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <textarea
+                    className={inputClass}
+                    rows={2}
+                    placeholder="描述你想补全的内容…"
+                    value={chatDraft}
+                    onChange={(e) => setChatDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        sendChat()
+                      }
+                    }}
+                  />
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button className={primaryButton} onClick={sendChat} disabled={chatBusy || !chatDraft.trim()}>
+                      {chatBusy ? '生成中…' : '发送'}
+                    </button>
+                    {chatLog.length > 0 && (
+                      <button
+                        className={ghostButton}
+                        onClick={() => {
+                          setChatLog([])
+                          setChatProposal(null)
+                          setChatError('')
+                        }}
+                      >
+                        清空对话
+                      </button>
+                    )}
+                  </div>
+                  {chatError && <p className="text-xs text-red-300">{chatError}</p>}
+                </div>
+              )}
+
+              {chatProposal && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-bold text-white">待确认的改动</span>
+                    <Badge tone={chatProposal.empty ? 'muted' : 'good'}>
+                      {(chatProposal.ops || []).length} 个操作
+                    </Badge>
+                    {(chatProposal.knowledge_titles || []).length > 0 && (
+                      <Badge tone="accent">{chatProposal.knowledge_titles.length} 条知识</Badge>
+                    )}
+                  </div>
+
+                  {(chatProposal.changes || []).length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {(chatProposal.changes || []).map((row) => (
+                        <span key={row.label} className="text-xs text-white/60">
+                          {row.label} {row.before} → {row.after}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {(chatProposal.ops || []).length > 0 ? (
+                    <ul className="text-xs text-white/70 list-disc list-inside">
+                      {(chatProposal.ops || []).map((op, index) => (
+                        <li key={`op-${index}`}><span className="text-white/40">{op.kind}</span> {op.summary}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-white/40">模型没有给出可执行的改动。</p>
+                  )}
+
+                  {(chatProposal.warnings || []).length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-white/30 mb-1">被拒绝或跳过的部分</div>
+                      <ul className="text-[10px] text-amber-300/70 list-disc list-inside">
+                        {(chatProposal.warnings || []).map((line, i) => <li key={`pw-${i}`}>{line}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      className={primaryButton}
+                      onClick={commitChatProposal}
+                      disabled={chatBusy || (chatProposal.ops || []).length === 0}
+                    >
+                      {chatBusy ? '写入中…' : '确认写入'}
+                    </button>
+                    <button className={ghostButton} onClick={() => setChatProposal(null)} disabled={chatBusy}>
+                      丢弃
+                    </button>
+                    <span className="text-[10px] text-white/30">只写世界文档与知识库，不改游戏状态</span>
+                  </div>
                 </div>
               )}
             </div>

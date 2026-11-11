@@ -1219,3 +1219,26 @@ export async function explainAction(worldId, action, target, campaignId = '') {
   })
   return jsonOrThrow(r, '解释行动失败')
 }
+
+/**
+ * Turn one sentence into staged world edits. Writes nothing; the reply and
+ * the proposal come back for review, and only `commitWorldEdits` persists it.
+ */
+export async function proposeWorldEdits(worldId, message, { history = [], presetId = '', language = '中文' } = {}) {
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/authoring/propose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, history, preset_id: presetId, language }),
+  })
+  return jsonOrThrow(r, '生成世界改动失败')
+}
+
+/** Persist a proposal the author approved. World document and knowledge only. */
+export async function commitWorldEdits(worldId, proposal) {
+  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/authoring/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ proposal }),
+  })
+  return jsonOrThrow(r, '保存世界改动失败')
+}
