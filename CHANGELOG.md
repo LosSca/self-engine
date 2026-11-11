@@ -22,6 +22,15 @@
 - **叙事语言**：`WorldDefinition.language` 决定描述语言，确定性叙事器、效果描述与模型调用三处都遵守。
 - **起步世界预设**：奇幻村庄、轨道站、雾镇、荒野营地，中英双语，`GET /api/v1/world-presets`。
 
+### Added（第二轮）
+
+- **对话式补全世界**：`POST /api/v1/worlds/{w}/authoring/propose` 把一句话变成校验过的编辑提案，
+  `POST /api/v1/worlds/{w}/authoring/commit` 才落盘；世界文档逐条走 `world_editor` 校验读改写，
+  引用悬空的提案当场被拒并给出原因。世界工坊新增「对话补全」页签（共 12 个）。
+- **从叙事文本抽取记忆**：`POST /api/v1/scenarios/{s}/knowledge/extract`，确定性句子分类与句式事实优先，
+  模型只做改写，写入只进知识库；`apply=false` 为试运行且完全幂等。
+- **只读交互预演**：`POST /api/v1/worlds/{w}/plan`、`/preview-actions`、`/explain`，
+  判定全部来自真实 `RulesEngine` 与 `event_engine`，状态深拷贝，不写回。
 ### Changed
 
 - `/api/v1` 全部路由改为类型化响应模型，并新增契约测试 `tests/api/test_routes_contracts.py`。
@@ -34,7 +43,7 @@
 
 ### Tests
 
-- 后端：1451 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`。
+- 后端：1493 passed / 8 skipped。验收走查见 `backend/tests/api/test_acceptance_story.py`。
 - 前端：本环境无法 `vite build`，只做了逐文件语法检查；这一项仍未验证。
 ## [0.5.0] - 2026-11-01
 
