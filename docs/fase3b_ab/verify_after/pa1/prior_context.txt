@@ -1,0 +1,77 @@
+PLAYER: [DO] Sigo com o velho até a vila, reparando nas casas fechadas e nos rostos assustados pelo caminho.
+
+NARRATOR: @Saruk acena com a cabeça, um movimento lento e pesado, e começa a andar em direção às construções de pedra. Você caminha ao lado dele. A areia dá lugar a um chão batido irregular, cheio de pedras soltas e raízes de palmeiras serpentando pelo caminho. Os lampiões a óleo balançam com a brisa, criando sombras dançantes nas paredes de pedra escura.
+
+As casas são baixas, feitas de blocos irregulares cobertos por camadas de palha seca. Janelas pequenas, sem vidro, apenas vãos cobertos por panos surrados que tremulam com o vento. Voadeiras apodrecidas viradas de lado servem de telhado improvisado em dois barracos.
+
+Você nota os detalhes: portas fechadas com trancas improvisadas por fora, não por dentro. Cordas amarradas nos batentes. Panelas vazias empilhadas do lado de fora de uma cozinha coletiva. Um poço com a corda seca, sem balde. Uma sandália infantil abandonada na lama.
+
+Das janelas, rostos aparecem e desaparecem. Uma menina de cabelo cacheado espiada por dois segundos antes de ser puxada para dentro por uma mão adulta. Um velho sentado numa soleira aperta um cachimbo apagado contra os lábios e desvia o olhar quando você passa. Um cachorro magro levanta a cabeça de uma poça de lama mas não late. Só observa.
+
+@Saruk não apressa o passo. Ele deixa você ver. Quando chegam numa praça central minúscula — uma clareira com um tronco caído servindo de banco e uma fogueira apagada cheia de cinzas frias — ele para e aponta com o queixo pra uma construção ligeiramente maior no centro.
+
+– A casa da @Mara. O menino @Yuri tá lá dentro. Ela deixa a janela aberta de noite pra ele ouvir o mar. Diz que acalma.
+
+A tosse vem de novo. Fraca. Trêmula. Como quem já não tem força nem pra tossir direito.
+
+@Saruk te encara:
+
+– O @Kael vem buscar o tributo em dois dias. Se a gente não tiver o peixe e os berry, ele queima três casas. É o que ele faz. Sempre três. Nem uma a mais, nem uma a menos. Diz que é pra gente aprender a contar.
+
+PLAYER: [SAY] Me leva até esse chefe. Quero olhar na cara dele.
+
+NARRATOR: O velho te encara por um longo tempo, o olho bom brilhando à luz do lampião mais próximo. Ele não pisca. Não desvia. Depois de alguns segundos, ele vira o rosto e cospe pro lado, devagar.
+
+– Amanhã. – a palavra sai firme, sem hesitação. – Ele vem amanhã, na maré alta do meio-dia. A gente entrega o tributo no píer velho, do lado leste. O @Kael nunca desembarca. Fica no navio. Manda os capangas descerem com um barco menor.
+
+Ele coloca a mão no ombro de @Brock e aperta.
+
+– Se você vai enfrentar ele, a gente precisa de um plano. O @Kael não é burro. Ele já matou gente que tentou emboscada, envenenamento e suborno. As três tentativas que a vila fez em dois anos. As três falharam.
+
+@Brock pigarreia e completa:
+
+– Ele tem uns vinte homens. Armados até os dentes com fuzis da Marinha. E o navio dele tem canhão. Não é grande coisa, mas dá pra transformar o píer em estilhaço se ele desconfiar de algo.
+
+@Saruk cruza os braços magros e inclina a cabeça:
+
+– Você quer ir sozinho? Quer que a gente prepare algo? Quer fingir que é um refém, um comprador, um marinheiro naufragado? Fala, moço. A gente segue seu comando hoje. Amanhã pode ser tarde demais.
+
+PLAYER: [DO] Espero em silêncio na entrada do pátio, estudando as saídas e deixando a tensão crescer antes de entrar.
+
+NARRATOR: Você para na entrada do pátio. Os pés plantados no chão batido. A fogueira apagada à sua frente, as casas de pedra em semicírculo, os lampiões tremeluzentes. Você não entra. Não imediatamente.
+
+O vento sopra poeira fina entre suas pernas. Uma folha seca raspando no chão. Lá dentro, a tosse de @Yuri se arrasta por três segundos antes de silenciar. O cachorro magro levanta a cabeça, te observa com olhos amarelos, e deita de novo.
+
+Você varre o pátio com o olhar. Duas saídas principais: a trilha por onde veio, levando de volta à praia, e uma passagem estreita entre duas casas de pedra no lado oposto, que desaparece na escuridão das palmeiras. Nos telhados, não há vigias. As janelas estão fechadas com panos. Mas há uma escada de madeira encostada na parede lateral da casa de @Mara — acesso fácil ao telhado, coberto de palha seca.
+
+@Saruk parou atrás de você. Ele não fala. Não apressa. Só espera. @Brock e @Tomas surgiram nas laterais, silenciosos, os olhos fixos em você. A vila inteira parece prender a respiração.
+
+A cortina de pano na porta da casa de @Mara se move. Ela aparece, o rosto cansado, a mão apertando o batente de madeira.
+
+– Ele acordou agora. Pediu água. – a voz dela sai num fio. – É a primeira vez em três dias que ele pede alguma coisa.
+
+Ela te encara:
+
+– O senhor vai mesmo enfrentar o @Kael amanhã?
+
+PLAYER: [SAY] Você deve ser o chefe. Bonito esse trono de caixotes.
+
+NARRATOR: As palavras saem firmes, cortando o ar noturno como uma lâmina. O cachorro magro ergue a cabeça de novo, as orelhas atentas. A cortina de pano estremece com uma lufada de vento vinda do mar.
+
+Ninguém responde imediatamente.
+
+@Saruk, parado atrás de você, inclina a cabeça. O olho bom dele acompanha seu perfil. @Brock troca um olhar rápido com @Tomas. A mulher na porta, @Mara, aperta o batente de madeira com tanta força que as juntas dela estalam.
+
+Então, da escuridão dentro da casa, uma voz infantil e fraca — um fio de som — responde:
+
+– Mamãe… quem é que tá falando?
+
+@Mara vira o rosto rapidamente, entra, e a cortina cai.
+
+@Saruk dá um passo ao seu lado. Voz baixa. Calculada.
+
+– O trono de caixotes. É como eles chamam o navio do @Kael desde que ele transformou o convés num palco com assento de caixas de munição vazias. Dizem que ele se senta lá durante os tributos, com uma garrafa de rum numa mão e uma pistola na outra, e faz questão de que todo mundo veja. Ele gosta de plateia.
+
+O velho te encara de lado.
+
+– Você já decidiu, não decidiu? O plano. Como vai fazer amanhã?

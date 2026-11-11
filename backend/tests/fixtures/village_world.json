@@ -1,0 +1,105 @@
+{
+  "world_id": "demo_village",
+  "scenario_id": "demo",
+  "name": "Demo Village",
+  "description": "A tiny demo world used by the engine tests: a village square, a forest edge and a locked warehouse.",
+  "start_location_id": "village_square",
+  "locations": [
+    {
+      "id": "village_square",
+      "name": "Village Square",
+      "description": "A packed-earth square ringed by low stone houses. The warehouse door stands shut to the east.",
+      "tags": ["town"],
+      "exits": [
+        {"target_id": "forest_edge", "label": "north"},
+        {"target_id": "warehouse", "label": "east", "door_id": "warehouse_door"}
+      ],
+      "door_ids": ["warehouse_door"],
+      "item_ids": ["iron_key"],
+      "npc_ids": ["elder_mara"]
+    },
+    {
+      "id": "forest_edge",
+      "name": "Forest Edge",
+      "description": "Pines crowd the northern track where the fields give out.",
+      "tags": ["wild"],
+      "exits": [
+        {"target_id": "village_square", "label": "south"}
+      ],
+      "door_ids": [],
+      "item_ids": [],
+      "npc_ids": []
+    },
+    {
+      "id": "warehouse",
+      "name": "Warehouse",
+      "description": "Sacks of grain and a smell of dust. Something glints in the corner.",
+      "tags": ["indoor"],
+      "exits": [
+        {"target_id": "village_square", "label": "west", "door_id": "warehouse_door"}
+      ],
+      "door_ids": [],
+      "item_ids": ["silver_charm"],
+      "npc_ids": []
+    }
+  ],
+  "items": [
+    {"id": "iron_key", "name": "Iron Key", "description": "A heavy iron key with a worn knot pattern.", "tags": ["key"]},
+    {"id": "silver_charm", "name": "Silver Charm", "description": "A small silver disc, cold to the touch.", "tags": ["treasure"]},
+    {"id": "blessing_token", "name": "Blessing Token", "description": "A token the village elder pays for honest work.", "tags": ["reward"]}
+  ],
+  "doors": [
+    {
+      "id": "warehouse_door",
+      "name": "warehouse door",
+      "location_id": "village_square",
+      "locked": true,
+      "opened": false,
+      "key_item_id": "iron_key",
+      "consumes_key": false
+    }
+  ],
+  "quests": [
+    {
+      "id": "open_the_warehouse",
+      "title": "Open the Warehouse",
+      "description": "The elder wants the grain counted before nightfall.",
+      "enabled": true,
+      "objectives": [
+        {"id": "find_key", "kind": "obtain_item", "target": "iron_key", "required_count": 1, "description": "Find the iron key"},
+        {"id": "open_door", "kind": "open_door", "target": "warehouse_door", "required_count": 1, "description": "Open the warehouse door"}
+      ],
+      "rewards": [
+        {"kind": "give_item", "target": "blessing_token", "amount": 1}
+      ]
+    }
+  ],
+  "events": [
+    {
+      "id": "keeper_alert",
+      "name": "The elder looks up",
+      "description": "The elder turns when the warehouse door finally gives.",
+      "enabled": true,
+      "trigger": "action",
+      "trigger_action": "open",
+      "trigger_target": "warehouse_door",
+      "conditions": [{"kind": "door_open", "target": "warehouse_door", "value": true}],
+      "effects": [{"kind": "set_flag", "target": "warehouse_opened", "value": true}],
+      "priority": 10,
+      "repeat": "once"
+    },
+    {
+      "id": "key_pickup_noted",
+      "name": "The key is taken",
+      "description": "A quiet note that the key left the square.",
+      "enabled": true,
+      "trigger": "action",
+      "trigger_action": "take",
+      "trigger_target": "iron_key",
+      "conditions": [],
+      "effects": [{"kind": "set_flag", "target": "key_taken", "value": true}],
+      "priority": 5,
+      "repeat": "always"
+    }
+  ]
+}

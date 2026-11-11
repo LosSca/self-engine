@@ -1,0 +1,385 @@
+{
+  "tic_rows": {
+    "t000": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 0
+    },
+    "t001": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 0
+    },
+    "t002": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 1
+    },
+    "t003": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 1
+    },
+    "t004": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 2
+    },
+    "t005": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 2
+    },
+    "t006": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 3
+    },
+    "t007": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 3
+    },
+    "t008": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 4
+    },
+    "t009": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 4
+    },
+    "t010": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 5
+    },
+    "t011": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 5
+    },
+    "t012": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 6
+    },
+    "t013": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 6
+    },
+    "t014": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 7
+    },
+    "t015": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 7
+    },
+    "t016": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 8
+    },
+    "t017": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 8
+    },
+    "t018": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 9
+    },
+    "t019": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 9
+    },
+    "t020": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 10
+    },
+    "t021": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 10
+    },
+    "t022": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 11
+    },
+    "t023": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 11
+    },
+    "t024": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 12
+    },
+    "t025": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 12
+    },
+    "t026": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 13
+    },
+    "t027": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 13
+    },
+    "t028": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 14
+    },
+    "t029": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 14
+    },
+    "t030": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 15
+    },
+    "t031": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 15
+    },
+    "t032": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 16
+    },
+    "t033": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 16
+    },
+    "t034": {
+      "corpus": "stress",
+      "arm": "raw",
+      "idx": 17
+    },
+    "t035": {
+      "corpus": "stress",
+      "arm": "audited",
+      "idx": 17
+    },
+    "t036": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 0
+    },
+    "t037": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 0
+    },
+    "t038": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 1
+    },
+    "t039": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 1
+    },
+    "t040": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 2
+    },
+    "t041": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 2
+    },
+    "t042": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 3
+    },
+    "t043": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 3
+    },
+    "t044": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 4
+    },
+    "t045": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 4
+    },
+    "t046": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 5
+    },
+    "t047": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 5
+    },
+    "t048": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 6
+    },
+    "t049": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 6
+    },
+    "t050": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 7
+    },
+    "t051": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 7
+    },
+    "t052": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 8
+    },
+    "t053": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 8
+    },
+    "t054": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 9
+    },
+    "t055": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 9
+    },
+    "t056": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 10
+    },
+    "t057": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 10
+    },
+    "t058": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 11
+    },
+    "t059": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 11
+    },
+    "t060": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 12
+    },
+    "t061": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 12
+    },
+    "t062": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 13
+    },
+    "t063": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 13
+    },
+    "t064": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 14
+    },
+    "t065": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 14
+    },
+    "t066": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 15
+    },
+    "t067": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 15
+    },
+    "t068": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 16
+    },
+    "t069": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 16
+    },
+    "t070": {
+      "corpus": "prod",
+      "arm": "raw",
+      "idx": 17
+    },
+    "t071": {
+      "corpus": "prod",
+      "arm": "audited",
+      "idx": 17
+    }
+  },
+  "pairs": {
+    "p00": {
+      "corpus": "stress",
+      "idx": 0,
+      "a_arm": "raw",
+      "b_arm": "audited",
+      "claimed_fixes": [
+        "em_dash_tic",
+        "gesture_gloss"
+      ]
+    },
+    "p01": {
+      "corpus": "prod",
+      "idx": 16,
+      "a_arm": "audited",
+      "b_arm": "raw",
+      "claimed_fixes": [
+        "player_agency"
+      ]
+    }
+  }
+}

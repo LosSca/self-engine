@@ -1,0 +1,18 @@
+{
+  "new": {
+    "arm": "NEW",
+    "n": 18,
+    "words": 3859,
+    "rule_of_three": 4,
+    "fake_metrics": 0,
+    "em_dash": 0
+  },
+  "old": {
+    "arm": "OLD",
+    "n": 18,
+    "words": 4773,
+    "rule_of_three": 18,
+    "fake_metrics": 2,
+    "em_dash": 3
+  }
+}

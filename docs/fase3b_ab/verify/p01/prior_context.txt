@@ -1,0 +1,27 @@
+PLAYER: [SAY] Vim te dar uma escolha simples: devolve a comida, some da ilha, ou a gente resolve do jeito difícil.
+NARRATOR: A fala sai limpa, seca, sem hesitação. As palavras caem no pátio como moedas numa bandeja de metal.
+
+A filha de Brock prende a respiração. A faca na mão dela sobe um dedo, quase instintivamente.
+
+Brock fica imóvel por um longo, longo momento. Os olhos cinzentos não piscam. O peito largo para de se mover por um segundo. Depois, ele se inclina para trás no caixote, as costas estalando. As mãos dele descansam nos joelhos. Ele olha para você como quem olha para uma tempestade se formando no horizonte.
+
+"Comida," ele repete, a voz num tom estranho, quase divertido. "Tu acha que eu tô sentado nesse trono de caixote porque quero, piratinha?" Ele ri, um som baixo, sem humor. "Eu não sou o chefão. Eu sou o ferreiro que tentou proteger a vila quando ninguém mais tinha coragem. Esses mantimentos que tão no armazém não são meus. São do Silas. E se eu devolver, amanhã cedo os três abutres da praia correm pra contar, e daqui a três dias o navio volta com o dobro de homens."
+
+Ele se levanta. Dá dois passos em sua direção. Pára a dois metros de distância.
+
+"Eu não tô com medo de você, moço. Mas eu tô com medo do que acontece com essa gente se eu fizer a escolha errada." Ele aponta com o queixo para a porta da casa, onde a filha ainda observa. "Se tu quer mesmo ajudar, não me dá escolha. Me dá um plano. Me dá garantia de que quando o Silas chegar, ele não vai encontrar essa vila inteira pendurada em postes."
+
+PLAYER: [DO] Dou um passo à frente e deixo a eletricidade formigar nas pontas dos dedos.
+NARRATOR: Você dá um passo à frente. A sola do pé toca o chão de terra batida com firmeza. E então, sem alarde, sem pose, você deixa a eletricidade formigar nas pontas dos dedos.
+
+Estalos finos, azulados, dançam entre as falanges como pequenas enguias de luz. A descarga não é grande, controlada, apenas o suficiente para iluminar seu rosto por um instante e fazer o ar ao redor crepitar com ozônio.
+
+A filha de Brock arfa, a faca quase escapando da mão. Ela recua meio passo, os olhos arregalados fixos nas centelhas que bailam entre seus dedos.
+
+Brock não recua. Mas os olhos cinzentos dele se arregantam ligeiramente, e a mão direita, que pendia relaxada, se fecha num punho involuntário. Ele encara as faíscas por um bom tempo. Depois, levanta o olho para encontrar o seu.
+
+"Fruta do Diabo," ele murmura, a voz rouca de quem acabou de ver uma chance se abrir. "Tipo Logia?"
+
+Ele não espera resposta. Dá meia-volta e caminha até a forja apagada. Com a mão, ele limpa uma camada de fuligem da bigorna, revelando o metal por baixo. Depois, se vira de novo.
+
+"Se você tem poder de verdade, então a conversa muda." Ele aponta o queixo para você. "Mas poder não é plano. O navio do Silas volta em três dias. Ele nunca vem sozinho. Sempre com uns vinte homens armados. E se você usar esse poder na frente deles, a notícia chega ao comprador antes do sol se pôr." Ele cruza os braços. "Então me diz: como é que a gente usa isso sem acender um sinalizador pro mundo inteiro?"

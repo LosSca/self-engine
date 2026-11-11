@@ -1,0 +1,830 @@
+{
+  "census": [
+    {
+      "id": "t000",
+      "npc_action_recap": 1,
+      "mechanical_triple": 0,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 5
+    },
+    {
+      "id": "t001",
+      "npc_action_recap": 1,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t002",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 3
+    },
+    {
+      "id": "t003",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 3
+    },
+    {
+      "id": "t004",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t005",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t006",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 2,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t007",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 2,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t008",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 2
+    },
+    {
+      "id": "t009",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 2
+    },
+    {
+      "id": "t010",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 3
+    },
+    {
+      "id": "t011",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 3
+    },
+    {
+      "id": "t012",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 2
+    },
+    {
+      "id": "t013",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 2
+    },
+    {
+      "id": "t014",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t015",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t016",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 2,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t017",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 2,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t018",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t019",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t020",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t021",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t022",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t023",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t024",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t025",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t026",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t027",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t028",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t029",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t030",
+      "npc_action_recap": 0,
+      "mechanical_triple": 3,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t031",
+      "npc_action_recap": 0,
+      "mechanical_triple": 3,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t032",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 4
+    },
+    {
+      "id": "t033",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 4
+    },
+    {
+      "id": "t034",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 2,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t035",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 2,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t036",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t037",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t038",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t039",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t040",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t041",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t042",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t043",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t044",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t045",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t046",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t047",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t048",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t049",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t050",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t051",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t052",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 4,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t053",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 4,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t054",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t055",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t056",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 2
+    },
+    {
+      "id": "t057",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 2
+    },
+    {
+      "id": "t058",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t059",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 0,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t060",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 2,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t061",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 2,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 1
+    },
+    {
+      "id": "t062",
+      "npc_action_recap": 0,
+      "mechanical_triple": 3,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t063",
+      "npc_action_recap": 0,
+      "mechanical_triple": 3,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 2,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t064",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 3,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t065",
+      "npc_action_recap": 0,
+      "mechanical_triple": 2,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 3,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 1,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t066",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t067",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 0,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t068",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 3,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t069",
+      "npc_action_recap": 0,
+      "mechanical_triple": 0,
+      "gesture_gloss": 0,
+      "contrast_by_negation": 3,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t070",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    },
+    {
+      "id": "t071",
+      "npc_action_recap": 0,
+      "mechanical_triple": 1,
+      "gesture_gloss": 1,
+      "contrast_by_negation": 1,
+      "aphorism_or_oracle_closer": 1,
+      "pseudo_metric": 0,
+      "em_dash_interruptive": 0
+    }
+  ],
+  "verify": [
+    {
+      "pid": "p00",
+      "judge": 0,
+      "verdict": {
+        "same_events": "yes",
+        "content_lost_in": "version_b",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "neither",
+        "cleaner_prose": "version_a",
+        "overall_better": "version_a",
+        "reasoning": "This is the opening turn (no prior context), so there is no player ability to preserve or remove — established_ability_removed_in = neither, and neither version invents content beyond the player's declared action (aportar a jangada e se aproximar da fogueira com três homens grandes e um velho curvado). Both narrate the identical sequence of events: puxar a jangada, amarrar a corda, aproximar-se da fogueira, os três homens virando a cabeça, o careca falando, as palmeiras/construções/lampiões ao fundo, o velho virando o rosto com a cicatriz em cruz. So same_events = yes.\n\nThe decisive difference is line 9. Version A: \"Mas os olhos dele — o que resta deles — te fixam como se já soubesse seu nome.\" Version B: \"Mas os olhos dele, o que resta deles, te fixam.\" Version B drops the clause \"como se já soubesse seu nome\", which is meaningful atmospheric content — it establishes the old man's uncanny, foreboding recognition of the player, a hook the scene clearly wants. That loss makes content_lost_in = version_b.\n\nSecondary difference is purely stylistic: A uses parenthetical em-dashes in line 3 (\"— cada um passando fácil dos dois metros... pesadas —\") and line 9, while B substitutes commas. Neither is a heavy tic (just two uses in A), and the em-dash pauses plus the retained \"como se já soubesse seu nome\" give A better texture and a stronger closing beat; B reads flatter and its final line (\"te fixam\") lands abruptly. Hence cleaner_prose = version_a and overall_better = version_a — A preserves the evocative content B silently stripped."
+      }
+    },
+    {
+      "pid": "p00",
+      "judge": 1,
+      "verdict": {
+        "same_events": "yes",
+        "content_lost_in": "version_b",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "neither",
+        "cleaner_prose": "equal",
+        "overall_better": "version_a",
+        "reasoning": "The two renderings are almost identical — same opening turn (no prior context; player docks the raft and approaches the fire with three big men and a hunched old man). Lines 1-8 are word-for-word the same events in both. The differences are two: (1) punctuation on line 3, where A uses em-dashes (\"— cada um passando fácil dos dois metros... —\") and B uses commas; (2) line 9, the crucial divergence. A reads \"Mas os olhos dele — o que resta deles — te fixam como se já soubesse seu nome.\" B reads \"Mas os olhos dele, o que resta deles, te fixam.\" B silently DROPS the clause \"como se já soubesse seu nome\" — an evocative, mystery-building beat (the scarred old man fixing the player as if he already knew his name). That is meaningful atmospheric/characterization content lost in B, so content_lost_in = version_b. No new content is invented in either; no player ability exists to remove on an opening turn. On prose: A's triple em-dash usage is a mild stylistic tic, while B reads cleaner on punctuation but blander; A's closing clause adds real texture — these roughly cancel, so cleaner_prose = equal. Overall A is better because it preserves the intriguing hook detail that B deletes, at only the minor cost of em-dash punctuation, so overall_better = version_a."
+      }
+    },
+    {
+      "pid": "p00",
+      "judge": 2,
+      "verdict": {
+        "same_events": "yes",
+        "content_lost_in": "version_b",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "neither",
+        "cleaner_prose": "equal",
+        "overall_better": "version_a",
+        "reasoning": "The two renderings are almost word-for-word identical and narrate the same events (player beaches the raft, ties it, approaches the fire, the three giants turn, the bald one speaks, the hooded scarred old man turns and fixes his gaze). Two spans differ.\n\n1) Line 3: Version A brackets the appositive with em-dashes (\"Três homens grandes — cada um passando fácil dos dois metros, com cicatrizes e tatuagens pesadas — viram a cabeça\"), while Version B uses commas (\"Três homens grandes, cada um passando fácil dos dois metros, com cicatrizes e tatuagens pesadas, viram a cabeça\"). This is pure punctuation normalization; no meaning changes. The em-dash use here is legitimate texture, not a tic, so neither is cleaner.\n\n2) Line 9 is the substantive difference. Version A: \"Mas os olhos dele — o que resta deles — te fixam como se já soubesse seu nome.\" Version B: \"Mas os olhos dele, o que resta deles, te fixam.\" Version B DROPS the clause \"como se já soubesse seu nome,\" which is a meaningful, evocative image — the foreshadowing beat that the mutilated old man's remaining eyes fix the player as if he already knew the player's name. That image carries the mystery/hook of the opening scene, and its removal flattens the ending line into a plain statement.\n\nNo content is invented in either version (this is the opening turn, no prior canon to contradict). No player ability is involved (there is no prior context and the player input is just beaching the raft and approaching). content_lost_in = version_b because of the dropped foreshadowing clause. overall_better = version_a because it retains that image at no cost; the only thing B \"gains\" is comma-for-dash punctuation, which does not offset the lost meaning."
+      }
+    },
+    {
+      "pid": "p00",
+      "judge": 3,
+      "verdict": {
+        "same_events": "mostly",
+        "content_lost_in": "version_b",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "neither",
+        "cleaner_prose": "equal",
+        "overall_better": "version_a",
+        "reasoning": "The two renderings are near-identical; the only substantive difference is at line 9. Version A closes with \"Mas os olhos dele — o que resta deles — te fixam como se já soubesse seu nome.\" Version B flattens this to \"Mas os olhos dele, o que resta deles, te fixam.\" Version B silently DROPS the clause \"como se já soubesse seu nome,\" which is a meaningful atmospheric beat: it establishes the old man's uncanny apparent recognition of the player, foreshadowing plot. That is lost content (content_lost_in = version_b), and it makes the events narrate slightly differently (same_events = mostly). The other difference is cosmetic: line 3's appositive is set off by em-dashes in A (\"— cada um passando fácil dos dois metros... —\") vs commas in B, and line 9's parenthetical likewise. This is a neutral punctuation swap; B is marginally cleaner on the em-dash tic the project curbs, while A carries richer texture in its closing line, so cleaner_prose is roughly a wash (equal). Since this is the opening turn with no prior context and the player only declares docking the raft and approaching the fire, no ability or established action exists to be removed (established_ability_removed_in = neither), and neither version invents unsupported content. Overall, A is the better rendering because it preserves the evocative recognition beat that B quietly deleted; the punctuation cleanup in B does not compensate for losing story content."
+      }
+    },
+    {
+      "pid": "p01",
+      "judge": 0,
+      "verdict": {
+        "same_events": "mostly",
+        "content_lost_in": "version_a",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "version_a",
+        "cleaner_prose": "equal",
+        "overall_better": "version_b",
+        "reasoning": "Both versions narrate the same turn: while Brock hesitates with arms crossed, the player closes distance in two strides, strikes his chest, Brock drops to his knees, his daughter drops the knife and rushes to him, he recovers and concedes (\"Já vi o suficiente. A gente faz do seu jeito\") but insists on explaining the plan. Marked \"mostly\" because the incapacitation mechanism differs.\n\nThe decisive difference is the electricity. The PRIOR CONTEXT established the electric ability as ACTIVE this scene: \"você deixa a eletricidade formigar nas pontas dos dedos. Estalos finos, azulados, dançam entre as falanges\" (line 15-17), and it was still crackling between the fingers moments before this turn (line 21). Continuing that already-crackling ability to end the fight is legitimate, since the player input (\"avanço e encerro a luta antes que ela comece\") authorizes advancing and finishing.\n\nVersion B correctly continues the established ability: \"Sua mão direita, ainda crepitando com aquelas pequenas faíscas azuis\" (line 1), \"leva a mão eletrificada ao peito de Brock. A descarga controlada não é letal. É um choque seco\" (line 3), \"a eletricidade ainda faz o couro da camisa fumegar levemente\" (line 5).\n\nVersion A strips the electricity out entirely, converting it to a plain physical blow: \"Sua mão direita dispara para a frente\" (line 1), \"leva a mão ao peito de Brock... É um impacto seco\" (line 3), \"a força do golpe ainda deixou o couro da camisa marcado\" (line 5). This REMOVES the ability the prior context left crackling in the player's hand — narrative damage, not a fix.\n\nB invents nothing (its electricity is fully supported by prior context). Prose is otherwise essentially equal, sharing the same beats and cadence (\"golpe não é violento. É preciso,\" \"olhos revirarem,\" \"Reconhecimento\"). Because B preserves continuity of the established ability while A silently drops it, B is the better rendering."
+      }
+    },
+    {
+      "pid": "p01",
+      "judge": 1,
+      "verdict": {
+        "same_events": "mostly",
+        "content_lost_in": "version_a",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "version_a",
+        "cleaner_prose": "equal",
+        "overall_better": "version_b",
+        "reasoning": "Both versions narrate the same underlying event: while Brock stands with arms crossed and distracted, the player closes the distance in two strides, deflects his guard with the forearm, and drives a controlled, non-lethal strike to the chest that drops Brock to his knees; the daughter drops her knife and rushes to him, and Brock recovers, concedes (\"A gente faz do seu jeito\"), and insists the player hear the plan first. The outcome, dialogue, and blocking are identical.\n\nThe one meaningful divergence is the electricity thread. The PRIOR CONTEXT explicitly established the electricity as an active, on-screen ability the player just invoked: \"voce deixa a eletricidade formigar nas pontas dos dedos\", \"Estalos finos, azulados, dancam entre as falanges\", and Brock reacts to it directly (\"Fruta do Diabo... Tipo Logia?\"). It was crackling on his fingertips at the exact moment this turn begins, and the player's input (\"avanco e encerro a luta\") is a natural continuation using that charged hand.\n\nVersion B preserves this continuity: \"mao direita, ainda crepitando com aquelas pequenas faiscas azuis\" (line 1), \"leva a mao eletrificada ao peito\", \"A descarga controlada nao e letal. E um choque seco\" (line 3), and \"a eletricidade ainda faz o couro da camisa fumegar levemente\" (line 5). This is legitimate continuation of an already-shown ability, not invention.\n\nVersion A silently strips the electricity out, rewriting the same beats as a purely physical blow: \"Sua mao direita dispara para a frente\" (no faiscas), \"leva a mao ao peito de Brock. O golpe nao e letal. E um impacto seco\" (line 3), and \"a forca do golpe ainda deixou o couro da camisa marcado\" (line 5, \"marcado\" instead of \"fumegar\"). This removes an ability the prior context established as active this scene — narrative damage, not a fix. It also contradicts the setup where Brock had just been sizing up the Devil-Fruit power; the physical-only strike loses that payoff.\n\nProse quality is roughly equal — both are tight, controlled, same rhythm and structure — so the difference is not stylistic. Because Version A drops established content and breaks continuity while Version B invents nothing beyond what was already active, Version B is the better rendering."
+      }
+    },
+    {
+      "pid": "p01",
+      "judge": 2,
+      "verdict": {
+        "same_events": "mostly",
+        "content_lost_in": "version_a",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "version_a",
+        "cleaner_prose": "equal",
+        "overall_better": "version_b",
+        "reasoning": "Ambas narram o mesmo evento central: o jogador aproveita a hesitação de Brock, fecha a distância em duas passadas, desvia a guarda e atinge o peito dele, que cai de joelhos e cede (\"A gente faz do seu jeito\"). O epílogo com a filha e a fala de Brock é idêntico. Por isso \"mostly\" em same_events — o desfecho é o mesmo, mas o MECANISMO do golpe difere.\n\nA diferença decisiva é a eletricidade. O PRIOR CONTEXT deixou a habilidade explicitamente ATIVA na cena: no turno anterior o jogador \"deixa a eletricidade formigar nas pontas dos dedos\", com \"Estalos finos, azulados\" dançando \"entre as falanges\", e Brock reage (\"Fruta do Diabo... Tipo Logia?\"). Ou seja, a mão do personagem estava literalmente crepitando com faíscas azuis no momento imediatamente anterior a este turno.\n\nVERSION B continua essa habilidade estabelecida, como manda a regra de agência: \"Sua mão direita, ainda crepitando com aquelas pequenas faíscas azuis, dispara para a frente\" (linha 1), \"leva a mão eletrificada ao peito de Brock. A descarga controlada não é letal. É um choque seco\" (linha 3) e \"a eletricidade ainda faz o couro da camisa fumegar levemente\" (linha 5). Isso é coerente com \"encerro a luta antes que ela comece\" — o choque controlado explica de forma limpa por que Brock trava e amolece.\n\nVERSION A REMOVE a eletricidade estabelecida, convertendo o golpe em um soco físico comum: \"Sua mão direita dispara para a frente\" (sem faíscas), \"leva a mão ao peito\" (mão comum), \"um impacto seco\" e \"a força do golpe ainda deixou o couro da camisa marcado\" (linhas 1, 3, 5). Apagar a habilidade que o prior context mostrou ativa é DANO narrativo, não uma correção legítima — a imagem das faíscas azuis, da mão eletrificada e do couro fumegando é conteúdo perdido em A.\n\ncontent_invented_in: neither — a eletricidade de B não é invenção, é continuação canônica; A não inventa nada novo, apenas subtrai.\n\ncleaner_prose: equal. As duas versões são quase palavra por palavra idênticas na estrutura, ritmo e figuras (\"os ombros cortando o ar\", \"Não há raiva... Reconhecimento\"), sem tics distintos que separem uma da outra em qualidade estilística.\n\noverall_better: version_b, por preservar a habilidade estabelecida (eletricidade) que dá sentido e continuidade à cena, enquanto A a apaga silenciosamente."
+      }
+    },
+    {
+      "pid": "p01",
+      "judge": 3,
+      "verdict": {
+        "same_events": "mostly",
+        "content_lost_in": "version_a",
+        "content_invented_in": "neither",
+        "established_ability_removed_in": "version_a",
+        "cleaner_prose": "equal",
+        "overall_better": "version_b",
+        "reasoning": "The prior context established the player's electricity as an active, crackling ability at the exact moment this turn begins: \"deixo a eletricidade formigar nas pontas dos dedos\", \"Estalos finos, azulados, dançam entre as falanges\", and Brock names it a Devil Fruit / Logia power. The player input (\"avanço e encerro a luta\") specifies advancing and ending the fight but not the method, so continuing the already-crackling electricity is a legitimate continuation of an established ability.\n\nVersion B preserves this: \"Sua mão direita, ainda crepitando com aquelas pequenas faíscas azuis\"; \"leva a mão eletrificada ao peito\"; \"A descarga controlada não é letal. É um choque seco\"; \"onde a eletricidade ainda faz o couro da camisa fumegar levemente.\"\n\nVersion A silently strips the electricity out, converting the same strike into a purely mechanical blow: \"Sua mão direita dispara para a frente\" (no crackling); \"leva a mão ao peito\" (plain hand); \"É um impacto seco, localizado\" (no discharge); \"onde a força do golpe ainda deixou o couro da camisa marcado\" (force, not electricity; marked, not smoking). This removes the established Devil Fruit power that was live one beat earlier — narrative damage, not a legitimate fix.\n\nThe two versions narrate the same underlying beat (player closes distance during Brock's hesitation, drops him with a controlled strike, Brock submits and offers the plan), so same_events is \"mostly\" — the mechanism differs. No content is invented in either. Prose quality is essentially equal since the texts are otherwise near-identical. Version B is overall better because it keeps continuity with the established ability; Version A is the damaged rendering."
+      }
+    }
+  ]
+}

@@ -1,0 +1,1180 @@
+"""Validated data models for the deterministic game engine.
+
+Architecture contract (see docs/audit_phase0.md):
+
+* rules decide facts      -> RuleOutcome (code + message + effects)
+* effects record them     -> Effect, applied by engines/event_engine.py
+* world state keeps it    -> GameState, persisted as a versioned snapshot
+* the LLM only narrates   -> NarrativeResult, committed facts only
+
+Everything here is plain, validated data. No configuration is ever executed
+as code: unknown condition/effect kinds fail Pydantic validation instead.
+"""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ActionKind(str, Enum):
+    """Actions the deterministic pipeline currently understands."""
+
+    MOVE = "move"
+    LOOK = "look"
+    TAKE = "take"
+    OPEN = "open"
+    USE = "use"
+    TALK = "talk"
+
+
+class EffectKind(str, Enum):
+    SET_FLAG = "set_flag"
+    GIVE_ITEM = "give_item"
+    REMOVE_ITEM = "remove_item"
+    MOVE_PLAYER = "move_player"
+    OPEN_DOOR = "open_door"
+    CLOSE_DOOR = "close_door"
+    QUEST_PROGRESS = "quest_progress"
+    QUEST_COMPLETE = "quest_complete"
+    EMIT = "emit"
+
+
+class ConditionKind(str, Enum):
+    FLAG = "flag"
+    HAS_ITEM = "has_item"
+    ITEM_COUNT = "item_count"
+    DOOR_OPEN = "door_open"
+    AT_LOCATION = "at_location"
+    QUEST_STATUS = "quest_status"
+
+
+# ---------------------------------------------------------------------------
+# World definition (authored configuration, not hardcoded content)
+# ---------------------------------------------------------------------------
+
+
+class _ConfigModel(BaseModel):
+    """Base for authored world configuration: unknown keys are errors."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ExitDef(_ConfigModel):
+    """A traversable connection between two locations."""
+
+    target_id: str = Field(..., min_length=1, max_length=64)
+    label: str = ""
+    door_id: Optional[str] = None
+    requires_item_id: Optional[str] = None
+
+
+class LocationDef(_ConfigModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    #: Optional editorial grouping; an empty region means ungrouped.
+    region: str = Field(default="", max_length=64)
+    #: Optional grid coordinates for the map view. Set both or neither; the
+    #: editor falls back to automatic layout when they are absent.
+    x: Optional[int] = Field(None, ge=0, le=10000)
+    y: Optional[int] = Field(None, ge=0, le=10000)
+    exits: List[ExitDef] = Field(default_factory=list)
+    door_ids: List[str] = Field(default_factory=list)
+    item_ids: List[str] = Field(default_factory=list)
+    npc_ids: List[str] = Field(default_factory=list)
+
+
+class ItemDef(_ConfigModel):
+    """An authored item.
+
+    `pickup_requires` and `use_effects` are validated Condition/Effect data, so a
+    world can make "the key is stuck until you move the crate" or "the potion
+    heals 5" configurable without any code being executed.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    stackable: bool = True
+    #: All of these must hold before the item can be picked up.
+    pickup_requires: List[Condition] = Field(default_factory=list)
+    #: What using the item does. Empty means the built-in behaviour: if the item
+    #: is a door key standing at that door, using it opens the door.
+    use_effects: List[Effect] = Field(default_factory=list)
+    #: Whether using the item spends one of it.
+    consumable: bool = False
+    #: Equipment slot; empty means the item cannot be equipped.
+    slot: Literal["", "weapon", "armor", "accessory"] = ""
+    #: Stat bonuses applied while equipped (attack/defense/flee_chance).
+    bonus: Dict[str, int] = Field(default_factory=dict)
+    #: Authored trade value (custom actions/events decide when it is paid).
+    price: int = Field(0, ge=0)
+
+
+class EntityDef(_ConfigModel):
+    """An authored non-player entity: NPC, creature or interactive object.
+
+    Only the fixed configuration lives here. Where the entity currently is,
+    what it carries and how it feels are authoritative runtime state and are
+    deliberately not stored in the world document.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    location_id: str = Field(..., min_length=1, max_length=64)
+    kind: Literal["npc", "creature", "object"] = "npc"
+    dialogue: List[str] = Field(default_factory=list)
+    #: Items this NPC sells; empty means not a merchant.
+    shop_items: List[str] = Field(default_factory=list)
+    hostile: bool = False
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+    #: Items this entity starts with (repeated ids mean quantity). A chest is an
+    #: object entity with items; an NPC uses the same field for belongings.
+    items: List[str] = Field(default_factory=list)
+    #: Editorial faction/team label; inter-entity relations and alert are state.
+    faction: str = Field(default="", max_length=64)
+
+
+class DoorDef(_ConfigModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=200)
+    location_id: str = Field(..., min_length=1, max_length=64)
+    locked: bool = True
+    opened: bool = False
+    key_item_id: Optional[str] = None
+    consumes_key: bool = False
+
+
+class Condition(_ConfigModel):
+    """A single, checked predicate over the authoritative state."""
+
+    kind: Literal[
+        "flag",
+        "has_item",
+        "item_count",
+        "door_open",
+        "at_location",
+        "quest_status",
+        "combatant_hp",
+        "combatant_alive",
+        "entity_at",
+        "entity_alive",
+        "entity_item_count",
+        "currency",
+        "level",
+        "entity_relation",
+        "entity_alert",
+        "skill",
+    ]
+    target: str = ""
+    op: Literal["eq", "ne", "gte", "lte", "gt", "lt"] = "eq"
+    value: Any = True
+    #: Expected quantity for numeric entity conditions (entity_item_count).
+    count: int = 1
+
+
+class Effect(_ConfigModel):
+    """A single, checked state mutation."""
+
+    kind: Literal[
+        "set_flag",
+        "give_item",
+        "remove_item",
+        "move_player",
+        "open_door",
+        "close_door",
+        "quest_progress",
+        "quest_complete",
+        "combat_hp",
+        "player_damage",
+        "move_entity",
+        "seed_entity",
+        "give_entity",
+        "take_entity",
+        "adjust_relation",
+        "adjust_alert",
+        "skill_change",
+        "offer_choice",
+        "resolve_choice",
+        "equip_item",
+        "unequip_item",
+        "advance_dialogue",
+        "add_currency",
+        "remove_currency",
+        "add_xp",
+        "quest_accept",
+        "quest_fail",
+        "emit",
+    ]
+    target: str = ""
+    value: Any = None
+    amount: int = 1
+    #: give_item: keep an existing ground placement (a purchase is not a pickup).
+    keep_ground: bool = Field(default=False, exclude=True)
+
+
+class CustomActionDef(_ConfigModel):
+    """An action a world declares for itself: conditions plus effects.
+
+    Configuration can *describe* an action but never supply an implementation:
+    `requires` holds the same validated Condition rows events use and
+    `effects` the same validated Effect rows, both decided by the same engine.
+    Nothing here is ever executed as code.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(default="", max_length=120)
+    description: str = ""
+    #: Words the deterministic text parser maps onto this action, e.g.
+    #: ["祈祷", "pray"]. Verbs must not shadow a built-in action's verbs.
+    verbs: List[str] = Field(default_factory=list)
+    target: Literal["none", "required", "optional"] = "none"
+    #: Preconditions; all of them must hold for the action to be allowed.
+    requires: List[Condition] = Field(default_factory=list)
+    #: What the action does once it is allowed.
+    effects: List[Effect] = Field(default_factory=list)
+
+
+class ObjectiveDef(_ConfigModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    kind: Literal["obtain_item", "open_door", "reach_location", "flag"]
+    target: str = Field(..., min_length=1, max_length=64)
+    required_count: int = Field(default=1, ge=1)
+    description: str = ""
+
+
+class QuestDef(_ConfigModel):
+    """A configurable quest: gating, objectives, rewards and failure.
+
+    A quest is never completed because a model said so. It becomes active only
+    once its prerequisites are completed and its accept conditions hold, its
+    objectives advance from facts the rules already committed, and it fails when
+    its fail conditions hold. Everything here is validated data.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    objectives: List[ObjectiveDef] = Field(default_factory=list)
+    rewards: List[Effect] = Field(default_factory=list)
+    enabled: bool = True
+    #: Quests that must be completed before this one can become active.
+    prerequisites: List[str] = Field(default_factory=list)
+    #: Conditions that must all hold for the quest to be accepted.
+    accept_requires: List[Condition] = Field(default_factory=list)
+    #: Conditions that fail the quest while it is active.
+    fail_conditions: List[Condition] = Field(default_factory=list)
+    #: Whether activation is re-evaluated automatically every turn.
+    #: False means only an explicit quest_accept effect can start the quest.
+    auto_accept: bool = True
+
+
+class EventBranchDef(_ConfigModel):
+    """One conditional outcome of an event.
+
+    Branches are evaluated in order after the event's own conditions hold; the
+    first matching branch appends its effects and follow-ups to the base ones.
+    A branch with no conditions is an unconditional fallback and must be last.
+    """
+
+    label: str = Field(default="", max_length=120)
+    conditions: List[Condition] = Field(default_factory=list)
+    effects: List[Effect] = Field(default_factory=list)
+    followup_events: List[str] = Field(default_factory=list)
+
+
+class ChoiceOption(_ConfigModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=200)
+    effects: List[Effect] = Field(default_factory=list)
+
+
+class ChoiceDef(_ConfigModel):
+    """An authored choice set shown to the player while it is pending."""
+
+    id: str = Field(..., min_length=1, max_length=64)
+    prompt: str = Field(default="", max_length=500)
+    options: List[ChoiceOption] = Field(default_factory=list)
+
+
+class PendingChoice(BaseModel):
+    choice_id: str
+    prompt: str = ""
+    options: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class GameEventDef(_ConfigModel):
+    """A configurable event: validated conditions plus validated effects.
+
+    Besides firing itself, an event can name follow-up events that run in the
+    same settlement even when their own trigger does not match: `followup_events`
+    on success and `failure_events` when its effects cannot be applied. That is
+    how one authored beat calls into another storyline without a script engine.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    enabled: bool = True
+    trigger: Literal["action", "state_change"] = "action"
+    trigger_action: Optional[str] = None
+    trigger_target: Optional[str] = None
+    conditions: List[Condition] = Field(default_factory=list)
+    effects: List[Effect] = Field(default_factory=list)
+    priority: int = 0
+    repeat: Literal["once", "always"] = "once"
+    #: Event ids forced to run after this event succeeds.
+    followup_events: List[str] = Field(default_factory=list)
+    #: Event ids forced to run when this event's effects fail (the parent still
+    #: changes nothing).
+    failure_events: List[str] = Field(default_factory=list)
+    #: Minimum turns between two successful fires. 0 means no cooldown.
+    cooldown_turns: int = Field(0, ge=0)
+    #: Hard cap on successful fires. None means unlimited (subject to repeat).
+    max_fires: Optional[int] = Field(None, ge=1)
+    #: Ordered conditional outcomes; the first match adds to the base effects.
+    branches: List[EventBranchDef] = Field(default_factory=list)
+    #: Inline choices: when non-empty, firing the event queues a pending choice.
+    choices: List[ChoiceOption] = Field(default_factory=list)
+
+
+class WorldDefinition(BaseModel):
+    """A complete, configurable world document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    world_id: str = Field(..., min_length=1, max_length=64)
+    scenario_id: str = ""
+    #: Description language of this world (e.g. "zh", "en"). It only picks the
+    #: locale of deterministic prose; rules never read it.
+    language: str = Field(default="", max_length=16)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    start_location_id: str = Field(..., min_length=1, max_length=64)
+    locations: List[LocationDef] = Field(default_factory=list)
+    items: List[ItemDef] = Field(default_factory=list)
+    doors: List[DoorDef] = Field(default_factory=list)
+    entities: List[EntityDef] = Field(default_factory=list)
+    quests: List[QuestDef] = Field(default_factory=list)
+    events: List[GameEventDef] = Field(default_factory=list)
+    custom_actions: List[CustomActionDef] = Field(default_factory=list)
+    choices: List[ChoiceDef] = Field(default_factory=list)
+    #: Player skill values at campaign start; effects advance them later.
+    starting_skills: Dict[str, int] = Field(default_factory=dict)
+
+    def validate_references(self) -> List[str]:
+        """Return human-readable reference errors (empty list == valid).
+
+        Structural validation already happened in Pydantic; this checks that
+        every cross-reference points at something that exists, so an invalid
+        configuration is rejected at authoring time instead of failing later
+        at play time.
+        """
+        errors: List[str] = []
+        location_ids = {loc.id for loc in self.locations}
+        item_ids = {item.id for item in self.items}
+        door_ids = {door.id for door in self.doors}
+        quest_ids = {quest.id for quest in self.quests}
+        entity_ids = {entity.id for entity in self.entities}
+        event_ids = {event.id for event in self.events}
+        choice_ids = {choice.id for choice in self.choices}
+
+        for name, ids in (
+            ("location", [loc.id for loc in self.locations]),
+            ("item", [item.id for item in self.items]),
+            ("door", [door.id for door in self.doors]),
+            ("quest", [quest.id for quest in self.quests]),
+            ("event", [event.id for event in self.events]),
+        ):
+            seen = set()
+            for value in ids:
+                if value in seen:
+                    errors.append(f"duplicate {name} id '{value}'")
+                seen.add(value)
+
+        for item in self.items:
+            for key, value in item.bonus.items():
+                if key not in ("attack", "defense", "flee_chance"):
+                    errors.append(
+                        f"item '{item.id}' has unknown bonus '{key}'"
+                    )
+                elif not isinstance(value, int) or isinstance(value, bool):
+                    errors.append(
+                        f"item '{item.id}' bonus '{key}' must be an integer"
+                    )
+
+        if self.start_location_id not in location_ids:
+            errors.append(
+                f"start_location_id '{self.start_location_id}' is not a known location"
+            )
+
+        for loc in self.locations:
+            if (loc.x is None) != (loc.y is None):
+                errors.append(
+                    f"location '{loc.id}' must set both coordinates or neither"
+                )
+            for exit_def in loc.exits:
+                if exit_def.target_id not in location_ids:
+                    errors.append(
+                        f"location '{loc.id}' exit target '{exit_def.target_id}' is unknown"
+                    )
+                if exit_def.door_id and exit_def.door_id not in door_ids:
+                    errors.append(
+                        f"location '{loc.id}' exit door '{exit_def.door_id}' is unknown"
+                    )
+                if (
+                    exit_def.requires_item_id
+                    and exit_def.requires_item_id not in item_ids
+                ):
+                    errors.append(
+                        f"location '{loc.id}' exit requires unknown item "
+                        f"'{exit_def.requires_item_id}'"
+                    )
+            for door_id in loc.door_ids:
+                if door_id not in door_ids:
+                    errors.append(
+                        f"location '{loc.id}' references unknown door '{door_id}'"
+                    )
+            for item_id in loc.item_ids:
+                if item_id not in item_ids:
+                    errors.append(
+                        f"location '{loc.id}' references unknown item '{item_id}'"
+                    )
+
+        entity_ids: set = set()
+        for entity in self.entities:
+            if entity.id in entity_ids:
+                errors.append(f"duplicate entity id '{entity.id}'")
+            entity_ids.add(entity.id)
+            if entity.id in item_ids or entity.id in door_ids or entity.id in location_ids:
+                errors.append(
+                    f"entity id '{entity.id}' collides with an item, door or location id"
+                )
+            if entity.location_id not in location_ids:
+                errors.append(
+                    f"entity '{entity.id}' is in unknown location '{entity.location_id}'"
+                )
+        # LocationDef.npc_ids is a legacy display list and may name entities that
+        # were never authored as EntityDef rows, so it is intentionally not
+        # validated against entity_ids.
+
+        for door in self.doors:
+            if door.location_id not in location_ids:
+                errors.append(
+                    f"door '{door.id}' is in unknown location '{door.location_id}'"
+                )
+            if door.key_item_id and door.key_item_id not in item_ids:
+                errors.append(
+                    f"door '{door.id}' requires unknown key item '{door.key_item_id}'"
+                )
+
+        for item in self.items:
+            for condition in item.pickup_requires:
+                errors.extend(
+                    f"item '{item.id}' pickup condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for effect in item.use_effects:
+                errors.extend(
+                    f"item '{item.id}' use effect: {msg}"
+                    for msg in self._validate_effect(
+                        effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
+                )
+
+        for quest in self.quests:
+            for objective in quest.objectives:
+                if objective.kind == "obtain_item" and objective.target not in item_ids:
+                    errors.append(
+                        f"quest '{quest.id}' objective '{objective.id}' targets "
+                        f"unknown item '{objective.target}'"
+                    )
+                if objective.kind == "open_door" and objective.target not in door_ids:
+                    errors.append(
+                        f"quest '{quest.id}' objective '{objective.id}' targets "
+                        f"unknown door '{objective.target}'"
+                    )
+                if (
+                    objective.kind == "reach_location"
+                    and objective.target not in location_ids
+                ):
+                    errors.append(
+                        f"quest '{quest.id}' objective '{objective.id}' targets "
+                        f"unknown location '{objective.target}'"
+                    )
+            for prerequisite in quest.prerequisites:
+                if prerequisite == quest.id:
+                    errors.append(
+                        f"quest '{quest.id}' lists itself as a prerequisite"
+                    )
+                elif prerequisite not in quest_ids:
+                    errors.append(
+                        f"quest '{quest.id}' requires unknown quest '{prerequisite}'"
+                    )
+            for condition in quest.accept_requires:
+                errors.extend(
+                    f"quest '{quest.id}' accept condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for condition in quest.fail_conditions:
+                errors.extend(
+                    f"quest '{quest.id}' fail condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for reward in quest.rewards:
+                errors.extend(
+                    f"quest '{quest.id}' reward: {msg}"
+                    for msg in self._validate_effect(
+                        reward, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
+                )
+
+        errors.extend(self._quest_prerequisite_cycles())
+
+        for entity in self.entities:
+            for item_id in entity.items:
+                if item_id not in item_ids:
+                    errors.append(
+                        f"entity '{entity.id}' starts with unknown item '{item_id}'"
+                    )
+            for item_id in entity.shop_items:
+                if item_id not in item_ids:
+                    errors.append(
+                        f"entity '{entity.id}' sells unknown item '{item_id}'"
+                    )
+
+        for event in self.events:
+            for condition in event.conditions:
+                errors.extend(
+                    f"event '{event.id}' condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for effect in event.effects:
+                errors.extend(
+                    f"event '{event.id}' effect: {msg}"
+                    for msg in self._validate_effect(
+                        effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
+                )
+                if effect.kind == "offer_choice" and effect.target not in choice_ids:
+                    errors.append(
+                        f"event '{event.id}' offers unknown choice '{effect.target}'"
+                    )
+            if event.trigger == "action" and event.trigger_action is None:
+                errors.append(
+                    f"event '{event.id}' uses trigger 'action' but has no trigger_action"
+                )
+            if event.trigger_target and event.trigger_action in ("open", "take"):
+                known = door_ids if event.trigger_action == "open" else item_ids
+                if event.trigger_target not in known:
+                    errors.append(
+                        f"event '{event.id}' trigger_target '{event.trigger_target}' "
+                        f"is unknown for action '{event.trigger_action}'"
+                    )
+            for followup_id in event.followup_events + event.failure_events:
+                if followup_id == event.id:
+                    errors.append(
+                        f"event '{event.id}' cannot name itself as a follow-up"
+                    )
+                elif followup_id not in event_ids:
+                    errors.append(
+                        f"event '{event.id}' follow-up '{followup_id}' is unknown"
+                    )
+            if event.choices:
+                if len(event.choices) < 2:
+                    errors.append(
+                        f"event '{event.id}' needs at least two inline choices"
+                    )
+                option_ids = set()
+                for option in event.choices:
+                    if option.id in option_ids:
+                        errors.append(
+                            f"event '{event.id}' has duplicate option '{option.id}'"
+                        )
+                    option_ids.add(option.id)
+                    for effect in option.effects:
+                        errors.extend(
+                            f"event '{event.id}' option '{option.id}' effect: {msg}"
+                            for msg in self._validate_effect(
+                                effect, item_ids, door_ids, quest_ids,
+                                entity_ids, location_ids,
+                            )
+                        )
+            for index, branch in enumerate(event.branches):
+                label = branch.label or f"#{index + 1}"
+                for condition in branch.conditions:
+                    errors.extend(
+                        f"event '{event.id}' branch '{label}' condition: {msg}"
+                        for msg in self._validate_condition(
+                            condition, item_ids, door_ids, location_ids,
+                            quest_ids, entity_ids,
+                        )
+                    )
+                for effect in branch.effects:
+                    errors.extend(
+                        f"event '{event.id}' branch '{label}' effect: {msg}"
+                        for msg in self._validate_effect(
+                            effect, item_ids, door_ids, quest_ids,
+                            entity_ids, location_ids,
+                        )
+                    )
+                for followup_id in branch.followup_events:
+                    if followup_id == event.id:
+                        errors.append(
+                            f"event '{event.id}' branch '{label}' cannot call itself"
+                        )
+                    elif followup_id not in event_ids:
+                        errors.append(
+                            f"event '{event.id}' branch '{label}' follow-up "
+                            f"'{followup_id}' is unknown"
+                        )
+                if not branch.conditions and index != len(event.branches) - 1:
+                    errors.append(
+                        f"event '{event.id}' branch '{label}' has no conditions; "
+                        "an unconditional branch must be last"
+                    )
+        errors.extend(
+            self._validate_custom_actions(item_ids, door_ids, location_ids, quest_ids, entity_ids)
+        )
+        errors.extend(
+            self._validate_choices(item_ids, door_ids, location_ids, quest_ids, entity_ids)
+        )
+        return errors
+
+    def _validate_choices(
+        self,
+        item_ids: set,
+        door_ids: set,
+        location_ids: set,
+        quest_ids: set,
+        entity_ids: set,
+    ) -> List[str]:
+        errors: List[str] = []
+        known_choices = {choice.id for choice in self.choices}
+        seen = set()
+        for choice in self.choices:
+            if choice.id in seen:
+                errors.append(f"duplicate choice id '{choice.id}'")
+            seen.add(choice.id)
+            if len(choice.options) < 2:
+                errors.append(f"choice '{choice.id}' needs at least two options")
+            option_ids = set()
+            for option in choice.options:
+                if option.id in option_ids:
+                    errors.append(
+                        f"choice '{choice.id}' has duplicate option '{option.id}'"
+                    )
+                option_ids.add(option.id)
+                for effect in option.effects:
+                    errors.extend(
+                        f"choice '{choice.id}' option '{option.id}' effect: {msg}"
+                        for msg in self._validate_effect(
+                            effect, item_ids, door_ids, quest_ids,
+                            entity_ids, location_ids,
+                        )
+                    )
+                    if effect.kind == "offer_choice" and effect.target not in known_choices:
+                        errors.append(
+                            f"choice '{choice.id}' offers unknown choice '{effect.target}'"
+                        )
+        return errors
+
+    def _validate_custom_actions(
+        self,
+        item_ids: set,
+        door_ids: set,
+        location_ids: set,
+        quest_ids: set,
+        entity_ids: set,
+    ) -> List[str]:
+        """Check world-authored actions: ids, verbs and their conditions/effects."""
+        errors: List[str] = []
+        if not self.custom_actions:
+            return errors
+        # Imported lazily: the catalogue is the single source of truth for the
+        # built-in verbs, but the model module must not import the engine layer
+        # at module import time.
+        from app.engines.action_registry import action_names, verb_table
+
+        builtin_actions = set(action_names())
+        builtin_verbs = {
+            verb.strip().lower()
+            for _action, verbs in verb_table()
+            for verb in verbs
+            if verb.strip()
+        }
+        seen_ids = set()
+        verb_owner: Dict[str, str] = {}
+        for custom in self.custom_actions:
+            if custom.id in seen_ids:
+                errors.append(f"duplicate custom action id '{custom.id}'")
+            seen_ids.add(custom.id)
+            if custom.id in builtin_actions:
+                errors.append(
+                    f"custom action '{custom.id}' collides with a built-in action name"
+                )
+            if not custom.verbs:
+                errors.append(
+                    f"custom action '{custom.id}' declares no verbs, so no player "
+                    "utterance could ever reach it"
+                )
+            for verb in custom.verbs:
+                cleaned = (verb or "").strip().lower()
+                if not cleaned:
+                    errors.append(f"custom action '{custom.id}' has an empty verb")
+                    continue
+                if cleaned in builtin_verbs:
+                    errors.append(
+                        f"custom action '{custom.id}' verb '{cleaned}' is already "
+                        "mapped to a built-in action"
+                    )
+                owner = verb_owner.get(cleaned)
+                if owner is not None and owner != custom.id:
+                    errors.append(
+                        f"custom action '{custom.id}' verb '{cleaned}' is already "
+                        f"used by custom action '{owner}'"
+                    )
+                verb_owner[cleaned] = custom.id
+            for condition in custom.requires:
+                errors.extend(
+                    f"custom action '{custom.id}' condition: {msg}"
+                    for msg in self._validate_condition(
+                        condition,
+                        item_ids,
+                        door_ids,
+                        location_ids,
+                        quest_ids,
+                        entity_ids,
+                    )
+                )
+            for effect in custom.effects:
+                errors.extend(
+                    f"custom action '{custom.id}' effect: {msg}"
+                    for msg in self._validate_effect(
+                        effect, item_ids, door_ids, quest_ids, entity_ids, location_ids
+                    )
+                )
+        return errors
+
+    def _quest_prerequisite_cycles(self) -> List[str]:
+        """Report quests that can never become active because they wait on each other."""
+        errors: List[str] = []
+        graph = {quest.id: list(quest.prerequisites) for quest in self.quests}
+        for start in graph:
+            seen: set = set()
+            stack = list(graph.get(start, []))
+            while stack:
+                current = stack.pop()
+                if current == start:
+                    errors.append(
+                        f"quest '{start}' has a circular prerequisite chain"
+                    )
+                    break
+                if current in seen or current not in graph:
+                    continue
+                seen.add(current)
+                stack.extend(graph[current])
+        return errors
+
+    @staticmethod
+    def _validate_condition(
+        condition: Condition,
+        item_ids: set,
+        door_ids: set,
+        location_ids: set,
+        quest_ids: set,
+        entity_ids: Optional[set] = None,
+    ) -> List[str]:
+        errors: List[str] = []
+        if condition.kind in ("has_item", "item_count") and condition.target not in item_ids:
+            errors.append(f"unknown item '{condition.target}'")
+        if condition.kind == "door_open" and condition.target not in door_ids:
+            errors.append(f"unknown door '{condition.target}'")
+        if condition.kind == "at_location" and condition.target not in location_ids:
+            errors.append(f"unknown location '{condition.target}'")
+        if condition.kind == "quest_status":
+            if condition.target not in quest_ids:
+                errors.append(f"unknown quest '{condition.target}'")
+            elif condition.value not in ("inactive", "active", "completed", "failed"):
+                errors.append(f"unknown quest status '{condition.value}'")
+        if condition.kind in ("has_item", "item_count") and condition.op not in ("eq", "gte"):
+            errors.append("item conditions only support op 'eq' or 'gte'")
+        if condition.kind in ("combatant_hp", "combatant_alive", "entity_alive"):
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+        if condition.kind == "entity_relation":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+            if not isinstance(condition.value, str) or not condition.value:
+                errors.append("entity_relation requires value = other actor id")
+        if condition.kind == "entity_alert":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+        if condition.kind == "skill" and not condition.target:
+            errors.append("skill requires a skill name")
+        if condition.kind in ("currency", "level"):
+            try:
+                int(condition.count)
+            except (TypeError, ValueError):
+                errors.append(f"{condition.kind} requires an integer count")
+        if condition.kind == "entity_item_count":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+            if not isinstance(condition.value, str):
+                errors.append("entity_item_count requires value = item id")
+            elif condition.value not in item_ids:
+                errors.append(f"unknown item '{condition.value}'")
+        if condition.kind == "entity_at":
+            known_entities = entity_ids if entity_ids is not None else set()
+            if condition.target not in known_entities:
+                errors.append(f"unknown entity '{condition.target}'")
+            if not isinstance(condition.value, str):
+                errors.append("entity_at requires value = location id (string)")
+            elif condition.value not in location_ids:
+                errors.append(f"unknown location '{condition.value}'")
+        return errors
+
+    @staticmethod
+    def _validate_effect(
+        effect: Effect,
+        item_ids: set,
+        door_ids: set,
+        quest_ids: set,
+        entity_ids: Optional[set] = None,
+        location_ids: Optional[set] = None,
+    ) -> List[str]:
+        errors: List[str] = []
+        if effect.kind in ("give_item", "remove_item") and effect.target not in item_ids:
+            errors.append(f"unknown item '{effect.target}'")
+        if effect.kind in ("open_door", "close_door") and effect.target not in door_ids:
+            errors.append(f"unknown door '{effect.target}'")
+        if (
+            effect.kind in ("quest_progress", "quest_complete", "quest_accept", "quest_fail")
+            and effect.target not in quest_ids
+        ):
+            errors.append(f"unknown quest '{effect.target}'")
+        if effect.kind == "quest_progress" and not isinstance(effect.value, str):
+            errors.append("quest_progress requires value = objective id")
+        if effect.kind == "set_flag" and not effect.target:
+            errors.append("set_flag requires a target flag name")
+        if effect.kind == "move_player" and not effect.target:
+            errors.append("move_player requires a target location id")
+        if effect.kind == "combat_hp":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            try:
+                if effect.value is not None:
+                    int(effect.value)
+            except (TypeError, ValueError, OverflowError):
+                errors.append("combat_hp requires a numeric value convertible to an integer")
+        if effect.kind == "player_damage":
+            if int(effect.amount or 0) <= 0:
+                errors.append("player_damage requires a positive amount")
+        if effect.kind == "seed_entity":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+        if effect.kind == "move_entity":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            if not isinstance(effect.value, str):
+                errors.append("move_entity requires value = location id (string)")
+            elif effect.value not in (location_ids or set()):
+                errors.append(f"unknown location '{effect.value}'")
+        if effect.kind in ("give_entity", "take_entity"):
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            if not isinstance(effect.value, str):
+                errors.append(f"{effect.kind} requires value = item id")
+            elif effect.value not in item_ids:
+                errors.append(f"unknown item '{effect.value}'")
+            if int(effect.amount or 0) <= 0:
+                errors.append(f"{effect.kind} requires a positive amount")
+        if effect.kind in ("adjust_relation", "adjust_alert"):
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+            if effect.kind == "adjust_relation" and (
+                not isinstance(effect.value, str) or not effect.value
+            ):
+                errors.append("adjust_relation requires value = other actor id")
+        if effect.kind == "skill_change" and not effect.target:
+            errors.append("skill_change requires a skill name")
+        if effect.kind == "advance_dialogue":
+            known = entity_ids if entity_ids is not None else set()
+            if effect.target not in known:
+                errors.append(f"unknown entity '{effect.target}'")
+        if effect.kind == "equip_item" and effect.target not in item_ids:
+            errors.append(f"unknown item '{effect.target}'")
+        if effect.kind in ("add_currency", "remove_currency", "add_xp"):
+            if int(effect.amount or 0) <= 0:
+                errors.append(f"{effect.kind} requires a positive amount")
+        return errors
+
+
+# ---------------------------------------------------------------------------
+# Authoritative run-time state
+# ---------------------------------------------------------------------------
+
+
+class QuestProgress(BaseModel):
+    quest_id: str
+    status: Literal["inactive", "active", "completed", "failed"] = "active"
+    objectives: Dict[str, int] = Field(default_factory=dict)
+
+
+class CombatantState(BaseModel):
+    """Authoritative combat state for one entity in this campaign.
+
+    The numbers are seeded from EntityDef.attributes (max_hp/attack/defense/
+    flee_chance) the first time the entity is fought, so authored world
+    documents keep their existing format.
+    """
+
+    entity_id: str
+    name: str = ""
+    hp: int = 1
+    max_hp: int = 1
+    alive: bool = True
+    attack: int = 1
+    defense: int = 0
+    flee_chance: float = 0.5
+
+
+class EntityState(BaseModel):
+    """Run-time state for one world entity inside one campaign.
+
+    Authored EntityDef rows describe where an NPC *starts* and what it is;
+    this record is what is true *now*: where it is, whether it is alive and any
+    flags events hung on it. It only materialises once something changes the
+    entity, so an untouched campaign projects straight from the world document
+    and older saves (which have no `entities` key) stay valid.
+    """
+
+    entity_id: str
+    location_id: str = ""
+    hp: int = 1
+    max_hp: int = 1
+    alive: bool = True
+    flags: Dict[str, Any] = Field(default_factory=dict)
+    #: Items this entity currently owns or contains.
+    inventory: Dict[str, int] = Field(default_factory=dict)
+    #: Opinion toward other actors, keyed by entity id or "player" (signed).
+    relations: Dict[str, int] = Field(default_factory=dict)
+    #: How watchful/hostile this entity currently is (0 = calm).
+    alert: int = 0
+
+
+class GameState(BaseModel):
+    """The single authoritative snapshot for one campaign."""
+
+    campaign_id: str
+    world_id: str
+    version: int = 0
+    turn: int = 0
+    location_id: str = ""
+    inventory: Dict[str, int] = Field(default_factory=dict)
+    flags: Dict[str, Any] = Field(default_factory=dict)
+    doors: Dict[str, bool] = Field(default_factory=dict)
+    item_locations: Dict[str, str] = Field(default_factory=dict)
+    quests: Dict[str, QuestProgress] = Field(default_factory=dict)
+    fired_events: List[str] = Field(default_factory=list)
+    #: Successful fire counts and the turn of the last success, used for
+    #: `max_fires` and `cooldown_turns` (old saves default to empty).
+    event_counts: Dict[str, int] = Field(default_factory=dict)
+    event_last_turn: Dict[str, int] = Field(default_factory=dict)
+    #: Storyline nodes entered so far (append-only; empty in free mode and for
+    #: campaigns created before storyline support).
+    story_nodes: List[str] = Field(default_factory=list)
+    #: Enemy vitals and the current combat encounter, if any.
+    entities: Dict[str, EntityState] = Field(default_factory=dict)
+    combatants: Dict[str, CombatantState] = Field(default_factory=dict)
+    combat: Dict[str, Any] = Field(default_factory=dict)
+    #: Player skill values, advanced by authored effects and checked by rules.
+    skills: Dict[str, int] = Field(default_factory=dict)
+    #: A choice offered by an event; resolved by the `choose` action.
+    pending_choice: Optional[PendingChoice] = None
+    #: Rolling long-term recap of committed turns (deterministic, bounded).
+    summary: str = ""
+    #: slot -> item id for equipped gear.
+    equipment: Dict[str, str] = Field(default_factory=dict)
+    currency: int = 0
+    xp: int = 0
+    level: int = 1
+    #: In-game clock. The world moves only when the player acts, so these are
+    #: the only source of elapsed time; saves from before this field read as
+    #: day 1, 08:00 (see app/engines/game_clock.py).
+    day: int = Field(1, ge=0)
+    minute: int = Field(480, ge=0)
+    updated_at: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Action pipeline contracts
+# ---------------------------------------------------------------------------
+
+
+class ActionRequest(BaseModel):
+    campaign_id: str = Field(..., min_length=1, max_length=64)
+    request_id: str = Field(..., min_length=1, max_length=128)
+    action: Literal[
+        "move",
+        "look",
+        "investigate",
+        "choose",
+        "equip",
+        "unequip",
+        "buy",
+        "sell",
+        "take",
+        "open",
+        "use",
+        "talk",
+        "attack",
+        "defend",
+        "flee",
+        "custom",
+    ]
+    actor_id: str = "player"
+    target_id: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    # Narration is a presentation concern, not a gameplay one: it defaults on
+    # (an RPG turn should answer in prose) but never affects committed state.
+    narrate: bool = True
+
+
+class RuleOutcome(BaseModel):
+    ok: bool
+    code: str = ""
+    message: str = ""
+    effects: List[Effect] = Field(default_factory=list)
+
+
+class EventExecution(BaseModel):
+    event_id: str
+    name: str = ""
+    status: Literal["fired", "failed", "skipped"] = "fired"
+    reason: str = ""
+    effects: List[Effect] = Field(default_factory=list)
+    #: Label of the branch that matched, empty when no branch was used.
+    branch: str = ""
+    #: Parent event for forced follow-ups, and its depth in the execution tree.
+    parent_event_id: str = ""
+    depth: int = 0
+
+
+class NarrativeBlock(BaseModel):
+    """One piece of context handed to the narrator, for the debug console.
+
+    The id is what the engine knows the block by (a knowledge entry id, a
+    history record id); title and layer are what a person reads. The excerpt
+    is deliberately short: the debug panel is for spotting WHICH context was
+    used, and the full text stays in the scenario store.
+    """
+
+    id: str = ""
+    layer: str = ""
+    title: str = ""
+    excerpt: str = ""
+
+
+class NarrativeDiagnostics(BaseModel):
+    """What the narrator actually saw and which model answered.
+
+    Recorded next to every turn so a reviewer can answer "why did it say
+    that" without re-running the model: the settings are the ones actually
+    sent, and nothing here can influence the committed state.
+    """
+
+    provider: str = ""
+    model: str = ""
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    timeout: float = 0.0
+    language: str = ""
+    content_policy: str = ""
+    #: True when a preset promoted the turn to a different route (slot model).
+    preset_routed: bool = False
+    #: True when diagnostics were captured but the turn was not narrated.
+    skipped: bool = False
+    blocks: List[NarrativeBlock] = Field(default_factory=list)
+    #: Which committed facts the prompt was given, counted by source.
+    fact_counts: Dict[str, int] = Field(default_factory=dict)
+
+class NarrativeResult(BaseModel):
+    status: Literal["skipped", "ok", "failed"] = "skipped"
+    text: str = ""
+    error: str = ""
+    model: str = ""
+    #: Populated on every turn; empty only when the caller disabled capture.
+    diagnostics: Optional[NarrativeDiagnostics] = None
+
+
+class ActionResult(BaseModel):
+    request_id: str
+    campaign_id: str
+    status: Literal["applied", "rejected", "duplicate", "conflict"]
+    action: str
+    actor_id: str = "player"
+    target_id: Optional[str] = None
+    ok: bool = False
+    code: str = ""
+    message: str = ""
+    state_version: int = 0
+    effects_applied: List[Effect] = Field(default_factory=list)
+    events_fired: List[EventExecution] = Field(default_factory=list)
+    quests: Dict[str, str] = Field(default_factory=dict)
+    #: Storyline nodes entered by this action (empty in free mode).
+    story_nodes_entered: List[str] = Field(default_factory=list)
+    #: Knowledge entry ids the narrator was given (debug/audit only).
+    context_entries: List[str] = Field(default_factory=list)
+    #: Deterministic combat resolution for this request (None outside combat).
+    combat_round: Optional[Dict[str, Any]] = None
+    narrative: NarrativeResult = Field(default_factory=NarrativeResult)
+    #: In-game minutes this request consumed (0 for a rejected or duplicate
+    #: request, and 0 for verbs that take no time such as looking or talking).
+    minutes_spent: int = 0
+    #: The committed clock after this request, for display ("Day 1, 08:10").
+    clock: str = ""
+    state: Optional[GameState] = None

@@ -1,0 +1,115 @@
+{
+  "stress": {
+    "corpus": "stress",
+    "regex": {
+      "raw": {
+        "n": 18,
+        "words": 4831,
+        "rule_of_three": 12,
+        "fake_metrics": 0,
+        "em_dash": 31,
+        "per_resp": {
+          "rule_of_three": 0.667,
+          "fake_metrics": 0.0,
+          "em_dash": 1.722
+        }
+      },
+      "audited": {
+        "n": 18,
+        "words": 4821,
+        "rule_of_three": 12,
+        "fake_metrics": 0,
+        "em_dash": 27,
+        "per_resp": {
+          "rule_of_three": 0.667,
+          "fake_metrics": 0.0,
+          "em_dash": 1.5
+        }
+      }
+    },
+    "telemetry": {
+      "n": 18,
+      "verdicts": {
+        "corrected": 1,
+        "clean": 17
+      },
+      "rewritten": 1,
+      "rewrite_rate": 0.056,
+      "marker_guard_rejected": 0,
+      "corrections_total": 2,
+      "corrections_by_rule": {
+        "em_dash_tic": 1,
+        "gesture_gloss": 1
+      },
+      "tag_invariant_violations": 0,
+      "mention_drops": 0,
+      "rewrite_len_delta_chars": {
+        "mean": -33.0,
+        "samples": [
+          -33
+        ]
+      },
+      "latency_s": {
+        "min": 12.08,
+        "max": 54.69,
+        "mean": 28.21
+      }
+    }
+  },
+  "prod": {
+    "corpus": "prod",
+    "regex": {
+      "raw": {
+        "n": 18,
+        "words": 4684,
+        "rule_of_three": 3,
+        "fake_metrics": 0,
+        "em_dash": 7,
+        "per_resp": {
+          "rule_of_three": 0.167,
+          "fake_metrics": 0.0,
+          "em_dash": 0.389
+        }
+      },
+      "audited": {
+        "n": 18,
+        "words": 4676,
+        "rule_of_three": 3,
+        "fake_metrics": 0,
+        "em_dash": 7,
+        "per_resp": {
+          "rule_of_three": 0.167,
+          "fake_metrics": 0.0,
+          "em_dash": 0.389
+        }
+      }
+    },
+    "telemetry": {
+      "n": 18,
+      "verdicts": {
+        "clean": 17,
+        "corrected": 1
+      },
+      "rewritten": 1,
+      "rewrite_rate": 0.056,
+      "marker_guard_rejected": 0,
+      "corrections_total": 1,
+      "corrections_by_rule": {
+        "player_agency": 1
+      },
+      "tag_invariant_violations": 0,
+      "mention_drops": 0,
+      "rewrite_len_delta_chars": {
+        "mean": -85.0,
+        "samples": [
+          -85
+        ]
+      },
+      "latency_s": {
+        "min": 4.78,
+        "max": 39.07,
+        "mean": 14.58
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+host: "127.0.0.1"
+port: 8318
+
+api-keys:
+  - "lunar-proxy-key"
+
+debug: false
+
+auth-dir: "~/.cli-proxy-api"
+
+request-retry: 2
+
+streaming:
+  keepalive-seconds: 15
+  bootstrap-retries: 1
