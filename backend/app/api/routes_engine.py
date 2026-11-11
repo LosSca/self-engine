@@ -42,6 +42,7 @@ from app.services import authoring_session, interaction_planner, starter_worlds,
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
 from app.services.knowledge_service import build_context
+from app.engines.agent_router import AGENT_ROLES, load_agent_configs
 from app.engines.story_engine import storyline_status
 from app.models.knowledge import ScenarioPlayContext
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
@@ -1885,6 +1886,85 @@ def list_campaign_requests(
         return store.list_requests(campaign_id, limit=limit, after_version=after_version)
     finally:
         store.close()
+
+# ------------------------------------------------------------- agent calls
+class AgentRoleView(BaseModel):
+    role: str
+    enabled: bool
+    configured: bool
+    provider: str = ""
+    model: str = ""
+    timeout: float = 0.0
+    max_tokens: int = 0
+    temperature: Optional[float] = None
+    reasoning_effort: str = ""
+
+
+class AgentRolesResponse(BaseModel):
+    roles: List[AgentRoleView]
+    note: str = ""
+
+
+class AgentCallView(BaseModel):
+    role: str
+    task: str = ""
+    provider: str = ""
+    model: str = ""
+    status: str = "ok"
+    degraded: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+    elapsed_ms: int = 0
+    error: str = ""
+    created_at: str = ""
+
+
+@router.get("/agents", response_model=AgentRolesResponse)
+def list_agent_roles():
+    """Which model answers each agent role.
+
+    Read-only and key-free: this is what the debug panel shows so an author can
+    confirm that a role is routed where they think it is. Secrets never appear
+    here; an unconfigured role simply inherits the primary model.
+    """
+    configs = load_agent_configs()
+    roles = [configs[role] for role in AGENT_ROLES if role in configs]
+    return AgentRolesResponse(
+        roles=[
+            AgentRoleView(
+                role=config.role,
+                enabled=config.enabled,
+                configured=config.configured,
+                provider=(config.provider.value if config.provider else ""),
+                model=config.model,
+                timeout=config.timeout,
+                max_tokens=config.max_tokens or 0,
+                temperature=config.temperature,
+                reasoning_effort=config.reasoning_effort,
+            )
+            for config in roles
+        ],
+        note="AGENTS_<ROLE>_PROVIDER / AGENTS_<ROLE>_MODEL configure a role; unset inherits the primary model.",
+    )
+
+
+@router.get("/campaigns/{campaign_id}/agent-calls", response_model=List[AgentCallView])
+def list_campaign_agent_calls(
+    campaign_id: str,
+    role: str = Query("", pattern="^$|^(narrative|system|memory)$"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Every agent call made for this campaign, newest first.
+
+    Telemetry only: rows are written outside the game transaction, so a missing
+    or failed write can never change what happened in the game.
+    """
+    store = _get_store()
+    try:
+        return store.list_agent_calls(campaign_id, limit=limit, role=role)
+    finally:
+        store.close()
+
 
 @router.get("/actions/{request_id}", response_model=RequestRecordResponse)
 def get_action(request_id: str):

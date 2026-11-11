@@ -30,6 +30,8 @@ TYPED_PATHS = [
     ("get", "/api/v1/campaigns/{campaign_id}/event-executions"),
     ("get", "/api/v1/actions/{request_id}"),
     ("get", "/api/v1/campaigns/{campaign_id}/requests"),
+    ("get", "/api/v1/agents"),
+    ("get", "/api/v1/campaigns/{campaign_id}/agent-calls"),
     ("post", "/api/v1/worlds/{world_id}/plan"),
     ("post", "/api/v1/worlds/{world_id}/preview-actions"),
     ("post", "/api/v1/worlds/{world_id}/explain"),

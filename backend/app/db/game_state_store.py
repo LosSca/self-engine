@@ -26,7 +26,7 @@ from app.models.game import GameState, WorldDefinition
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 def _worlds_disagree(snapshot_json: str, current_world_id: str) -> bool:
     """True when a stored snapshot described a different world than the live one."""
@@ -110,6 +110,27 @@ _MIGRATIONS: Dict[int, List[str]] = {
         ")",
         "CREATE INDEX IF NOT EXISTS idx_campaign_snapshots_campaign "
         "ON campaign_snapshots(campaign_id, version)",
+    ],
+    # Phase 1 (agent runtime): one row per LLM call, keyed by role so the debug
+    # panel can show who was asked what, for how long, and why it failed.
+    3: [
+        "CREATE TABLE IF NOT EXISTS agent_calls ("
+        "    id TEXT PRIMARY KEY,"
+        "    campaign_id TEXT NOT NULL DEFAULT '',"
+        "    role TEXT NOT NULL,"
+        "    task TEXT NOT NULL DEFAULT '',"
+        "    provider TEXT NOT NULL DEFAULT '',"
+        "    model TEXT NOT NULL DEFAULT '',"
+        "    status TEXT NOT NULL,"
+        "    degraded INTEGER NOT NULL DEFAULT 0,"
+        "    input_tokens INTEGER NOT NULL DEFAULT 0,"
+        "    output_tokens INTEGER NOT NULL DEFAULT 0,"
+        "    elapsed_ms INTEGER NOT NULL DEFAULT 0,"
+        "    error TEXT NOT NULL DEFAULT '',"
+        "    created_at TEXT NOT NULL"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_agent_calls_campaign "
+        "ON agent_calls(campaign_id, created_at)",
     ],
 }
 
@@ -540,6 +561,109 @@ class GameStateStore:
                 created_at or _now(),
             ),
         )
+
+    # ------------------------------------------------------------ agent calls
+    def record_agent_call(
+        self,
+        *,
+        role: str,
+        task: str = "",
+        provider: str = "",
+        model: str = "",
+        status: str = "ok",
+        degraded: bool = False,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        elapsed_ms: int = 0,
+        error: str = "",
+        campaign_id: str = "",
+        **extra: Any,
+    ) -> Dict[str, Any]:
+        """Append one agent call record (debug/observability only).
+
+        This never participates in a game transaction: a failed insert is
+        logged and swallowed so observability can never fail a turn. Unknown
+        keywords are accepted and ignored for the same reason - a caller adding
+        a field must not be able to fail a game turn over telemetry.
+        """
+        if extra:
+            logger.debug("ignoring unknown agent call fields: %s", sorted(extra))
+        record = {
+            "id": str(uuid.uuid4()),
+            "campaign_id": campaign_id or "",
+            "role": role,
+            "task": task or "",
+            "provider": provider or "",
+            "model": model or "",
+            "status": status,
+            "degraded": 1 if degraded else 0,
+            "input_tokens": int(input_tokens or 0),
+            "output_tokens": int(output_tokens or 0),
+            "elapsed_ms": int(elapsed_ms or 0),
+            "error": (error or "")[:2000],
+            "created_at": _now(),
+        }
+        try:
+            with self._lock, self._conn:
+                self._conn.execute(
+                    "INSERT INTO agent_calls (id, campaign_id, role, task, provider,"
+                    " model, status, degraded, input_tokens, output_tokens,"
+                    " elapsed_ms, error, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        record["id"],
+                        record["campaign_id"],
+                        record["role"],
+                        record["task"],
+                        record["provider"],
+                        record["model"],
+                        record["status"],
+                        record["degraded"],
+                        record["input_tokens"],
+                        record["output_tokens"],
+                        record["elapsed_ms"],
+                        record["error"],
+                        record["created_at"],
+                    ),
+                )
+        except Exception:  # noqa: BLE001 - observability is best effort
+            logger.warning("failed to record agent call for role %s", role, exc_info=True)
+        return record
+
+    def list_agent_calls(
+        self, campaign_id: str = "", limit: int = 100, role: str = ""
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if campaign_id:
+            clauses.append("campaign_id = ?")
+            params.append(campaign_id)
+        if role:
+            clauses.append("role = ?")
+            params.append(role)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            "SELECT * FROM agent_calls" + where + " ORDER BY created_at DESC LIMIT ?",
+            (*params, int(limit)),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "campaign_id": row["campaign_id"],
+                "role": row["role"],
+                "task": row["task"],
+                "provider": row["provider"],
+                "model": row["model"],
+                "status": row["status"],
+                "degraded": bool(row["degraded"]),
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "elapsed_ms": row["elapsed_ms"],
+                "error": row["error"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def list_snapshots(self, campaign_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         rows = self._conn.execute(

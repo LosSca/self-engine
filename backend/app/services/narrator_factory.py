@@ -171,6 +171,32 @@ def build_router(provider: Optional[str] = None):
     return LLMRouter(config)
 
 
+def _template_context_builder(memory_provider=None):
+    """Context builder for the deterministic lane; None when unavailable."""
+    try:
+        from app.engines.player_context import PlayerContextBuilder
+
+        return PlayerContextBuilder(memory_provider=memory_provider)
+    except Exception:  # noqa: BLE001 - the template narrator works without it
+        return None
+
+
+def build_agent_runtime(router=None, *, store=None, campaign_id: str = ""):
+    """Agent roles on top of one router; None when no router is available."""
+    if router is None:
+        return None
+    try:
+        from app.engines.agent_router import build_agent_runtime as _build
+
+        return _build(
+            router,
+            store=store if hasattr(store, "record_agent_call") else None,
+            campaign_id=campaign_id,
+        )
+    except Exception:  # noqa: BLE001 - roles are an enhancement, never a gate
+        return None
+
+
 def build_narrator(
     env_var: str = "ENGINE_NARRATOR",
     *,
@@ -178,6 +204,9 @@ def build_narrator(
     max_tokens: int = 600,
     temperature: float = 0.9,
     timeout: float = 45.0,
+    store=None,
+    campaign_id: str = "",
+    memory_provider=None,
 ) -> Tuple[object, str]:
     """Return `(narrator, provider_name)`; never raises.
 
@@ -185,12 +214,15 @@ def build_narrator(
     not stop a player from taking a turn.
     """
     if narrator_choice(env_var) == "template":
-        return TemplateNarrator(), "template"
+        return TemplateNarrator(_template_context_builder(memory_provider)), "template"
     provider = _provider_name()
     try:
         router = build_router(provider)
     except Exception:  # noqa: BLE001 - narrator setup must never block play
-        return TemplateNarrator(), "template"
+        return TemplateNarrator(_template_context_builder(memory_provider)), "template"
+    from app.engines.player_context import PlayerContextBuilder
+
+    agents = build_agent_runtime(router, store=store, campaign_id=campaign_id)
     return (
         LLMNarrator(
             router,
@@ -198,6 +230,10 @@ def build_narrator(
             temperature=temperature,
             timeout=timeout,
             language=language or "en",
+            agents=agents,
+            context_builder=PlayerContextBuilder(memory_provider=memory_provider),
+            memory_provider=memory_provider,
+            campaign_id=campaign_id,
         ),
         provider,
     )
@@ -213,4 +249,20 @@ def describe() -> dict:
         "local_reachable": local_llm_reachable() if local_llm_configured() else False,
         "local_base_url": local_llm_base_url(),
         "local_model": local_llm_model(),
+        "agents": _agent_summary(),
     }
+
+
+def _agent_summary() -> dict:
+    """Which role is pinned to which model, for the diagnostics panel.
+
+    Only names and flags: keys never leave the process.
+    """
+    try:
+        from app.engines.agent_router import load_agent_configs
+
+        return {
+            role: config.describe() for role, config in load_agent_configs().items()
+        }
+    except Exception:  # noqa: BLE001 - diagnostics must never break a request
+        return {}

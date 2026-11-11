@@ -506,6 +506,53 @@ class TemplateNarrator:
 
     name = "template"
 
+    def __init__(self, context_builder=None):
+        # Optional; when a builder is supplied, a `talk` action renders the
+        # addressed NPC's own dossier and witnessed memory instead of the
+        # engine's canned line, so NPC identity survives even with no model.
+        self.context_builder = context_builder
+
+    def _player_context(self, request, state, world):
+        if self.context_builder is None or request.action != "talk" or not request.target_id:
+            return None
+        try:
+            return self.context_builder.build(world, state, npc_id=str(request.target_id))
+        except Exception:  # noqa: BLE001 - enrichment, never a gate
+            return None
+
+    def _npc_line(self, world, context, execution_note: str = "") -> str:
+        """One in-character line assembled only from committed data."""
+        dossier = context.npc
+        if dossier is None:
+            return execution_note
+        chinese = _is_chinese_world(world)
+        parts: List[str] = []
+        mood = " ".join(dossier.emotional_state.values()).strip()
+        identity = dossier.description or (
+            f"{dossier.name} is here." if not chinese else f"{dossier.name}就在这里。"
+        )
+        parts.append(identity)
+        if mood:
+            parts.append(
+                f"{dossier.name} seems {mood}." if not chinese else f"{dossier.name}显得{mood}。"
+            )
+        goals = [goal for goal in dossier.goals if goal]
+        if goals:
+            parts.append(
+                f"There is something on their mind: {goals[0]}."
+                if not chinese
+                else f"{dossier.name}似有所图：{goals[0]}。"
+            )
+        if context.section("npc_memory") is not None:
+            remembered = [line for line in context.section("npc_memory").lines][-1:]
+            if remembered:
+                parts.append(
+                    f"They remember: {remembered[0]}"
+                    if not chinese
+                    else f"{dossier.name}还记得：{remembered[0]}"
+                )
+        return " ".join(part for part in parts if part).strip() or execution_note
+
     async def narrate(
         self,
         request: ActionRequest,
@@ -522,6 +569,21 @@ class TemplateNarrator:
             return _verified(
                 world, outcome, outcome.message or "That does not work.", executions_effects
             )
+        context = self._player_context(request, state, world)
+        if context is not None and context.npc is not None:
+            # A talk action is the one place the deterministic lane must not
+            # answer with the engine's stock line: who is speaking is the point.
+            line = self._npc_line(world, context)
+            if line:
+                return NarrativeResult(
+                    status="ok",
+                    text=strip_prose_tags(line).strip(),
+                    model="template",
+                    diagnostics=capture_diagnostics(
+                        knowledge, None, provider="template", model="template",
+                        skipped=False,
+                    ),
+                )
         parts: List[str] = []
         if outcome.message:
             parts.append(outcome.message)
@@ -648,12 +710,71 @@ class LLMNarrator:
         temperature: float = 0.9,
         timeout: float = 30.0,
         language: str = "English",
+        agents=None,
+        context_builder=None,
+        memory_provider=None,
+        campaign_id: str = "",
     ):
         self.router = router
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
         self.language = language
+        # Phase 1: the narrative role may live on a different model than the
+        # router default. None keeps the single-router behaviour untouched.
+        self.agents = agents
+        self.context_builder = context_builder
+        self.memory_provider = memory_provider
+        self.campaign_id = campaign_id
+
+    def _narrative_route(self, options: Optional[dict] = None):
+        """Return (router, provider, model) for this call's narrative work.
+
+        An explicit per-scene preset still wins, because a scenario author who
+        pinned a model is stating an intent about that dialogue; the agent role
+        only replaces the *default* route.
+        """
+        pinned = preset_router(options)
+        if pinned is not None:
+            config = getattr(pinned, "config", None)
+            return (
+                pinned,
+                str(getattr(config, "provider", "") or ""),
+                str(getattr(config, "model", "") or ""),
+            )
+        if self.agents is not None:
+            try:
+                if self.agents.available("narrative"):
+                    router, provider = self.agents.router_for("narrative")
+                    config = getattr(router, "config", None)
+                    model = str(getattr(config, "model", "") or "")
+                    return router, provider, model
+            except Exception:  # noqa: BLE001 - routing never breaks a turn
+                pass
+        config = getattr(self.router, "config", None)
+        return (
+            self.router,
+            str(getattr(config, "provider", "") or ""),
+            str(getattr(config, "model", "") or ""),
+        )
+
+    def _player_context(self, request: ActionRequest, state: GameState, world: WorldDefinition):
+        """Build the layered player context for the entity this action addresses.
+
+        Only built when someone is actually being talked to: an untargeted
+        "look" has no NPC whose separate memory could matter, and paying for the
+        dossier walk on every carry/look would be pure overhead.
+        """
+        if self.context_builder is None or request.action != "talk" or not request.target_id:
+            return None
+        try:
+            return self.context_builder.build(
+                world,
+                state,
+                npc_id=str(request.target_id),
+            )
+        except Exception:  # noqa: BLE001 - context is an enrichment, not a gate
+            return None
     def _build_messages(
         self,
         request: ActionRequest,
@@ -664,6 +785,7 @@ class LLMNarrator:
         knowledge: Optional[Sequence[dict]] = None,
         language: Optional[str] = None,
         system_override: str = "",
+        player_context=None,
     ) -> List[dict]:
         location = _location(world, state.location_id)
         location_block = (
@@ -734,10 +856,24 @@ class LLMNarrator:
             + (language or self.language)
             + " with 1-2 short paragraphs of second-person prose. No markdown."
         )
+        context_section = ""
+        if player_context is not None:
+            # Layered, NPC-scoped context. It is labelled by evidence kind so
+            # the model can tell a canon fact from a guess or a single NPC's
+            # belief; the settled facts above remain the authoritative part.
+            rendered = player_context.render()
+            if rendered.strip():
+                context_section = (
+                    "\n\nLayered player context (labels say how each line is "
+                    "known: fact/canon = established, belief = what someone "
+                    "thinks, guess = uncertain, history = record of what "
+                    "happened):\n" + rendered
+                )
         user = (
             "Settled game facts (JSON):\n"
             + json.dumps(facts, ensure_ascii=False, indent=2)
             + knowledge_section
+            + context_section
             + "\n\nWrite the narration for this moment."
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -758,15 +894,18 @@ class LLMNarrator:
         language = language.strip() if isinstance(language, str) else None
         system_override = (options or {}).get("system_prompt")
         system_override = system_override.strip() if isinstance(system_override, str) else ""
+        player_context = self._player_context(request, state, world)
         messages = self._build_messages(
             request, outcome, state, world, executions, knowledge,
             language=language, system_override=system_override,
+            player_context=player_context,
         )
+        _default_router, _default_provider, _default_model = self._narrative_route(options)
         diagnostics = capture_diagnostics(
             knowledge,
             options,
-            provider=str(getattr(getattr(self.router, "config", None), "provider", "") or ""),
-            model=str(getattr(getattr(self.router, "config", None), "model", "") or ""),
+            provider=_default_provider,
+            model=_default_model,
             timeout=self.timeout,
             default_temperature=self.temperature,
             default_max_tokens=self.max_tokens,
@@ -802,13 +941,30 @@ class LLMNarrator:
                 else ""
             )
         try:
-            router = preset_router(options) or self.router
-            delay = REFUSAL_RETRY_DELAY
+            router = _default_router
             # `text` must exist even when every attempt raises; the bare except
             # below turns that into a failed NarrativeResult, never a NameError.
             text = None
+            delay = REFUSAL_RETRY_DELAY
+            use_agents = self.agents is not None and preset_router(options) is None
             for attempt in (1, 2):
                 try:
+                    if use_agents:
+                        # A role pinned to its own model still has to survive a
+                        # refusal: the runtime walks its degrade ladder before
+                        # this turn is allowed to fail.
+                        reply = await self.agents.ask(
+                            "narrative",
+                            messages,
+                            task="narrate",
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            policy=policy,
+                        )
+                        if reply.ok:
+                            text = reply.text
+                            break
+                        raise RuntimeError(reply.error or "narrative agent failed")
                     text = await asyncio.wait_for(
                         router.complete(
                             messages,
@@ -828,7 +984,7 @@ class LLMNarrator:
                     # Through a proxy an upstream refusal often surfaces as an
                     # error, not as prose, so the reroute must catch both. One
                     # retry only: an unreachable local server is not a refusal.
-                    if attempt == 1 and (
+                    if attempt == 1 and not use_agents and (
                         REFUSAL_ERR_RE.search(_last_error_text(error))
                         or policy == "nsfw"
                     ):
@@ -861,6 +1017,14 @@ class LLMNarrator:
                 diagnostics=diagnostics.model_copy(update={"content_policy": policy}),
             )
         verified = _verified(world, outcome, cleaned, executions_effects)
+        if player_context is not None and isinstance(verified, NarrativeResult):
+            # Which layers were actually sent is the first thing a reviewer
+            # asks when an NPC answers out of character.
+            kinds = dict(player_context.kinds())
+            if kinds:
+                update = dict(verified.diagnostics or diagnostics)
+                update["context_kinds"] = kinds
+                verified = verified.model_copy(update={"diagnostics": update})
         # The route that actually answered wins over the one that was planned:
         # a refusal reroute changes the policy, and a reviewer needs to see it.
         if isinstance(verified, NarrativeResult) and verified.diagnostics is None:
