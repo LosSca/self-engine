@@ -83,6 +83,9 @@ EPILOG = """三种典型用法：
   预览构建产物  python launch.py --prod          （自动 npm run build；加 --rebuild 强制重建）
 
 自检/CI 用 --no-window：不开新窗口、日志写 .logs/、Ctrl+C 一并停掉子进程。
+
+知识图谱（可选）：python launch.py --neo4j status|start|stop —— 没有 Neo4j 也能完整游玩，
+它只是实体关系图谱那一层镜像。
 """
 
 
@@ -445,6 +448,18 @@ def preflight_prod(rebuild: bool = False) -> bool:
     say("         cd frontend && npm run build")
     return False
 
+def run_neo4j_tool(action: str) -> int:
+    """把 --neo4j 转交给 scripts/neo4j_tool.py，用同一个解释器（需要 neo4j 驱动）。"""
+    import subprocess
+    import sys as _sys
+
+    script = ROOT / "scripts" / "neo4j_tool.py"
+    if not script.is_file():
+        say("[错误] 找不到 %s" % script)
+        return 1
+    return subprocess.call([_sys.executable, str(script), action])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="launch.py",
@@ -487,6 +502,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="不开新窗口：两个服务放在本进程前台，日志写 .logs/，Ctrl+C 一并停止（自检/CI/只用一个终端时用）。",
     )
+    parser.add_argument(
+        "--neo4j",
+        nargs="?",
+        const="status",
+        default=None,
+        metavar="动作",
+        help="管理可选的 Neo4j 图谱库：status（默认）/ start / stop / password <新密码>。"
+        "等同 python scripts/neo4j_tool.py <动作>，不启动后端与前端。",
+    )
     parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run-frontend", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -498,6 +522,10 @@ def main(argv: list[str] | None = None) -> int:
             host = "0.0.0.0"
         else:
             say("[提示] 同时给了 --mobile 与 --host %s，按 --host 处理。" % args.host)
+
+    # 图谱库小工具：只转交，不拉起任何服务。
+    if args.neo4j:
+        return run_neo4j_tool(args.neo4j)
 
     # 内部模式：本进程就是这个服务（由窗口模式自我重启产生）。
     if args.run_backend:

@@ -410,6 +410,18 @@ install.bat      # Windows
 > 需要实体关系图谱时自己起一个 Neo4j 5 并把 `NEO4J_URI` 填进 `.env`；不想用就把
 > `ENGINE_GRAPH_MIRROR` 设为 0——图谱只是镜像，不会因为不可用而回滚回合。
 
+起图谱可以直接用自带的检查工具，它会告诉你当前状态并给出下一步命令：
+
+```bash
+python launch.py --neo4j               # 只看状态：连得上 / 认证失败 / 没在跑，各自给出修复命令
+python launch.py --neo4j start         # 有 Docker 时起一个 neo4j:5 容器（首次会生成随机密码写回 .env）
+python launch.py --neo4j password xxx  # 改密码后同步写回 .env
+python launch.py --neo4j stop          # 停容器
+```
+
+没有 Docker 也可以：用 Neo4j Desktop 或官方压缩包起一个 5.x，把 `bolt://localhost:7687`
+与密码填进 `.env` 即可；不改 `.env` 时把 `ENGINE_GRAPH_MIRROR` 设为 0 关掉镜像。
+
 ### 配置
 
 编辑仓库根的 `.env`（字段与 `.env.example` 一一对应）：

@@ -194,4 +194,31 @@ html[data-theme="light"] .bg-emerald-500\/10 { background-color: rgba(5, 150, 10
 html[data-theme="light"] .border-emerald-500\/30 { border-color: rgba(5, 150, 105, 0.3); }
 html[data-theme="light"] .border-amber-500\/40 { border-color: rgba(180, 83, 9, 0.4); }
 html[data-theme="light"] .border-rose-500\/30 { border-color: rgba(225, 29, 72, 0.3); }
-html[data-theme="light"] .bg-white.hover\:bg-gray-200:hover { background-color: #333333; color: #ffffff; }
+html[data-theme="light"] .bg-white.hover\:bg-gray-200:hover { background-color: #5c564e; color: #ffffff; }
+
+/* ---- 纸白主题里不再出现纯黑块（用户反馈：黑色看不清） ----
+   深色主题下「黑底白字」的实心按钮，在纸面上换成中性灰底；
+   侧栏/停靠区/工作室这些硬编码的深色底改成纸灰，靠边框与阴影分层。 */
+html[data-theme="light"] .bg-\[\#0b0d10\] { background-color: #efece6; }
+html[data-theme="light"] .bg-\[\#0b0b0b\],
+html[data-theme="light"] .bg-\[\#080b0d\],
+html[data-theme="light"] .bg-\[\#071014\] {
+  background-color: #fbfaf8;
+  box-shadow: 0 30px 80px -40px rgba(24, 20, 16, 0.35);
+}
+
+/* 卡片：白底卡片在纸面上就是白色，别被上面「深色底 → 浅底」的旧规则弄成深灰。 */
+html[data-theme="light"] .bg-white.rounded-3xl,
+html[data-theme="light"] .bg-white.rounded-2xl,
+html[data-theme="light"] .bg-white.rounded-xl,
+html[data-theme="light"] .bg-white.p-5,
+html[data-theme="light"] .bg-white.border-\[\#dcd8d0\],
+html[data-theme="light"] .bg-white.border-\[\#d8d4cc\] {
+  background-color: #ffffff !important;
+}
+
+/* 主按钮：墨黑 → 中性深灰（仍是最重的一档，但不再是纯黑） */
+html[data-theme="light"] .bg-\[\#1a1a1a\] { background-color: #4a453f; }
+html[data-theme="light"] .hover\:bg-\[\#333\]:hover { background-color: #5c564e; }
+html[data-theme="light"] .border-\[\#1a1a1a\] { border-color: #4a453f; }
+html[data-theme="light"] .accent-\[\#1a1a1a\] { accent-color: #4a453f; }

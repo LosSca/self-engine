@@ -33,6 +33,17 @@ ALLOWED_KEYS = (
     "custom_model",
     #: 全局写作指令：没有任何游戏内设定时，叙事用它当 system prompt 补充。
     "default_narrator_prompt",
+    #: 叙事可调项。takeover 等开关只影响提示词与采样，不改变规则判定，
+    #: 所以放在设置里而不是世界数据里：用户随时改，立刻作用于下一次行动。
+    "narrator_style",
+    "narrator_perspective",
+    "narrator_length",
+    "narrator_language_hint",
+    "narrator_show_rules",
+    "narrator_allow_ooc",
+    "top_p",
+    "presence_penalty",
+    "frequency_penalty",
 )
 
 

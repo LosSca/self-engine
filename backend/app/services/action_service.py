@@ -82,6 +82,65 @@ def default_narrator_prompt() -> str:
     return value if isinstance(value, str) else ""
 
 
+_STYLE_LABELS = {
+    "concise": "用短句、信息密度高，少形容词，节奏快。",
+    "balanced": "叙事自然，描写与推进各半。",
+    "literary": "用文学化的长句与意象，允许细腻的环境与心理描写。",
+    "gothic": "阴郁、潮湿、压抑的氛围，感官细节偏冷。",
+    "wuxia": "武侠笔法：动作干脆、场面有江湖气，少解释多呈现。",
+    "pulp": "通俗冒险小说节奏：悬念密集、每段都推进冲突。",
+}
+
+_PERSPECTIVE_LABELS = {
+    "second": "第二人称（你），主角由玩家扮演。",
+    "third": "第三人称，叙述主角的行动。",
+    "first": "第一人称，以主角口吻叙述。",
+}
+
+_LENGTH_LABELS = {
+    "short": "每次叙事控制在 2 段以内。",
+    "medium": "每次叙事 3-5 段。",
+    "long": "每次叙事可以更长，允许分场景铺陈。",
+}
+
+
+def _prefs() -> Dict[str, Any]:
+    """一次性读出叙事相关的偏好（缺失时返回空字典）。"""
+    try:
+        from app.db.prefs_store import get_prefs_store
+
+        store = get_prefs_store()
+        try:
+            return store.all() or {}
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - style preferences are advisory
+        return {}
+
+
+def narrator_style_notes(prefs: Optional[Dict[str, Any]] = None) -> List[str]:
+    """把设置里的风格开关翻译成几行提示词（不改变任何规则判定）。"""
+    values = _prefs() if prefs is None else prefs
+    notes: List[str] = []
+    style = values.get("narrator_style")
+    if style in _STYLE_LABELS:
+        notes.append(_STYLE_LABELS[style])
+    perspective = values.get("narrator_perspective")
+    if perspective in _PERSPECTIVE_LABELS:
+        notes.append(_PERSPECTIVE_LABELS[perspective])
+    length = values.get("narrator_length")
+    if length in _LENGTH_LABELS:
+        notes.append(_LENGTH_LABELS[length])
+    if values.get("narrator_show_rules"):
+        notes.append("可以在叙事里简短点出判定结果（例如「察觉检定失败」），但不要输出数值表。")
+    if values.get("narrator_allow_ooc"):
+        notes.append("允许用 [] 包裹的场外提示与玩家交流。")
+    hint = values.get("narrator_language_hint")
+    if isinstance(hint, str) and hint.strip():
+        notes.append(f"语气参考：{hint.strip()[:200]}")
+    return notes
+
+
 def _now() -> str:
     return datetime.utcnow().isoformat()
 
@@ -387,8 +446,23 @@ class ActionService:
             directive = default_narrator_prompt()
         if directive:
             prompt_parts.append(directive)
+        # 设置面板里的风格开关（体裁/人称/长度/OOC）同样是 advisory：
+        # 拼在用户指令之后，一起作为 system prompt 的补充。
+        style_notes = narrator_style_notes()
+        if style_notes:
+            prompt_parts.append("\n".join(style_notes))
         if prompt_parts:
             options = {**(options or {}), "system_prompt": "\n\n".join(prompt_parts)}
+        # 采样参数：设置里填了才覆盖 preset，留空就用世界/预设自带的值。
+        prefs_for_sampling = _prefs() if style_notes else {}
+        for key in ("top_p", "presence_penalty", "frequency_penalty"):
+            value = prefs_for_sampling.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                options = {**(options or {}), key: float(value)}
+            except (TypeError, ValueError):
+                continue
         if not blocks:
             # Sampling settings are authored too: they apply even when the
             # scenario has no knowledge entries to hand over.

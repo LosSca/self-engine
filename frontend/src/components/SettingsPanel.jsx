@@ -23,7 +23,31 @@ const PROVIDERS = [
 const TABS = [
   { id: 'general', label: '通用' },
   { id: 'model', label: '模型' },
+  { id: 'narrative', label: '叙事' },
   { id: 'writing', label: '写作指令' },
+]
+
+// 叙事风格开关：都只是给模型的语气提示，不改变规则判定。
+const STYLE_OPTIONS = [
+  { id: '', label: '跟随世界' },
+  { id: 'concise', label: '简洁' },
+  { id: 'balanced', label: '均衡' },
+  { id: 'literary', label: '文学' },
+  { id: 'gothic', label: '阴郁' },
+  { id: 'wuxia', label: '武侠' },
+  { id: 'pulp', label: '通俗冒险' },
+]
+const PERSPECTIVE_OPTIONS = [
+  { id: '', label: '跟随世界' },
+  { id: 'second', label: '第二人称' },
+  { id: 'third', label: '第三人称' },
+  { id: 'first', label: '第一人称' },
+]
+const LENGTH_OPTIONS = [
+  { id: '', label: '跟随世界' },
+  { id: 'short', label: '简短' },
+  { id: 'medium', label: '标准' },
+  { id: 'long', label: '铺陈' },
 ]
 
 // 面板统一走纸白配色：旧的「白字」类在浅色主题下会被 light.css 反向映射成墨底，
@@ -37,7 +61,7 @@ const C = {
     + 'placeholder-[#9a958c] focus:outline-none focus:border-[#8a857c] transition-colors',
   help: 'text-[10px] leading-relaxed text-[#8a857c] mt-2',
   primary:
-    'bg-[#1a1a1a] text-white hover:bg-[#333] rounded-lg px-5 py-2.5 text-xs font-bold '
+    'bg-[#4a453f] text-white hover:bg-[#5c564e] rounded-lg px-5 py-2.5 text-xs font-bold '
     + 'tracking-[0.15em] transition-colors disabled:opacity-50',
   ghost:
     'border border-[#d8d4cc] text-[#5c574f] hover:border-[#8a857c] hover:text-[#1a1a1a] '
@@ -45,9 +69,15 @@ const C = {
   option: (on) => (
     'px-3 py-2.5 rounded-lg border text-xs font-semibold tracking-wide transition-colors '
     + (on
-      ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]'
+      ? 'bg-[#4a453f] text-white border-[#4a453f]'
       : 'bg-white text-[#5c574f] border-[#d8d4cc] hover:border-[#8a857c]')
   ),
+}
+
+const numOrNull = (raw, min, max) => {
+  const value = Number.parseFloat(raw)
+  if (!Number.isFinite(value)) return undefined
+  return Math.min(max, Math.max(min, value))
 }
 
 /**
@@ -77,6 +107,16 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
   const [apiToken, setApiToken] = useState(
     () => localStorage.getItem('lunar_api_token') || '',
   )
+  // 叙事可调项：风格/人称/长度/两个开关/采样参数。空串代表「跟随世界」。
+  const [narrStyle, setNarrStyle] = useState('')
+  const [narrPerspective, setNarrPerspective] = useState('')
+  const [narrLength, setNarrLength] = useState('')
+  const [narrHint, setNarrHint] = useState('')
+  const [showRules, setShowRules] = useState(false)
+  const [allowOoc, setAllowOoc] = useState(false)
+  const [topP, setTopP] = useState('')
+  const [presence, setPresence] = useState('')
+  const [frequency, setFrequency] = useState('')
   // 写作指令：全局一份（所有世界都吃），世界自己的一行覆盖全局。
   const [directive, setDirective] = useState('')
   const [worldDirective, setWorldDirective] = useState('')
@@ -126,6 +166,15 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
         if (prefs.theme) {
           setTheme(applyTheme(prefs.theme))
         }
+        if (typeof prefs.narrator_style === 'string') setNarrStyle(prefs.narrator_style)
+        if (typeof prefs.narrator_perspective === 'string') setNarrPerspective(prefs.narrator_perspective)
+        if (typeof prefs.narrator_length === 'string') setNarrLength(prefs.narrator_length)
+        if (typeof prefs.narrator_language_hint === 'string') setNarrHint(prefs.narrator_language_hint)
+        setShowRules(!!prefs.narrator_show_rules)
+        setAllowOoc(!!prefs.narrator_allow_ooc)
+        if (prefs.top_p != null) setTopP(String(prefs.top_p))
+        if (prefs.presence_penalty != null) setPresence(String(prefs.presence_penalty))
+        if (prefs.frequency_penalty != null) setFrequency(String(prefs.frequency_penalty))
       })
       .catch(() => {})
     return () => { alive = false }
@@ -158,6 +207,16 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
       theme,
       custom_model: provider === 'custom' ? customModel.trim() : undefined,
       default_narrator_prompt: directive,
+      // 空串表示「跟随世界」：后端看到空值就不加任何提示词。
+      narrator_style: narrStyle,
+      narrator_perspective: narrPerspective,
+      narrator_length: narrLength,
+      narrator_language_hint: narrHint,
+      narrator_show_rules: showRules,
+      narrator_allow_ooc: allowOoc,
+      top_p: topP === '' ? undefined : numOrNull(topP, 0, 1),
+      presence_penalty: presence === '' ? undefined : numOrNull(presence, -2, 2),
+      frequency_penalty: frequency === '' ? undefined : numOrNull(frequency, -2, 2),
     }
     updateSettings({
       llmProvider: provider,
@@ -284,7 +343,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     type="checkbox"
                     checked={refusalFallbackOn}
                     onChange={(e) => setRefusalFallbackOn(e.target.checked)}
-                    className="accent-[#1a1a1a]"
+                    className="accent-[#4a453f]"
                   />
                   上游拒绝时自动改走本地模型重试一次
                 </label>
@@ -319,7 +378,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     aria-checked={combat}
                     onClick={() => setCombat((v) => !v)}
                     className={`relative inline-flex shrink-0 items-center w-11 h-6 rounded-full border transition-colors ${
-                      combat ? 'bg-[#1a1a1a] border-[#1a1a1a]' : 'bg-[#e8e5de] border-[#d8d4cc]'
+                      combat ? 'bg-[#4a453f] border-[#4a453f]' : 'bg-[#e8e5de] border-[#d8d4cc]'
                     }`}
                   >
                     <span
@@ -391,7 +450,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   step={0.05}
                   value={temp}
                   onChange={(e) => setTemp(parseFloat(e.target.value))}
-                  className="w-full accent-[#1a1a1a]"
+                  className="w-full accent-[#4a453f]"
                 />
                 <div className="flex justify-between text-[9px] text-[#a8a29a] mt-1">
                   <span>精准</span><span>均衡</span><span>天马行空</span>
@@ -410,11 +469,121 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   step={256}
                   value={tokens}
                   onChange={(e) => setTokens(parseInt(e.target.value, 10))}
-                  className="w-full accent-[#1a1a1a]"
+                  className="w-full accent-[#4a453f]"
                 />
                 <div className="flex justify-between text-[9px] text-[#a8a29a] mt-1">
                   <span>简短</span><span>标准</span><span>扩展</span>
                 </div>
+              </div>
+            </>
+          )}
+
+          {tab === 'narrative' && (
+            <>
+              <div>
+                <span className={C.label}>叙事风格</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {STYLE_OPTIONS.map((o) => (
+                    <button
+                      key={o.id || 'auto'}
+                      type="button"
+                      onClick={() => setNarrStyle(o.id)}
+                      data-testid={`settings-style-${o.id || 'auto'}`}
+                      className={C.option(narrStyle === o.id)}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                <p className={C.help}>只是语气与句式提示，和写作指令叠加使用，不会改变规则判定。</p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <span className={C.label}>人称</span>
+                  <select
+                    value={narrPerspective}
+                    onChange={(e) => setNarrPerspective(e.target.value)}
+                    className={C.input}
+                  >
+                    {PERSPECTIVE_OPTIONS.map((o) => (
+                      <option key={o.id || 'auto'} value={o.id}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <span className={C.label}>篇幅</span>
+                  <select
+                    value={narrLength}
+                    onChange={(e) => setNarrLength(e.target.value)}
+                    className={C.input}
+                  >
+                    {LENGTH_OPTIONS.map((o) => (
+                      <option key={o.id || 'auto'} value={o.id}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <span className={C.label}>语气参考（可选）</span>
+                <input
+                  type="text"
+                  value={narrHint}
+                  maxLength={200}
+                  onChange={(e) => setNarrHint(e.target.value)}
+                  placeholder="例如：像说书人，句子短促，少用成语"
+                  className={C.input}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-[11px] text-[#5c574f]">
+                  <input
+                    type="checkbox"
+                    checked={showRules}
+                    onChange={(e) => setShowRules(e.target.checked)}
+                    className="accent-[#4a453f]"
+                  />
+                  在叙事里点出判定结果（例如「察觉检定失败」）
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-[#5c574f]">
+                  <input
+                    type="checkbox"
+                    checked={allowOoc}
+                    onChange={(e) => setAllowOoc(e.target.checked)}
+                    className="accent-[#4a453f]"
+                  />
+                  允许场外提示（用 [] 包裹，用于提问或调整方向）
+                </label>
+              </div>
+
+              <div>
+                <span className={C.label}>采样参数（留空跟随世界/预设）</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: 'top_p', value: topP, set: setTopP, placeholder: '0-1' },
+                    { label: '存在惩罚', value: presence, set: setPresence, placeholder: '-2~2' },
+                    { label: '频率惩罚', value: frequency, set: setFrequency, placeholder: '-2~2' },
+                  ].map((field) => (
+                    <label key={field.label} className="block">
+                      <span className="block text-[9px] uppercase tracking-[0.15em] text-[#a8a29a] mb-1">
+                        {field.label}
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={field.value}
+                        onChange={(e) => field.set(e.target.value)}
+                        placeholder={field.placeholder}
+                        className={C.input}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <p className={C.help}>
+                  只有填了才会覆盖世界自带的采样值；温度与最大 token 在「模型」页。
+                </p>
               </div>
             </>
           )}
