@@ -65,7 +65,12 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
     setLoading(true)
     try {
       const data = await fetchWorldGraph(campaignId)
-      setGraphData(data)
+      // 后端在没有图服务时会返回 {"nodes": [], "links": []}，但部分部署会给出 null，
+      // 这里统一成数组，避免下游 .map / .length 抛 "Cannot read properties of null"。
+      setGraphData({
+        nodes: Array.isArray(data?.nodes) ? data.nodes : [],
+        links: Array.isArray(data?.links) ? data.links : [],
+      })
     } catch {
       setGraphData({ nodes: [], links: [] })
     } finally {

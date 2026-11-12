@@ -381,7 +381,14 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
         maxDepth: config.max_depth,
         focus: splitList(previewFocus),
       })
-      setPreview(context)
+      setPreview({
+        ...context,
+        blocks: Array.isArray(context?.blocks) ? context.blocks : [],
+        stats: {
+          ...(context?.stats || {}),
+          excluded: Array.isArray(context?.stats?.excluded) ? context.stats.excluded : [],
+        },
+      })
     } catch (err) {
       reportError(err)
     }

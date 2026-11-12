@@ -21,7 +21,6 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
   const [error, setError] = useState(null)
 
   // 角色形象：本世界的角色 + 全局角色库，开局时可以随便挑一个。
-  const [worldCharacters, setWorldCharacters] = useState([])
   const [libraryCharacters, setLibraryCharacters] = useState([])
   const [characters, setCharacters] = useState(null)
   const [characterId, setCharacterId] = useState('')
@@ -45,7 +44,6 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
           seen.add(c.id)
           merged.push(c)
         })
-        setWorldCharacters(Array.isArray(scenarioList) ? scenarioList : [])
         setLibraryCharacters(Array.isArray(libraryList) ? libraryList : [])
         setCharacters(merged)
         const player = merged.find((c) => c.is_player) || merged[0]
@@ -92,7 +90,8 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     if (match) setLookId(match.id)
   }
   // 角色卡片的派生数据放在渲染外：map 里直接读构造好的字段，避免嵌套 JSX。
-  const characterChoices = characters.map((c) => {
+  const characterList = Array.isArray(characters) ? characters : []
+  const characterChoices = characterList.map((c) => {
     const art = (c.looks || []).find((l) => l.image_url) || (c.looks || [])[0] || null
     return {
       id: c.id,
@@ -262,7 +261,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     loadStepIntoLocalState(next, answers)
   }
 
-  if (characters === null) {
+  if (!Array.isArray(characters)) {
     return (
       <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
         载入角色…
@@ -322,7 +321,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                     onClick={() => setPickerOpen(true)}
                     className="px-5 py-2.5 rounded-xl border border-white/15 text-white/70 hover:text-white hover:border-white/40 text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
                   >
-                    {characters.length > 1 ? `换一个角色（共 ${characters.length} 个）` : '角色库快照'}
+                    {characterList.length > 1 ? `换一个角色（共 ${characterList.length} 个）` : '角色库快照'}
                   </button>
                   <span className="text-[10px] text-white/30">
                     {libraryIds.has(character.id) ? '来自角色库' : '本世界角色'}

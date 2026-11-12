@@ -350,7 +350,7 @@ function ExitRows({ world, value, onChange }) {
             <span className="text-[10px] text-white/30">去往地点</span>
             <select className={tinyInput} value={row.target_id || ''} onChange={(e) => update(index, { target_id: e.target.value })}>
               <option value="">选择地点</option>
-              {world.locations.map((location) => (
+              {(world?.locations || []).map((location) => (
                 <option key={location.id} value={location.id}>
                   {location.name}（{location.id}）
                 </option>
@@ -376,7 +376,7 @@ function ExitRows({ world, value, onChange }) {
             <span className="text-[10px] text-white/30">需要物品</span>
             <select className={tinyInput} value={row.requires_item_id || ''} onChange={(e) => update(index, { requires_item_id: e.target.value || null })}>
               <option value="">无</option>
-              {world.items.map((item) => (
+              {(world?.items || []).map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
@@ -417,11 +417,11 @@ function ConditionRows({ value, onChange, world }) {
     onChange(value.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   const options = (source) => {
     if (!world) return []
-    if (source === 'items') return world.items.map((entry) => [entry.id, entry.name])
+    if (source === 'items') return (world?.items || []).map((entry) => [entry.id, entry.name])
     if (source === 'doors') return world.doors.map((entry) => [entry.id, entry.name])
-    if (source === 'locations') return world.locations.map((entry) => [entry.id, entry.name])
+    if (source === 'locations') return (world?.locations || []).map((entry) => [entry.id, entry.name])
     if (source === 'quests') return world.quests.map((entry) => [entry.id, entry.title])
-    if (source === 'entities') return world.entities.map((entry) => [entry.id, entry.name])
+    if (source === 'entities') return (world?.entities || []).map((entry) => [entry.id, entry.name])
     return []
   }
   return (
@@ -521,11 +521,11 @@ function EffectRows({ value, onChange, world }) {
     onChange(value.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   const options = (source) => {
     if (!world) return []
-    if (source === 'items') return world.items.map((entry) => [entry.id, entry.name])
+    if (source === 'items') return (world?.items || []).map((entry) => [entry.id, entry.name])
     if (source === 'doors') return world.doors.map((entry) => [entry.id, entry.name])
-    if (source === 'locations') return world.locations.map((entry) => [entry.id, entry.name])
+    if (source === 'locations') return (world?.locations || []).map((entry) => [entry.id, entry.name])
     if (source === 'quests') return world.quests.map((entry) => [entry.id, entry.title])
-    if (source === 'entities') return world.entities.map((entry) => [entry.id, entry.name])
+    if (source === 'entities') return (world?.entities || []).map((entry) => [entry.id, entry.name])
     return []
   }
   return (
@@ -725,7 +725,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                 value={value.item_ids || []}
                 onChange={(e) => update({ item_ids: Array.from(e.target.selectedOptions).map((option) => option.value) })}
               >
-                {world.items.map((item) => (
+                {(world?.items || []).map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
@@ -740,7 +740,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                 value={value.npc_ids || []}
                 onChange={(e) => update({ npc_ids: Array.from(e.target.selectedOptions).map((option) => option.value) })}
               >
-                {world.entities.map((entity) => (
+                {(world?.entities || []).map((entity) => (
                   <option key={entity.id} value={entity.id}>
                     {entity.name}
                   </option>
@@ -863,7 +863,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               <FieldLabel>所在地点</FieldLabel>
               <select className={inputClass} value={value.location_id || ''} onChange={(e) => update({ location_id: e.target.value })}>
                 <option value="">选择地点</option>
-                {world.locations.map((location) => (
+                {(world?.locations || []).map((location) => (
                   <option key={location.id} value={location.id}>
                     {location.name}
                   </option>
@@ -874,7 +874,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               <FieldLabel>钥匙物品</FieldLabel>
               <select className={inputClass} value={value.key_item_id || ''} onChange={(e) => update({ key_item_id: e.target.value || null })}>
                 <option value="">无需钥匙</option>
-                {world.items.map((item) => (
+                {(world?.items || []).map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
@@ -924,7 +924,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               <FieldLabel>所在地点</FieldLabel>
               <select className={inputClass} value={value.location_id || ''} onChange={(e) => update({ location_id: e.target.value })}>
                 <option value="">选择地点</option>
-                {world.locations.map((location) => (
+                {(world?.locations || []).map((location) => (
                   <option key={location.id} value={location.id}>
                     {location.name}
                   </option>
@@ -1659,6 +1659,8 @@ function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
 }
 
 export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
+  // 后端的世界定义里，locations/items/entities 都可能是 null（旧存档或部分写入），
+  // 直接 .map 会抛 "Cannot read properties of null"，整页被 ErrorBoundary 接住。
   const [worlds, setWorlds] = useState([])
   const [worldId, setWorldId] = useState('')
   const [world, setWorld] = useState(null)
@@ -2615,7 +2617,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 <span className="text-[11px] text-white/30">地图上的玩家标记来自这份存档的权威状态；不会改变它。</span>
               </div>
 
-              {world.locations.length > 0 && (
+              {(world?.locations || []).length > 0 && (
                 <WorldMapGraph
                   worldId={worldId}
                   mapData={mapData}
@@ -2626,7 +2628,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 />
               )}
 
-              {world.locations.length === 0 && <EmptyHint>还没有地点。</EmptyHint>}
+              {(world?.locations || []).length === 0 && <EmptyHint>还没有地点。</EmptyHint>}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {((mapData && mapData.locations) || []).map((location) => (
