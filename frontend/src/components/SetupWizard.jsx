@@ -134,9 +134,10 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     () => interpolate(current?.prompt || '', answers),
     [current, answers],
   )
-  const isLast = !showCharacterStage
-    ? questionIndex === ordered.length - 1
-    : questionIndex === ordered.length - 1 && ordered.length > 0
+  // 最后一步 = 当前问题就是最后一条。角色舞台只是排在最前面的一步，
+  // 它不影响「问题是否问完」；旧写法在这里让单选问题的世界永远停在「下一步」，
+  // 按钮只切 step 不保存，追问一次就进不去。
+  const isLast = questionIndex === ordered.length - 1 && ordered.length > 0
   const optionByLabel = (label) =>
     (current?.options || []).find((o) => o.label === label) || null
 
@@ -208,11 +209,15 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     }
   }
 
-  const finish = async () => {
+  // extra：本次刚填的那条答案。React 的 setState 是异步的，handleNext 里
+  // 先 setAnswers(updated) 再 finish() 会读到旧的 answers，把空对象存进后端，
+  // 于是 needs_setup 永远是 true —— 每次进入都要重新走一遍初始化。
+  const finish = async (extra = null) => {
     setSubmitting(true)
     setError(null)
     try {
-      await saveSetupAnswers(campaignId, answers)
+      const payload = { ...answers, ...(extra || {}) }
+      await saveSetupAnswers(campaignId, payload)
       onComplete?.()
     } catch {
       setError('保存角色设定失败，请重试。')
@@ -266,7 +271,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
       return
     }
 
-    await finish()
+    await finish({ [current.var_name]: answer })
   }
 
   const handleBack = () => {
