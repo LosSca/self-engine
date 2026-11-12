@@ -59,9 +59,11 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
     >
       {open && (
         <>
-          <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-white/10">
-            <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/85">
-              {TITLES[active] || '面板'}
+          {/* 只留一条关闭条：标题由各面板自己画（它们原本就是模态写法，标题在正文里），
+              这里再画一遍就会出现两行一模一样的标题。 */}
+          <div className="flex-none flex items-center justify-between px-4 pt-3 pb-1">
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/45">
+              工具面板
             </div>
             <div className="flex items-center gap-1">
               <button

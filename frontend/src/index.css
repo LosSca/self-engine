@@ -116,3 +116,9 @@
   max-height: none !important;
   border-radius: 1rem;
 }
+/* 停靠区顶部已经有 ToolDock 画的标题栏，面板内部再画一遍就重复了。
+   各工具面板原本是模态写法：卡片第一个子块就是自己的标题行（标题 + 关闭按钮）。
+   停靠时把它藏掉，只保留标题下面那行说明和正文；弹窗形态不受影响。 */
+.tool-dock-host > div[class*="fixed"] > div > div:first-child {
+  padding-top: 0.25rem;
+}
