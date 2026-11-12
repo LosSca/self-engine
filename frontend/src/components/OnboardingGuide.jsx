@@ -1,19 +1,35 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X, ChevronRight, ChevronLeft, Check, HelpCircle } from 'lucide-react'
 
-const STORAGE_KEY = 'lunar_onboarding_v1'
+const STORAGE_KEY = 'lunar_onboarding_v2'
+const STORAGE_LEGACY = 'lunar_onboarding_v1'
 
 /**
- * 新手引导。三步走，每一步都指向边栏上的一个真实入口：
- * 1. 从首页开始（选一个世界类型）
- * 2. 进入游玩后先看角色档案
- * 3. 用背包 / 地图推进剧情
+ * 新手引导。每一步都指向边栏 / 界面上一个真实存在的入口；不弹遮罩（会挡住叙事），
+ * 而是嵌在边栏底部的卡片。进度存 localStorage，刷新不会从头再来。
  *
- * 设计取舍：
- * - 不做全屏遮罩浮层（会挡住正在读的叙事），而是嵌在边栏里的卡片；
- * - 进度存 localStorage，刷新页面不会从头再来；
- * - 用户可以随时点「跳过」永久关闭，也可以从边栏底部的问号重新打开。
+ * 五步覆盖从「选世界」到「把系统配置调顺手」的完整路径：
+ * 1. 先选一个世界（首页世界卡片）
+ * 2. 认识你的角色（边栏 角色档案）
+ * 3. 背包与地图（边栏 背包 / 世界地图）
+ * 4. 认识这个系统（讲清楚自指引擎由哪几块组成）
+ * 5. 把系统配置好（边栏 设置：模型、温度、内容策略…）
  */
+
+const SYSTEM_ITEMS = [
+  { icon: '🧭', name: '左侧栏', desc: '所有功能都收在这里，点开在右侧展开，不打断叙事' },
+  { icon: '✍️', name: '叙事引擎', desc: '每回合把行动、记忆、世界状态交给模型，续写下一段剧情' },
+  { icon: '🧠', name: '记忆与时序', desc: 'NPC 心智、记忆结晶、剧情进度都可查看、可干预' },
+  { icon: '🗺️', name: '世界编织', desc: '地点、势力、关系图在「世界工坊」里增删改' },
+]
+
+const CONFIG_ITEMS = [
+  { icon: '🎛️', name: '模型服务商', desc: '决定谁写故事：云端 / 本地 NInfer / 自定义兼容端点' },
+  { icon: '🌡️', name: '创造性（温度）', desc: '0 偏精准稳定，1 左右均衡，2 最天马行空' },
+  { icon: '📏', name: '最大 Token 数', desc: '单回合回复长度上限，短文 1024、长篇 4096 起' },
+  { icon: '🔒', name: '内容策略', desc: '标准走云端；NSFW 发给本地模型，内容不出本机' },
+  { icon: '⚔️', name: '战斗模式', desc: '无对抗场景可关闭，省掉战斗相关的模型调用' },
+]
 
 const STEPS = [
   {
@@ -22,6 +38,7 @@ const STEPS = [
     body: '首页有 7 种预设世界，也可以从空白开始搭建。选好之后就能创建情景、开一局。',
     target: null,
     hint: '在「首页」点任意世界卡片',
+    only: 'app',
   },
   {
     key: 'character',
@@ -37,15 +54,35 @@ const STEPS = [
     target: 'inventory',
     hint: '点左侧「背包」或「世界地图」',
   },
+  {
+    key: 'system',
+    title: '认识这个系统',
+    body: '这是个「自指引擎」：你的每个行动都写进记忆，再由模型续写成下一段剧情。它由四块组成——',
+    target: null,
+    hint: '看完点下面的「去配置系统」',
+    list: SYSTEM_ITEMS,
+  },
+  {
+    key: 'config',
+    title: '把系统配置好',
+    body: '左侧「系统 → 设置」里有五个真正影响体验的选项，按口味调一遍就够用了——',
+    target: 'settings',
+    hint: '点左侧「设置」逐项调整，最后点「应用设置」',
+    list: CONFIG_ITEMS,
+  },
 ]
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { step: 0, done: false, skipped: false }
+    const raw = localStorage.getItem(STORAGE_KEY) || ''
+    if (!raw) {
+      // v1 只有三步且没有系统/配置两步，清掉让老用户也能看到新内容
+      if (localStorage.getItem(STORAGE_LEGACY)) localStorage.removeItem(STORAGE_LEGACY)
+      return { step: 0, done: false, skipped: false }
+    }
     const parsed = JSON.parse(raw)
     return {
-      step: Math.min(Math.max(Number(parsed.step) || 0, 0), STEPS.length - 1),
+      step: Math.max(Number(parsed.step) || 0, 0),
       done: !!parsed.done,
       skipped: !!parsed.skipped,
     }
@@ -64,19 +101,22 @@ function saveState(state) {
 
 /**
  * @param {object} props
- * @param {boolean} props.collapsed 边栏是否收起（收起时不渲染卡片）
- * @param {string?} props.activeTool 当前打开的工具，用于在完成一步时自动前进
- * @param {() => void} [props.onHighlight] 高亮某个边栏条目（由 Sidebar 实现）
+ * @param {boolean} props.collapsed 边栏是否收起（收起时只渲染问号按钮）
+ * @param {string?} props.activeTool 当前打开的工具，用户真的点开时自动完成该步
+ * @param {(id: string|null) => void} [props.onHighlight] 高亮某个边栏条目（由 Sidebar 实现）
+ * @param {'app'|'play'} [props.variant] 游玩界面跳过「选世界」这一步
  */
 export default function OnboardingGuide({ collapsed, activeTool, onHighlight, variant = 'app' }) {
-  // 游玩界面里已经没有「选世界」这一步了，直接从角色档案讲起
-  const steps = useMemo(() => (variant === 'play' ? STEPS.slice(1) : STEPS), [variant])
+  const steps = useMemo(
+    () => (variant === 'play' ? STEPS.filter((s) => s.only !== 'app') : STEPS),
+    [variant],
+  )
   const [state, setState] = useState(loadState)
   const [showAgain, setShowAgain] = useState(false)
 
   useEffect(() => {
-    saveState(state)
-  }, [state])
+    saveState({ ...state, key: steps[state.step]?.key })
+  }, [state, steps])
 
   // 用户在引导指向某个工具时真的点开了它，就自动算作完成这一步。
   // 不用 effect 监听 activeTool（react-hooks/set-state-in-effect 禁止在 effect 里同步 setState），
@@ -106,6 +146,9 @@ export default function OnboardingGuide({ collapsed, activeTool, onHighlight, va
   const back = () => setState((s) => ({ ...s, step: Math.max(0, s.step - 1) }))
   const skip = () => setState((s) => ({ ...s, skipped: true, done: false }))
   const restart = () => setState({ step: 0, done: false, skipped: false })
+  const jumpToConfig = () => {
+    setState((s) => ({ ...s, step: Math.min(s.step + 1, steps.length - 1) }))
+  }
 
   const progress = useMemo(() => {
     const filled = state.done ? steps.length : state.step
@@ -153,7 +196,7 @@ export default function OnboardingGuide({ collapsed, activeTool, onHighlight, va
           {progress.map((filled, i) => (
             <span
               key={i}
-              className={`h-1.5 w-4 rounded-full transition-colors ${filled ? 'bg-cyan-300' : i === state.step ? 'bg-cyan-300/50' : 'bg-white/15'}`}
+              className={'h-1.5 w-4 rounded-full transition-colors ' + (filled ? 'bg-cyan-300' : i === state.step ? 'bg-cyan-300/50' : 'bg-white/15')}
             />
           ))}
         </div>
@@ -175,7 +218,7 @@ export default function OnboardingGuide({ collapsed, activeTool, onHighlight, va
         <>
           <p className="mb-1 text-xs font-bold text-white">引导完成</p>
           <p className="mb-2 text-[11px] leading-relaxed text-white/65">
-            左侧每个图标都是一个工具，点开就在右边展开。随时可以从这里重新打开这份引导。
+            左侧每个图标都是一个工具，点开就在右边展开。设置随时能在「系统 → 设置」里改，这份引导也能从这里重新打开。
           </p>
           <button
             type="button"
@@ -191,7 +234,34 @@ export default function OnboardingGuide({ collapsed, activeTool, onHighlight, va
             {state.step + 1}. {step.title}
           </p>
           <p className="mb-2 text-[11px] leading-relaxed text-white/65">{step.body}</p>
+
+          {step.list && (
+            <ul className="mb-2 space-y-1" data-testid={'onboarding-list-' + step.key}>
+              {step.list.map((it) => (
+                <li key={it.name} className="flex items-start gap-1.5 text-[10px] leading-relaxed">
+                  <span className="w-3.5 shrink-0 text-center">{it.icon}</span>
+                  <span className="text-white/75">
+                    <span className="font-semibold text-white/90">{it.name}</span>
+                    <span className="text-white/55"> · {it.desc}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <p className="mb-2 rounded-lg bg-black/30 px-2 py-1 text-[10px] text-cyan-200/80">{step.hint}</p>
+
+          {step.key === 'system' && (
+            <button
+              type="button"
+              onClick={jumpToConfig}
+              data-testid="onboarding-to-config"
+              className="mb-2 w-full rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 hover:bg-cyan-400/20 transition-colors"
+            >
+              去配置系统 →
+            </button>
+          )}
+
           <div className="flex items-center gap-1.5">
             <button
               type="button"
