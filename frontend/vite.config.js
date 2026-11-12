@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => {
             if (id.includes('zustand')) return 'vendor-state'
             // 图谱（force-graph + d3）只在打开地图时下载，别和游玩首屏绑在一起。
             if (/react-force-graph|force-graph|\/d3-|\/d3\/|internmap|delaunator|robust-predicates/.test(id)) {
-              return 'vendor-graph'
+              return 'vendor'
             }
             // Markdown 渲染链（remark/rehype/micromark 全家桶）单独成块。
             if (/react-markdown|remark-|rehype-|micromark|mdast|hast-util|unist|unified|vfile|bail|trough|devlop|comma-separated|decode-named|character-entities|property-information|space-separated|style-to-|html-url|zwitch|longest-streak|ccount|markdown-table|escape-string-regexp/.test(id)) {
