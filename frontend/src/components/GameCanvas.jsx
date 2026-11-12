@@ -479,7 +479,9 @@ export default function GameCanvas() {
         parts.push('（叙事模型不可用，以上为规则结果的机器描述，状态已提交。）')
       }
     } else if (result?.status === 'rejected') {
-      parts.push(`（${result.message || result.code || '行动被规则拒绝'}）`)
+      // 被拒绝时 message 已经写成「没听懂 + 现在能做什么」，直接给玩家看，
+      // 不要再套一层括号当成错误日志。
+      parts.push(result.message || `（${result.code || '行动被规则拒绝'}）`)
     } else if (result?.status === 'conflict') {
       parts.push(`（${result.message || '状态已变化，请重试'}）`)
     } else if (result?.status === 'duplicate') {
