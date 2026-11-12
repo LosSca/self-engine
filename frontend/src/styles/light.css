@@ -116,6 +116,11 @@ html[data-theme="light"] .bg-black\/40 { background-color: rgba(26, 26, 26, 0.05
 html[data-theme="light"] .focus\:border-white\/30:focus { border-color: rgba(26, 26, 26, 0.23); }
 html[data-theme="light"] .text-emerald-300 { color: #065f46; }
 html[data-theme="light"] .text-white\/50 { color: rgba(26, 26, 26, 0.65); }
+/* 边栏与说明文字用到的中间档：之前没映射，白字直接落在浅底上（对比度 1.18，等于看不见） */
+html[data-theme="light"] .text-white\/55 { color: rgba(26, 26, 26, 0.70); }
+html[data-theme="light"] .text-white\/65 { color: rgba(26, 26, 26, 0.78); }
+html[data-theme="light"] .text-white\/75 { color: rgba(26, 26, 26, 0.86); }
+html[data-theme="light"] .hover\:text-white\/75:hover { color: rgba(26, 26, 26, 0.86); }
 html[data-theme="light"] .border-rose-500\/40 { border-color: rgba(225, 29, 72, 0.4); }
 html[data-theme="light"] .bg-rose-400 { background-color: #e11d48; }
 html[data-theme="light"] .text-emerald-400 { color: #047857; }
@@ -207,6 +212,20 @@ html[data-theme="light"] .bg-\[\#071014\] {
   box-shadow: 0 30px 80px -40px rgba(24, 20, 16, 0.35);
 }
 
+/* 新手引导里的青色提示条 / 主按钮：深色下是「浅青字 + 亮青底黑字」，
+   纸面上必须换成墨字与更深的青，否则对比度只有 1 左右。 */
+html[data-theme="light"] .text-cyan-100 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-200 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-300 { color: #0b4d57; }
+html[data-theme="light"] .text-cyan-200\/80 { color: #0e5a66; }
+/* 引导卡片里的深色提示条：纸面上换成极浅青，避免深底压住墨字 */
+html[data-theme="light"] .bg-black\/30 { background-color: rgba(14, 124, 140, 0.10); }
+html[data-theme="light"] .bg-cyan-400\/90 { background-color: #0e7c8c; }
+html[data-theme="light"] .hover\:bg-cyan-300:hover { background-color: #0b6b79; }
+html[data-theme="light"] .bg-cyan-400\/\[0\.07\] { background-color: rgba(14, 124, 140, 0.08); }
+html[data-theme="light"] .border-cyan-400\/25 { border-color: rgba(14, 124, 140, 0.30); }
+html[data-theme="light"] .border-cyan-400\/40 { border-color: rgba(14, 124, 140, 0.45); }
+
 /* 卡片：白底卡片在纸面上就是白色，别被上面「深色底 → 浅底」的旧规则弄成深灰。 */
 html[data-theme="light"] .bg-white.rounded-3xl,
 html[data-theme="light"] .bg-white.rounded-2xl,
@@ -217,8 +236,18 @@ html[data-theme="light"] .bg-white.border-\[\#d8d4cc\] {
   background-color: #ffffff !important;
 }
 
-/* 主按钮：墨黑 → 中性深灰（仍是最重的一档，但不再是纯黑） */
-html[data-theme="light"] .bg-\[\#1a1a1a\] { background-color: #4a453f; }
-html[data-theme="light"] .hover\:bg-\[\#333\]:hover { background-color: #5c564e; }
-html[data-theme="light"] .border-\[\#1a1a1a\] { border-color: #4a453f; }
-html[data-theme="light"] .accent-\[\#1a1a1a\] { accent-color: #4a453f; }
+/* 实心按钮：纸面上用最深一档墨色，配纯白字，保证对比度（约 12:1） */
+html[data-theme="light"] .bg-\[\#1a1a1a\] { background-color: #262421; }
+html[data-theme="light"] .bg-\[\#1a1a1a\] .text-white { color: #ffffff; }
+/* 最淡的说明文字：纸面上提高到可读的深灰（原先接近对比度 2） */
+html[data-theme="light"] .text-\[\#a8a29a\] { color: #6f6a62; }
+
+/* 设置面板里白色选项 / 实心按钮上的白字必须压过面板根的墨色文字 */
+html[data-theme="light"] [data-testid="settings-panel"] .text-white,
+html[data-theme="light"] [data-testid="settings-panel"] .bg-\[\#1a1a1a\].text-white,
+html[data-theme="light"] .bg-\[\#262421\] { color: #ffffff; }
+html[data-theme="light"] .bg-\[\#1a1a1a\].text-white { color: #ffffff; }
+html[data-theme="light"] .bg-\[\#1a1a1a\].hover\:bg-\[\#333\]:hover { color: #ffffff; }
+html[data-theme="light"] .hover\:bg-\[\#333\]:hover { background-color: #3a3733; }
+html[data-theme="light"] .border-\[\#1a1a1a\] { border-color: #262421; }
+html[data-theme="light"] .accent-\[\#1a1a1a\] { accent-color: #262421; }

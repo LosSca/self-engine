@@ -218,7 +218,7 @@ export default function CharacterLibrary({ open, onClose }) {
             <button
               onClick={handleImport}
               disabled={busy}
-              className="px-4 py-2.5 rounded-xl border border-[#dcd8d0] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#a8a29a] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
+              className="px-4 py-2.5 rounded-xl border border-[#dcd8d0] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#6f6a62] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
             >
               收录世界角色
             </button>
@@ -242,7 +242,7 @@ export default function CharacterLibrary({ open, onClose }) {
           <aside className="space-y-3">
             <button
               onClick={() => setCreating((v) => !v)}
-              className="w-full p-4 rounded-2xl border border-dashed border-[#cfcabf] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#a8a29a] text-xs font-bold tracking-[0.15em] uppercase transition-all"
+              className="w-full p-4 rounded-2xl border border-dashed border-[#cfcabf] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#6f6a62] text-xs font-bold tracking-[0.15em] uppercase transition-all"
             >
               {creating ? '取消新建' : '+ 新建角色'}
             </button>
@@ -316,7 +316,7 @@ export default function CharacterLibrary({ open, onClose }) {
                       : 'bg-white/70 border-[#dcd8d0] hover:border-[#bdb7ad]')
                   }
                 >
-                  <span className="w-11 h-14 rounded-lg overflow-hidden bg-[#efede8] flex items-center justify-center shrink-0 text-[10px] text-[#a8a29a]">
+                  <span className="w-11 h-14 rounded-lg overflow-hidden bg-[#efede8] flex items-center justify-center shrink-0 text-[10px] text-[#6f6a62]">
                     {lk?.image_url ? (
                       <img src={lk.image_url} alt={c.name} className="w-full h-full object-cover" />
                     ) : '无图'}
@@ -344,7 +344,7 @@ export default function CharacterLibrary({ open, onClose }) {
                     {cover?.image_url ? (
                       <img src={cover.image_url} alt={selected.name} className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-[#a8a29a] text-[10px]">还没有立绘</span>
+                      <span className="text-[#6f6a62] text-[10px]">还没有立绘</span>
                     )}
                   </div>
                   <div className="flex-1 space-y-3">
@@ -401,7 +401,7 @@ export default function CharacterLibrary({ open, onClose }) {
                     <button
                       onClick={handleDelete}
                       disabled={busy}
-                      className="text-[10px] tracking-[0.2em] uppercase text-[#a8a29a] hover:text-rose-600 transition-colors"
+                      className="text-[10px] tracking-[0.2em] uppercase text-[#6f6a62] hover:text-rose-600 transition-colors"
                     >
                       删除这个角色
                     </button>
@@ -422,7 +422,7 @@ export default function CharacterLibrary({ open, onClose }) {
                             {l.image_url ? (
                               <img src={l.image_url} alt={l.expression} className="w-full h-full object-cover" />
                             ) : (
-                              <span className="text-[10px] text-[#a8a29a]">无图</span>
+                              <span className="text-[10px] text-[#6f6a62]">无图</span>
                             )}
                           </div>
                           <div className="p-2 space-y-1">
@@ -440,7 +440,7 @@ export default function CharacterLibrary({ open, onClose }) {
                             />
                             <button
                               onClick={() => handleDeleteLook(l.id)}
-                              className="text-[9px] tracking-widest uppercase text-[#a8a29a] hover:text-rose-600 transition-colors"
+                              className="text-[9px] tracking-widest uppercase text-[#6f6a62] hover:text-rose-600 transition-colors"
                             >
                               删除
                             </button>
@@ -476,7 +476,7 @@ export default function CharacterLibrary({ open, onClose }) {
                       <button
                         onClick={() => fileRef.current?.click()}
                         disabled={busy}
-                        className="px-4 py-2 rounded-xl border border-[#dcd8d0] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#a8a29a] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
+                        className="px-4 py-2 rounded-xl border border-[#dcd8d0] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#6f6a62] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
                       >
                         上传图片
                       </button>

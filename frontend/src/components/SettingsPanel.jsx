@@ -61,7 +61,7 @@ const C = {
     + 'placeholder-[#9a958c] focus:outline-none focus:border-[#8a857c] transition-colors',
   help: 'text-[10px] leading-relaxed text-[#8a857c] mt-2',
   primary:
-    'bg-[#4a453f] text-white hover:bg-[#5c564e] rounded-lg px-5 py-2.5 text-xs font-bold '
+    'bg-[#262421] text-white hover:bg-[#3a3733] rounded-lg px-5 py-2.5 text-xs font-bold '
     + 'tracking-[0.15em] transition-colors disabled:opacity-50',
   ghost:
     'border border-[#d8d4cc] text-[#5c574f] hover:border-[#8a857c] hover:text-[#1a1a1a] '
@@ -69,7 +69,7 @@ const C = {
   option: (on) => (
     'px-3 py-2.5 rounded-lg border text-xs font-semibold tracking-wide transition-colors '
     + (on
-      ? 'bg-[#4a453f] text-white border-[#4a453f]'
+      ? 'bg-[#262421] text-white border-[#262421]'
       : 'bg-white text-[#5c574f] border-[#d8d4cc] hover:border-[#8a857c]')
   ),
 }
@@ -343,7 +343,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     type="checkbox"
                     checked={refusalFallbackOn}
                     onChange={(e) => setRefusalFallbackOn(e.target.checked)}
-                    className="accent-[#4a453f]"
+                    className="accent-[#262421]"
                   />
                   上游拒绝时自动改走本地模型重试一次
                 </label>
@@ -378,7 +378,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     aria-checked={combat}
                     onClick={() => setCombat((v) => !v)}
                     className={`relative inline-flex shrink-0 items-center w-11 h-6 rounded-full border transition-colors ${
-                      combat ? 'bg-[#4a453f] border-[#4a453f]' : 'bg-[#e8e5de] border-[#d8d4cc]'
+                      combat ? 'bg-[#262421] border-[#262421]' : 'bg-[#e8e5de] border-[#d8d4cc]'
                     }`}
                   >
                     <span
@@ -450,9 +450,9 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   step={0.05}
                   value={temp}
                   onChange={(e) => setTemp(parseFloat(e.target.value))}
-                  className="w-full accent-[#4a453f]"
+                  className="w-full accent-[#262421]"
                 />
-                <div className="flex justify-between text-[9px] text-[#a8a29a] mt-1">
+                <div className="flex justify-between text-[9px] text-[#6f6a62] mt-1">
                   <span>精准</span><span>均衡</span><span>天马行空</span>
                 </div>
               </div>
@@ -469,9 +469,9 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   step={256}
                   value={tokens}
                   onChange={(e) => setTokens(parseInt(e.target.value, 10))}
-                  className="w-full accent-[#4a453f]"
+                  className="w-full accent-[#262421]"
                 />
-                <div className="flex justify-between text-[9px] text-[#a8a29a] mt-1">
+                <div className="flex justify-between text-[9px] text-[#6f6a62] mt-1">
                   <span>简短</span><span>标准</span><span>扩展</span>
                 </div>
               </div>
@@ -543,7 +543,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     type="checkbox"
                     checked={showRules}
                     onChange={(e) => setShowRules(e.target.checked)}
-                    className="accent-[#4a453f]"
+                    className="accent-[#262421]"
                   />
                   在叙事里点出判定结果（例如「察觉检定失败」）
                 </label>
@@ -552,7 +552,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     type="checkbox"
                     checked={allowOoc}
                     onChange={(e) => setAllowOoc(e.target.checked)}
-                    className="accent-[#4a453f]"
+                    className="accent-[#262421]"
                   />
                   允许场外提示（用 [] 包裹，用于提问或调整方向）
                 </label>
@@ -567,7 +567,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     { label: '频率惩罚', value: frequency, set: setFrequency, placeholder: '-2~2' },
                   ].map((field) => (
                     <label key={field.label} className="block">
-                      <span className="block text-[9px] uppercase tracking-[0.15em] text-[#a8a29a] mb-1">
+                      <span className="block text-[9px] uppercase tracking-[0.15em] text-[#6f6a62] mb-1">
                         {field.label}
                       </span>
                       <input
@@ -641,7 +641,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
         </div>
 
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-[#e2ded6]">
-          <span className="text-[10px] text-[#a8a29a]">
+          <span className="text-[10px] text-[#6f6a62]">
             设置保存到后端，换浏览器或换设备后依然生效。
           </span>
           <div className="flex items-center gap-2">
