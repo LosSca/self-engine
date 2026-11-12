@@ -274,7 +274,8 @@ class PlayConfig(BaseModel):
 class PlayConfigUpdate(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
-    mode: PlayMode
+    #: 缺省时沿用当前配置：前端只改写作指令时不必回读整套 play config。
+    mode: Optional[PlayMode] = None
     storyline: Optional[Storyline] = None
     max_depth: Optional[int] = Field(None, ge=0, le=9)
     context_budget_chars: Optional[int] = Field(None, ge=0, le=200000)

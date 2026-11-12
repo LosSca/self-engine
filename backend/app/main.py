@@ -117,6 +117,15 @@ class SettingsUpdateRequest(BaseModel):
     content_policy: str | None = None
     nsfw_model: str | None = None
     local_fallback_on_refusal: bool | None = None
+    # Browser-side preferences that used to live only in localStorage. They are
+    # stored as-is so another browser (or the desktop WebView) sees the same
+    # settings; nothing here is secret.
+    theme: str | None = None
+    nsfw_mode: bool | None = None
+    combat_enabled: bool | None = None
+    custom_model: str | None = None
+    #: User-authored narration/style directive applied to every world.
+    default_narrator_prompt: str | None = None
 
 
 def _normalise_policy(value: str | None) -> str | None:
@@ -148,12 +157,52 @@ def update_settings(req: SettingsUpdateRequest):
         _llm.config.local_fallback_on_refusal = bool(req.local_fallback_on_refusal)
     apply_model_policy(provider, req.model)
     model = _llm.config.orchestrator_model or _llm.config.primary_model
+    stored = _save_prefs(
+        {
+            "provider": provider.value,
+            "model": model,
+            "temperature": req.temperature,
+            "max_tokens": req.max_tokens,
+            "content_policy": policy or _llm.config.content_policy,
+            "nsfw_mode": req.nsfw_mode,
+            "local_fallback_on_refusal": req.local_fallback_on_refusal,
+            "combat_enabled": req.combat_enabled,
+            "theme": req.theme,
+            "custom_model": req.custom_model,
+            "default_narrator_prompt": req.default_narrator_prompt,
+        }
+    )
     return {
         "status": "ok",
         "provider": provider.value,
         "model": model,
         "content_policy": policy or _llm.config.content_policy,
+        "prefs": stored,
     }
+
+
+def _save_prefs(values: dict) -> dict:
+    """Persist the browser-side preferences, ignoring unchecked/absent fields."""
+    from app.db.prefs_store import get_prefs_store
+
+    cleaned = {k: v for k, v in values.items() if v is not None}
+    if not cleaned:
+        return {}
+    store = get_prefs_store()
+    try:
+        return store.put(cleaned)
+    finally:
+        store.close()
+
+
+def _load_prefs() -> dict:
+    from app.db.prefs_store import get_prefs_store
+
+    store = get_prefs_store()
+    try:
+        return store.all()
+    finally:
+        store.close()
 
 
 def _custom_route_model() -> str | None:
@@ -165,9 +214,36 @@ def _custom_route_model() -> str | None:
     return custom_default_model()
 
 
+class PrefsUpdateRequest(BaseModel):
+    """Partial write: only the keys the client sends are stored."""
+
+    model_config = {"extra": "allow"}
+
+
+@app.get("/api/prefs")
+def get_prefs():
+    return {"prefs": _load_prefs()}
+
+
+@app.post("/api/prefs")
+def update_prefs(req: PrefsUpdateRequest):
+    from app.db.prefs_store import ALLOWED_KEYS
+
+    # extra="allow" 的字段落在 __pydantic_extra__ 里，model_dump() 不会带出来，
+    # 所以要和声明字段合并后再按白名单过滤。
+    sent = {**req.model_dump(), **(req.__pydantic_extra__ or {})}
+    payload = {k: v for k, v in sent.items() if k in ALLOWED_KEYS}
+    if not payload:
+        raise HTTPException(status_code=400, detail="no known preference keys")
+    return {"status": "ok", "prefs": _save_prefs(payload)}
+
+
 @app.get("/api/settings")
 def get_settings():
+    prefs = _load_prefs()
     return {
+        "prefs": prefs,
+        "default_narrator_prompt": prefs.get("default_narrator_prompt", ""),
         "provider": _llm.config.primary_provider.value,
         "model": _llm.config.orchestrator_model or _llm.config.primary_model,
         "auxiliary_model": _llm.config.primary_model,

@@ -138,7 +138,14 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
                   onClose={closeAll}
                 />
               )}
-              {active === 'settings' && <SettingsPanel onClose={closeAll} />}
+              {active === 'settings' && (
+        <div className="p-3">
+          <SettingsPanel
+            onClose={closeAll}
+            activeScenarioId={context?.activeScenarioId || context?.scenarioId}
+          />
+        </div>
+      )}
               {active === 'preview' && <ActionPreviewPanel {...panelProps} campaignId={campaignId} onClose={closeAll} />}
             </div>
           </div>

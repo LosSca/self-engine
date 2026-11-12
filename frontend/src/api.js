@@ -1166,6 +1166,24 @@ export async function fetchContentPolicy() {
   return jsonOrThrow(r, '读取内容策略失败')
 }
 
+/**
+ * 用户设置的后端副本：让换浏览器、换设备（含桌面壳的独立 WebView 配置）
+ * 之后仍读到同一套服务商、温度、主题与写作指令。
+ */
+export async function fetchPrefs() {
+  const r = await fetch(`${BASE}/prefs`)
+  return jsonOrThrow(r, '读取设置失败')
+}
+
+export async function savePrefs(values) {
+  const r = await fetch(`${BASE}/prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values || {}),
+  })
+  return jsonOrThrow(r, '保存设置失败')
+}
+
 /** Which model answers each agent role (keys are never sent by the API). */
 export async function getAgents() {
   const r = await fetch(`${V1}/agents`)

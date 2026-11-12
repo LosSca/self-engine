@@ -63,7 +63,7 @@ function useCollapsed() {
  *   点条目直接在右侧面板区展开，而不是弹全屏模态。
  * - 首页 / 编辑器 / 角色库（variant="app"）：只做导航。
  */
-export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 0 }) {
+export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 0, onSettings, settingsOpen = false }) {
   const [collapsed, setCollapsed] = useCollapsed()
   // 新手引导会点亮对应的边栏条目，提示「下一步点这里」
   const [highlight, setHighlight] = useState(null)
@@ -84,6 +84,22 @@ export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 
         ? 'text-white bg-cyan-400/[0.12] border border-cyan-400/40 animate-pulse-slow'
         : 'text-white/75 hover:text-white hover:bg-white/[0.10] border border-transparent',
   ].join(' ')
+
+  // 首页/编辑器/角色库的边栏只做导航，但设置要随时能开，所以单独放一个底部条目。
+  const settingsItem = variant === 'app' && (
+    <button
+      type="button"
+      onClick={() => onSettings?.(!settingsOpen)}
+      title={collapsed ? '设置' : undefined}
+      aria-label="设置"
+      aria-pressed={settingsOpen}
+      data-testid="sidebar-settings"
+      className={itemClass(settingsOpen, 'settings-app')}
+    >
+      <Settings size={16} className="shrink-0" />
+      {!collapsed && <span className="text-xs font-medium tracking-wide truncate flex-1 text-left">设置</span>}
+    </button>
+  )
 
   const navItem = (to, Icon, label) => (
     <NavLink
@@ -177,6 +193,7 @@ export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 
       </nav>
 
       <div className="flex-none p-2 space-y-1">
+        {settingsItem}
         <OnboardingGuide collapsed={collapsed} activeTool={activeTool} onHighlight={setHighlight} variant={variant} />
         {variant === 'play' && (
           <button

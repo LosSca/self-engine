@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { fetchPrefs } from './api'
 
 const OPENAI_MODEL = 'gpt-5.6-sol'
 
@@ -214,5 +215,37 @@ export const useGameStore = create((set) => ({
         if (Object.keys(restored).length > 0) set(restored)
       }
     } catch {}
+  },
+
+  /**
+   * 后端保存的设置优先于 localStorage：换浏览器/换设备后依然生效。
+   * 只在用户从未在本机改过设置时合并，避免旧后端覆盖刚做的本地改动。
+   */
+  restoreServerSettings: async () => {
+    try {
+      const data = await fetchPrefs()
+      const prefs = data?.prefs || {}
+      const restored = {}
+      if (prefs.provider) restored.llmProvider = prefs.provider
+      if (prefs.model) restored.llmModel = prefs.model
+      if (prefs.custom_model) restored.llmModel = prefs.custom_model
+      if (prefs.temperature != null) restored.temperature = prefs.temperature
+      if (prefs.max_tokens != null) restored.maxTokens = prefs.max_tokens
+      if (prefs.combat_enabled != null) restored.combatEnabled = prefs.combat_enabled
+      if (prefs.nsfw_mode != null) restored.nsfwMode = !!prefs.nsfw_mode
+      if (prefs.local_fallback_on_refusal != null) {
+        restored.refusalFallback = !!prefs.local_fallback_on_refusal
+      }
+      if (Object.keys(restored).length === 0) return false
+      set(restored)
+      // 同步回 localStorage，离线时仍有值可读。
+      try {
+        const current = JSON.parse(localStorage.getItem('lunar_settings') || '{}')
+        localStorage.setItem('lunar_settings', JSON.stringify({ ...current, ...restored }))
+      } catch {}
+      return true
+    } catch {
+      return false
+    }
   },
 }))

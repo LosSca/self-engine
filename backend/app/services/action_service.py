@@ -63,6 +63,25 @@ from app.services.summary_service import SUMMARY_EVERY_TURNS, summarize
 logger = logging.getLogger(__name__)
 
 
+def default_narrator_prompt() -> str:
+    """用户写在设置里的全局写作/文风指令（没有时为空串）。
+
+    读的是同一个 sqlite 设置表，失败不影响叙事：设置只是风格偏好，
+    绝不能让一局游戏因为读设置出错而中断。
+    """
+    try:
+        from app.db.prefs_store import get_prefs_store
+
+        store = get_prefs_store()
+        try:
+            value = store.get("default_narrator_prompt", "")
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - style preferences are advisory
+        return ""
+    return value if isinstance(value, str) else ""
+
+
 def _now() -> str:
     return datetime.utcnow().isoformat()
 
@@ -361,8 +380,13 @@ class ActionService:
         prompt_parts = []
         if play is not None and play.preset is not None and play.preset.system_prompt:
             prompt_parts.append(play.preset.system_prompt)
-        if play is not None and play.config.narrator_prompt:
-            prompt_parts.append(play.config.narrator_prompt)
+        directive = play.config.narrator_prompt if play is not None else ""
+        if not directive:
+            # A world without its own directive inherits the global one the user
+            # writes in settings, so their voice follows them across worlds.
+            directive = default_narrator_prompt()
+        if directive:
+            prompt_parts.append(directive)
         if prompt_parts:
             options = {**(options or {}), "system_prompt": "\n\n".join(prompt_parts)}
         if not blocks:
