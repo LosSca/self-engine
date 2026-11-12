@@ -1229,6 +1229,45 @@ export async function fetchPrefs() {
   return jsonOrThrow(r, '读取设置失败')
 }
 
+// ------------------------------------------------------------ 模型服务商密钥
+// Keys are written to the backend and never read back: the list only says
+// whether one exists and where it came from (settings vs .env).
+export async function fetchProviders() {
+  const r = await fetch(`${BASE}/providers`)
+  const data = await jsonOrThrow(r, '读取模型服务商失败')
+  return Array.isArray(data?.providers) ? data.providers : []
+}
+
+export async function saveProvider(provider, { apiKey, baseUrl, model } = {}) {
+  const body = {}
+  if (apiKey !== undefined) body.api_key = apiKey
+  if (baseUrl !== undefined) body.base_url = baseUrl
+  if (model !== undefined) body.model = model
+  const r = await fetch(`${BASE}/providers/${encodeURIComponent(provider)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await jsonOrThrow(r, '保存密钥失败')
+  return Array.isArray(data?.providers) ? data.providers : []
+}
+
+export async function forgetProvider(provider) {
+  const r = await fetch(`${BASE}/providers/${encodeURIComponent(provider)}`, { method: 'DELETE' })
+  const data = await jsonOrThrow(r, '清除密钥失败')
+  return Array.isArray(data?.providers) ? data.providers : []
+}
+
+export async function testProvider(provider, model = '') {
+  const r = await fetch(`${BASE}/providers/${encodeURIComponent(provider)}/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: model || null }),
+  })
+  const data = await jsonOrThrow(r, '连接测试失败')
+  return data
+}
+
 export async function savePrefs(values) {
   const r = await fetch(`${BASE}/prefs`, {
     method: 'POST',

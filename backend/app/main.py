@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 
@@ -23,6 +23,15 @@ from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
 from app.api.routes_works import router as works_router
 from app.engines.llm_router import POLICY_CHOICES, LLMProvider, custom_route_available
+
+# 用户在设置页填的密钥优先落到 os.environ（litellm 读的就是它），
+# 必须在下面 include_router 之前执行：路由模块导入时会把 key 快照进常量。
+try:
+    from app.db.credential_store import apply_credentials
+
+    apply_credentials()
+except Exception:  # noqa: BLE001 - a broken credential row must not stop boot
+    logging.getLogger(__name__).warning("could not apply stored provider credentials", exc_info=True)
 
 app = FastAPI(title="Project Lunar", version="0.5.0")
 
@@ -264,3 +273,90 @@ def get_settings():
         "custom_route_available": custom_route_available(),
         "custom_model": _custom_route_model(),
     }
+
+
+class ProviderCredentialRequest(BaseModel):
+    """A key, an endpoint, or both. Omitted fields keep their stored value."""
+
+    api_key: str | None = Field(default=None, max_length=400)
+    base_url: str | None = Field(default=None, max_length=400)
+    model: str | None = Field(default=None, max_length=200)
+
+
+@app.get("/api/providers")
+def list_providers():
+    """Which providers can actually be reached, and why."""
+    from app.db.credential_store import status
+
+    return {"providers": status()}
+
+
+@app.post("/api/providers/{provider}")
+def save_provider(provider: str, req: ProviderCredentialRequest):
+    """Store a provider credential. The key is never returned."""
+    from app.db.credential_store import PROVIDERS, CredentialStore, apply_credentials, status
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    if req.base_url is not None and req.base_url.strip() and not req.base_url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="base_url 必须以 http:// 或 https:// 开头")
+    store = CredentialStore()
+    try:
+        store.put(
+            provider,
+            api_key=None if req.api_key is None else req.api_key.strip(),
+            base_url=None if req.base_url is None else req.base_url.strip(),
+            model=None if req.model is None else req.model.strip(),
+        )
+    finally:
+        store.close()
+    apply_credentials()
+    return {"status": "ok", "providers": status()}
+
+
+@app.delete("/api/providers/{provider}")
+def forget_provider(provider: str):
+    """Drop a stored credential; the shell environment (if any) takes over again."""
+    from app.db.credential_store import CredentialStore, PROVIDERS, status
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    store = CredentialStore()
+    try:
+        store.delete(provider)
+    finally:
+        store.close()
+    return {"status": "ok", "providers": status()}
+
+
+class ProviderTestRequest(BaseModel):
+    """Optional model override for the probe."""
+
+    model: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/api/providers/{provider}/test")
+async def test_provider(provider: str, req: ProviderTestRequest | None = None):
+    """Send one tiny prompt so the user learns whether the key actually works."""
+    from app.db.credential_store import PROVIDERS
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    try:
+        from app.engines.llm_router import LLMConfig, LLMRouter, LLMProvider
+
+        model = (req.model or "").strip() if req else ""
+        config = LLMConfig(
+            primary_provider=LLMProvider(provider),
+            primary_model=model or _llm.config.primary_model,
+            temperature=0.0,
+            max_tokens=16,
+        )
+        router = LLMRouter(config)
+        reply = await router.complete(
+            [{"role": "user", "content": "Reply with the single word: ok"}],
+            max_tokens=16,
+        )
+        return {"status": "ok", "reply": (reply or "").strip()[:120]}
+    except Exception as exc:  # noqa: BLE001 - the message is the whole point
+        return {"status": "error", "error": str(exc)[:400]}

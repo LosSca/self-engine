@@ -3,6 +3,7 @@ import { useGameStore } from '../store'
 import {
   updateCampaignSettings, updateContentPolicy, updateModelRoute, fetchContentPolicy,
   fetchPrefs, savePrefs, fetchPlayConfig, savePlayConfig,
+  fetchProviders, saveProvider, forgetProvider, testProvider,
 } from '../api'
 import { Settings, X, PenLine, Save } from 'lucide-react'
 import { THEME_LABELS, applyTheme, currentTheme } from '../lib/theme'
@@ -18,6 +19,15 @@ const PROVIDERS = [
   // configured base URL + key (.env CUSTOM_LLM_*), because there is nothing the
   // panel could fill in to make it work.
   { id: 'custom', label: '自定义兼容接口', models: [] },
+]
+
+// 设置页可直接填密钥的服务商；local/custom 还要地址，其它只要 key。
+const API_KEY_ROWS = [
+  { id: 'deepseek', label: 'DeepSeek' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'anthropic', label: 'Anthropic' },
+  { id: 'local', label: '本地 / 自建接口（OpenAI 兼容）' },
+  { id: 'custom', label: '自定义兼容接口' },
 ]
 
 const TABS = [
@@ -121,6 +131,12 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
   const [directive, setDirective] = useState('')
   const [worldDirective, setWorldDirective] = useState('')
   const [directiveNotice, setDirectiveNotice] = useState('')
+  // 模型密钥：存后端，不再只能改 .env。列表只说「有没有配」，不回显明文。
+  const [providers, setProviders] = useState([])
+  const [keyDraft, setKeyDraft] = useState({ deepseek: '', openai: '', anthropic: '', local: '', custom: '' })
+  const [urlDraft, setUrlDraft] = useState({ local: '', custom: '' })
+  const [providerBusy, setProviderBusy] = useState('')
+  const [providerMsg, setProviderMsg] = useState({ id: '', kind: '', text: '' })
 
   const availableProviders = customReady
     ? PROVIDERS
@@ -188,6 +204,76 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
       .catch(() => {})
     return () => { alive = false }
   }, [activeScenarioId])
+
+
+  // 服务商清单：每个 provider 是否已配置、密钥来源、地址。
+  const reloadProviders = async () => {
+    try {
+      const list = await fetchProviders()
+      setProviders(list)
+      const urls = { local: '', custom: '' }
+      list.forEach((p) => {
+        if (p && (p.id === 'local' || p.id === 'custom')) urls[p.id] = p.base_url || ''
+      })
+      setUrlDraft(urls)
+    } catch {
+      // 后端不可用时保持空列表，面板仍然可以改其它设置。
+    }
+  }
+
+  useEffect(() => { reloadProviders() }, [])
+
+  const providerRow = (id) => providers.find((p) => p && p.id === id) || null
+
+  const saveKey = async (id) => {
+    setProviderBusy(id)
+    setProviderMsg({ id: '', kind: '', text: '' })
+    try {
+      const body = {}
+      const key = (keyDraft[id] || '').trim()
+      if (key) body.apiKey = key
+      if (id === 'local' || id === 'custom') body.baseUrl = (urlDraft[id] || '').trim()
+      const list = await saveProvider(id, body)
+      setProviders(list)
+      setKeyDraft((d) => ({ ...d, [id]: '' }))
+      setProviderMsg({ id, kind: 'ok', text: '已保存，下一次请求就会用它。' })
+    } catch (err) {
+      setProviderMsg({ id, kind: 'err', text: err?.message || '保存失败' })
+    } finally {
+      setProviderBusy('')
+    }
+  }
+
+  const clearKey = async (id) => {
+    setProviderBusy(id)
+    setProviderMsg({ id: '', kind: '', text: '' })
+    try {
+      const list = await forgetProvider(id)
+      setProviders(list)
+      setProviderMsg({ id, kind: 'ok', text: '已清除保存在本机的密钥。' })
+    } catch (err) {
+      setProviderMsg({ id, kind: 'err', text: err?.message || '清除失败' })
+    } finally {
+      setProviderBusy('')
+    }
+  }
+
+  const probeKey = async (id) => {
+    setProviderBusy(id)
+    setProviderMsg({ id, kind: '', text: '正在测试…' })
+    try {
+      const res = await testProvider(id, providerRow(id)?.model || '')
+      if (res && res.status === 'ok') {
+        setProviderMsg({ id, kind: 'ok', text: `连接成功：${res.reply || 'ok'}` })
+      } else {
+        setProviderMsg({ id, kind: 'err', text: res?.error || '服务端没有返回内容' })
+      }
+    } catch (err) {
+      setProviderMsg({ id, kind: 'err', text: err?.message || '测试失败' })
+    } finally {
+      setProviderBusy('')
+    }
+  }
 
   const handleSave = async () => {
     const token = apiToken.trim()
@@ -436,6 +522,99 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   </p>
                 )}
                 {modelError && <p className="text-[10px] leading-relaxed mt-2 text-rose-600">{modelError}</p>}
+              </div>
+
+              <div className="border-t border-[#e2ded6] pt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#8a857c]">API 密钥</span>
+                  <span className="text-[10px] text-[#6f6a62]">只存在本机后端，不回显明文</span>
+                </div>
+                <div className="space-y-2">
+                  {API_KEY_ROWS.map((row) => {
+                    const info = providerRow(row.id)
+                    const configured = !!info?.configured
+                    const source = info?.source === 'settings' ? '设置页填写' : (info?.source || '')
+                    const busyRow = providerBusy === row.id
+                    const msg = providerMsg.id === row.id ? providerMsg : null
+                    const withUrl = row.id === 'local' || row.id === 'custom'
+                    const typedKey = (keyDraft[row.id] || '').trim()
+                    const typedUrl = (urlDraft[row.id] || '').trim()
+                    return (
+                      <div key={row.id} data-testid={`provider-row-${row.id}`} className={`${C.card} rounded-lg border p-3`}>
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold truncate">{row.label}</div>
+                            <div className="text-[10px] text-[#6f6a62] truncate">
+                              {configured ? `已配置 · ${info?.preview || ''} · ${source}` : '尚未配置'}
+                            </div>
+                          </div>
+                          <span className={`text-[9px] px-2 py-0.5 rounded-full border ${configured ? 'border-emerald-300 text-emerald-800 bg-emerald-50' : 'border-[#d8d4cc] text-[#8a857c]'}`}>
+                            {configured ? '可用' : '缺密钥'}
+                          </span>
+                        </div>
+                        <input
+                          type="password"
+                          value={keyDraft[row.id] || ''}
+                          onChange={(e) => setKeyDraft((d) => ({ ...d, [row.id]: e.target.value }))}
+                          placeholder={configured ? '替换密钥（留空则不改）' : '粘贴 API Key'}
+                          spellCheck={false}
+                          autoComplete="off"
+                          data-testid={`provider-key-${row.id}`}
+                          className={C.input}
+                        />
+                        {withUrl && (
+                          <input
+                            type="text"
+                            value={urlDraft[row.id] || ''}
+                            onChange={(e) => setUrlDraft((d) => ({ ...d, [row.id]: e.target.value }))}
+                            placeholder="http://127.0.0.1:8094/v1"
+                            spellCheck={false}
+                            autoComplete="off"
+                            data-testid={`provider-url-${row.id}`}
+                            className={`${C.input} mt-2`}
+                          />
+                        )}
+                        <div className="flex flex-wrap items-center gap-2 mt-2">
+                          <button
+                            type="button"
+                            disabled={busyRow || (!typedKey && !(withUrl && typedUrl))}
+                            onClick={() => saveKey(row.id)}
+                            data-testid={`provider-save-${row.id}`}
+                            className="text-[10px] px-2.5 py-1 rounded-md bg-[#262421] text-white disabled:opacity-40"
+                          >
+                            保存
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyRow || !configured}
+                            onClick={() => probeKey(row.id)}
+                            data-testid={`provider-test-${row.id}`}
+                            className="text-[10px] px-2.5 py-1 rounded-md border border-[#d8d4cc] text-[#4a453f] disabled:opacity-40"
+                          >
+                            测试连接
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyRow || !configured || info?.source !== 'settings'}
+                            onClick={() => clearKey(row.id)}
+                            data-testid={`provider-clear-${row.id}`}
+                            className="text-[10px] px-2.5 py-1 rounded-md text-[#8a857c] disabled:opacity-30"
+                          >
+                            清除
+                          </button>
+                        </div>
+                        {msg && msg.text && (
+                          <p className={`text-[10px] leading-relaxed mt-2 ${msg.kind === 'err' ? 'text-rose-600' : 'text-[#4a6b57]'}`}>
+                            {msg.text}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                <p className={C.help}>
+                  填了就用这里的密钥；清空后回落到 .env 里的同名变量。Ollama 这类本地服务把地址填成 http://127.0.0.1:11434/v1 即可。
+                </p>
               </div>
 
               <div>
