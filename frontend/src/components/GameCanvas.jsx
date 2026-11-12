@@ -21,7 +21,8 @@ import {
   getAgentCalls,
   deleteTraces,
   fetchCampaignCharacter,
-  fetchCampaignStory,
+  fetchCampaignSuggestions,
+fetchCampaignStory,
 } from '../api'
 import ActionInput from './ActionInput'
 import Sidebar from './Sidebar'
@@ -314,6 +315,25 @@ export default function GameCanvas() {
     loadTraces()
   }, [activeCampaignId])
 
+  // Choices for the state we are in right now. The turn response carries the
+  // next three, but the first screen of a campaign has no turn yet, and a
+  // refusal leaves none either — so ask the engine for the current ones.
+  useEffect(() => {
+    if (!activeCampaignId) return undefined
+    let alive = true
+    fetchCampaignSuggestions(activeCampaignId)
+      .then((list) => {
+        if (!alive) return
+        setSuggestions((current) => (current.length ? current : list))
+      })
+      .catch(() => {
+        /* hints are advisory: a missing list just means no buttons */
+      })
+    return () => {
+      alive = false
+    }
+  }, [activeCampaignId])
+
   const resolvedOpening = scenarioView?.opening_narrative ?? activeScenario?.opening_narrative ?? ''
   const resolvedTone = scenarioView?.tone_instructions ?? activeScenario?.tone_instructions ?? ''
   const canRerollOpening =
@@ -544,8 +564,13 @@ export default function GameCanvas() {
       const result = await submitTextAction(activeCampaignId, spoken)
       applyEngineResult(result)
       // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
+      // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
       if (Array.isArray(result?.suggestions) && result.suggestions.length) {
         setSuggestions(result.suggestions)
+      } else {
+        // 被拒或这一轮没给建议时，别把玩家丢在空输入框前：按当前状态再取一次。
+        const fallback = await fetchCampaignSuggestions(activeCampaignId).catch(() => [])
+        if (fallback.length) setSuggestions(fallback)
       }
     } catch (err) {
       appendMessage({

@@ -39,6 +39,7 @@ from app.models.game import (
     WorldDefinition,
 )
 from app.services import authoring_session, interaction_planner, starter_worlds, world_service
+from app.api.routes_game import _game_state_db_path
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
 from app.services.knowledge_service import build_context
@@ -48,7 +49,7 @@ from app.models.knowledge import ScenarioPlayContext
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services import narrator_factory
 from app.services.text_action_service import TextActionService
-from app.services.suggestions import suggestions_for_result
+from app.services.suggestions import hints_from_state, suggestions_for_result
 
 logger = logging.getLogger(__name__)
 
@@ -1965,6 +1966,63 @@ def _load_world_for_campaign(campaign_id: str):
     except Exception:
         logger.debug("campaign world unavailable for %s", campaign_id, exc_info=True)
         return None
+
+def _scenario_bound_world(campaign_id: str, game_store: GameStateStore):
+    """A world already authored for this campaign's scenario, if any."""
+    try:
+        with _get_scenario_store() as store:
+            campaign = store.get_campaign(campaign_id)
+        if campaign is None:
+            return None
+        for summary in game_store.list_worlds():
+            if summary.get("scenario_id") != campaign.scenario_id:
+                continue
+            return game_store.get_world(summary["world_id"])
+    except Exception:  # noqa: BLE001 - hints are advisory
+        logger.debug("scenario world unavailable for %s", campaign_id, exc_info=True)
+    return None
+
+
+def _current_hints(campaign_id: str) -> list[Dict[str, Any]]:
+    """Three options for the campaign's present state (no turn required).
+
+    suggestions_for_result needs a finished ActionResult, so the very first
+    screen of a campaign had no choices at all: the player had to guess at
+    an empty input box. This reads the state the engine already committed
+    and asks the same builder.
+    """
+    try:
+        with GameStateStore(_game_state_db_path()) as game_store:
+            state = game_store.get_state(campaign_id)
+            world = None
+            if state is None:
+                # Nothing committed yet (the first screen of a campaign). The
+                # rules lane would bind a world on the first turn; here we only
+                # look, so no world is created just to draw three buttons.
+                location_id, inventory = "", []
+                world = _scenario_bound_world(campaign_id, game_store)
+            else:
+                location_id = getattr(state, "location_id", "") or ""
+                inventory = list((getattr(state, "inventory", None) or {}).keys())
+                world_id = getattr(state, "world_id", "") or ""
+                world = game_store.get_world(world_id) if world_id else None
+        return hints_from_state(
+            location_id=location_id,
+            inventory=inventory,
+            characters=_campaign_characters(campaign_id),
+            world=world,
+            language=_campaign_language(campaign_id),
+        )
+    except Exception:  # noqa: BLE001 - hints must never break a screen
+        logger.debug("hints unavailable for %s", campaign_id, exc_info=True)
+        return []
+
+
+@router.get("/campaigns/{campaign_id}/suggestions")
+def campaign_suggestions(campaign_id: str) -> Dict[str, Any]:
+    """What the player could do next, for the state the campaign is in now."""
+    return {"suggestions": _current_hints(campaign_id)}
+
 
 class TextActionBody(BaseModel):
     """A free-text utterance resolved into the structured action lane."""

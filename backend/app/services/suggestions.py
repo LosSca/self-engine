@@ -167,36 +167,37 @@ def build_suggestions(
             action = f"{verb}{place}" if zh else f"{verb} {place}"
             candidates.append({"action": action, "speech": "", "target": place})
 
-    # Always-available fallbacks: these never reference a name, so they stay
-    # valid even in an empty room with no cast.
-    if location:
-        if zh:
-            candidates.append({"action": f"在{location}里仔细查看四周", "speech": "", "target": location})
-        else:
-            candidates.append({"action": f"Look around {location} carefully", "speech": "", "target": location})
+    # Always-available fallbacks. An earlier version offered "停下来，先理清
+    # 眼前的处境" and "耐心等一等" — the rule lane resolves neither, so every
+    # click came straight back as a rejection, which reads as dead air. The
+    # parser always accepts a bare "look" (and 查看/观察/打量…), so the floor
+    # is now that one act, phrased against the real room name when there is one.
     if zh:
-        candidates.append({"action": "停下来，先理清眼前的处境", "speech": ""})
-        candidates.append({"action": "", "speech": "我现在应该做什么？"})
-        candidates.append({"action": "耐心等一等，看看会有什么变化", "speech": ""})
+        candidates.append({"action": "看", "speech": ""})
+        if location:
+            candidates.append({"action": f"查看{location}", "speech": ""})
+        candidates.append({"action": "观察四周", "speech": ""})
     else:
-        candidates.append({"action": "Stop and take stock of the situation", "speech": ""})
-        candidates.append({"action": "", "speech": "What should I do now?"})
-        candidates.append({"action": "Wait and see what changes", "speech": ""})
+        candidates.append({"action": "look", "speech": ""})
+        if location:
+            candidates.append({"action": f"Look around {location}", "speech": ""})
+        candidates.append({"action": "Take a careful look around", "speech": ""})
 
     picks = _dedupe(candidates)
     # A sparse world (no cast, no exits) can still leave fewer than three; the
     # UI promises three buttons, so fill the tail with neutral acts.
+    # Same rule for the tail: only acts the engine accepts without a target.
     filler = (
         [
-            {"action": "记下眼前所见，理一理思路", "speech": ""},
-            {"action": "", "speech": "这里还有别的路吗？"},
-            {"action": "在原地歇一会儿", "speech": ""},
+            {"action": "看看脚下", "speech": ""},
+            {"action": "环顾四周", "speech": ""},
+            {"action": "观察近处", "speech": ""},
         ]
         if zh
         else [
-            {"action": "Note what you see and think it over", "speech": ""},
-            {"action": "", "speech": "Is there another way out of here?"},
-            {"action": "Rest for a moment", "speech": ""},
+            {"action": "Glance around", "speech": ""},
+            {"action": "Look down at your feet", "speech": ""},
+            {"action": "Study everything nearby", "speech": ""},
         ]
     )
     # Appended directly instead of through _dedupe: that helper stops at
@@ -307,6 +308,57 @@ def suggestions_for_result(
         items=item_names,
         language=language,
     )
+
+def hints_from_state(
+    *,
+    location_id: str = "",
+    inventory: Iterable[str] = (),
+    characters: Iterable[tuple[str, str]] = (),
+    world: Any = None,
+    language: str = "zh",
+) -> list[Suggestion]:
+    """Three options for the state a campaign is in *right now*.
+
+    The turn-scoped builder above needs a finished ActionResult. The opening
+    screen has no turn yet, and the client wants buttons before the first
+    action, so this takes the raw state fields instead (location id, held item
+    ids, cast) and resolves names from the world document.
+    """
+    areas: list[str] = []
+    location_name = ""
+    item_names: list[str] = []
+    try:
+        locations = {loc.id: loc for loc in getattr(world, "locations", []) or []}
+        # A campaign that has not taken a turn yet has no location id; the
+        # world it will start in is the only meaningful answer.
+        here = locations.get(location_id) or next(
+            iter([loc for loc in locations.values()]), None
+        )
+        if here is not None:
+            location_name = here.name
+            for exit_def in getattr(here, "exits", []) or []:
+                label = (getattr(exit_def, "label", "") or "").strip()
+                target = locations.get(exit_def.target_id)
+                if label:
+                    areas.append(label)
+                elif target is not None:
+                    areas.append(target.name)
+        items_by_id = {item.id: item for item in getattr(world, "items", []) or []}
+        item_names = [
+            items_by_id[key].name for key in inventory if key in items_by_id
+        ]
+    except Exception:  # noqa: BLE001 - hints are advisory
+        location_name, areas, item_names = "", [], []
+    present = list(characters)
+    return build_suggestions(
+        location=location_name,
+        exits=areas,
+        characters=[name for name, _ in present],
+        character_ids=[entity_id for _, entity_id in present],
+        items=item_names,
+        language=language,
+    )
+
 
 def fingerprint(items: Sequence[Suggestion]) -> str:
     """Stable id for a suggestion set (lets the client dedupe/track picks)."""

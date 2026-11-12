@@ -790,6 +790,15 @@ export async function previewAction(campaignId, { action, targetId = null, param
   return jsonOrThrow(r, '预演行动失败')
 }
 
+// Three options for the state the campaign is in right now — no turn needed.
+// The opening screen uses this so the first thing a player sees is never an
+// empty input box.
+export async function fetchCampaignSuggestions(campaignId) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/suggestions`)
+  const data = await jsonOrThrow(r, '读取可选行动失败')
+  return Array.isArray(data?.suggestions) ? data.suggestions : []
+}
+
 export async function fetchCampaignStory(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/story`)
   return jsonOrThrow(r, '读取故事线进度失败')
