@@ -2549,7 +2549,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 <button
                   onClick={generateAiWorld}
                   disabled={aiWorldBusy || !aiWorldPrompt.trim()}
-                  className="self-start px-4 py-2 rounded-xl bg-cyan-400 text-black text-xs font-bold hover:bg-cyan-300 disabled:opacity-40"
+                  className="self-start px-4 py-2 rounded-xl bg-[#0e7c8c] text-white text-xs font-bold hover:bg-[#0b6b79] disabled:opacity-40"
                 >
                   {aiWorldBusy ? '生成中…' : 'AI 生成并保存世界'}
                 </button>
@@ -2574,7 +2574,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   <button
                     onClick={generateAiWorld}
                     disabled={aiWorldBusy || !aiWorldPrompt.trim()}
-                    className="px-4 py-2 rounded-xl bg-cyan-400 text-black text-xs font-bold hover:bg-cyan-300 disabled:opacity-40"
+                    className="px-4 py-2 rounded-xl bg-[#0e7c8c] text-white text-xs font-bold hover:bg-[#0b6b79] disabled:opacity-40"
                   >
                     {aiWorldBusy ? '生成中…' : 'AI 生成并保存世界'}
                   </button>

@@ -269,3 +269,12 @@ html[data-theme="light"] .bg-\[\#1a1a1a\].hover\:bg-\[\#333\]:hover { color: #ff
 html[data-theme="light"] .hover\:bg-\[\#333\]:hover { background-color: #3a3733; }
 html[data-theme="light"] .border-\[\#1a1a1a\] { border-color: #262421; }
 html[data-theme="light"] .accent-\[\#1a1a1a\] { accent-color: #262421; }
+/* 停靠面板里不少组件仍按深色模态写（bg-neutral-950/95 + text-white/*）。
+   纸白主题下卡片已被 .tool-dock-host 抬成浅色，深底必须一起改亮，否则白字落在白底上。 */
+html[data-theme="light"] .bg-neutral-950\/95,
+html[data-theme="light"] .bg-neutral-950\/90,
+html[data-theme="light"] .bg-neutral-950,
+html[data-theme="light"] .bg-neutral-900\/95,
+html[data-theme="light"] .bg-neutral-900 { background-color: #fbfaf8; }
+html[data-theme="light"] .border-white\/10 { border-color: #e2ded6; }
+html[data-theme="light"] .shadow-2xl { box-shadow: 0 18px 40px -28px rgba(24, 20, 16, 0.35); }

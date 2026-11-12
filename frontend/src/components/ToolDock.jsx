@@ -46,7 +46,9 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
   const active = tool || lastTool
 
   const closeAll = () => onClose?.()
-  const panelProps = { open: false }
+  // 面板是「open 为 false 就 return null」的模态写法；停靠时它们必须真的处于打开态，
+  // 否则停靠区只剩标题栏（右侧栏一片空白）。
+  const panelProps = { open: true }
 
   return (
     <aside

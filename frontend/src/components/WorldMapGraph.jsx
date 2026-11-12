@@ -140,11 +140,16 @@ export default function WorldMapGraph({
   const [panning, setPanning] = useState(false)
 
   useEffect(() => {
-    if (!campaignId) {
-      setCursor(null)
-      return undefined
-    }
     let cancelled = false
+    if (!campaignId) {
+      // 没有战役就不去取状态；清空游标放到微任务里，避免在 effect 同步阶段触发级联渲染。
+      queueMicrotask(() => {
+        if (!cancelled) setCursor(null)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
     fetchCampaignEngineState(campaignId)
       .then((state) => {
         if (cancelled) return
@@ -516,14 +521,14 @@ export default function WorldMapGraph({
         <div className="absolute right-5 top-5 w-14 h-14 rounded-full border border-[#dcd8d0] bg-[#ffffff] flex items-center justify-center pointer-events-none">
           <div className="text-center leading-none">
             <div className="text-[10px] font-mono text-[#5c574f]">N</div>
-            <div className="text-lg text-emerald-200">↑</div>
+            <div className="text-lg text-[#2f6b4f]">↑</div>
           </div>
         </div>
         <div className="absolute right-5 bottom-4 flex items-center gap-2 pointer-events-none">
           <div className="h-px w-20 bg-white/35" />
           <span className="text-[9px] font-mono text-[#8a857c]">1 GRID ≈ 1 REGION STEP</span>
         </div>
-        <div className="absolute left-3 bottom-3 rounded-lg border border-[#e4e0d8] bg-[#f6f5f1]/55 px-2 py-1 text-[10px] font-mono text-[#1a1a1a]/35">
+        <div className="absolute left-3 bottom-3 rounded-lg border border-[#e4e0d8] bg-[#f6f5f1]/85 px-2 py-1 text-[10px] font-mono text-[#4a453f]">
           拖拽地点移动 · 空白拖拽平移 · 滚轮缩放 · 双击编辑
         </div>
       </div>

@@ -56,17 +56,17 @@ export default function StoryProgressPanel({ open, onClose, story, engineBound, 
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-white font-bold text-sm tracking-wide">剧情进度</h2>
-            <p className="text-[11px] text-white/35 mt-1">
+            <p className="text-[11px] text-white/55 mt-1">
               {engineBound ? '由规则引擎按权威状态推进，只读' : '本战役未绑定世界，暂无故事线'}
             </p>
           </div>
-          <button onClick={onClose} className="text-white/40 hover:text-white text-xs">
+          <button onClick={onClose} className="text-white/65 hover:text-white text-xs">
             关闭
           </button>
         </div>
 
         {!engineBound || !story || story.mode !== 'storyline' ? (
-          <p className="text-xs text-white/35">
+          <p className="text-xs text-white/65">
             这个战役运行在自由模式下，没有预设故事线。可以在故事线工作台里给场景配置主线、分支和事件包。
           </p>
         ) : (
