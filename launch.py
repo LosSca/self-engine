@@ -108,13 +108,47 @@ def display_host(host: str) -> str:
     return DEFAULT_HOST if host in WILDCARD_HOSTS else host
 
 
-def frontend_url(host: str, prod: bool = False) -> str:
-    return "http://%s:%d" % (display_host(host), PROD_PORT if prod else FRONTEND_PORT)
+def frontend_url(host: str, prod: bool = False, port: int | None = None) -> str:
+    return "http://%s:%d" % (display_host(host), port or frontend_port(prod))
 
 
 def frontend_port(prod: bool) -> int:
     """--prod 由自带静态服务器托管（4173），开发模式才是 vite dev 的 5173。"""
     return PROD_PORT if prod else FRONTEND_PORT
+
+
+def free_frontend_port(preferred: int, attempts: int = 20) -> int | None:
+    """从 preferred 起找一个空闲端口（5173 → 5174 → 5175 …）。
+
+    为什么要顺延而不是失败：开发机上 5173 常被别的项目长期占着（本机就是这样，
+    一个 three.js 游戏常驻 5173）。旧行为是「端口有人 ⇒ 认为前端已在运行」，
+    于是启动器把浏览器指到别人的页面上，用户看到的就成了“双击没启动、只打开个网页”。
+    """
+    for offset in range(attempts):
+        candidate = preferred + offset
+        if not port_open(candidate):
+            return candidate
+    return None
+
+
+def is_our_page(port: int) -> bool:
+    """端口上跑的是不是本项目的页面（而不是别人的站点）。
+
+    判据只用最小事实：首页里有我们的挂载根节点 #root，且挂的是 /src/main.jsx
+    （vite dev）或带项目标识（serve-dist 托管的构建产物）。端口没人 → False；
+    是别人的页面 → False，调用方据此改用顺延端口，绝不把用户带去陌生站点。
+    """
+    if not port_open(port):
+        return False
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=2.0) as resp:
+            body = resp.read(8000).decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    lowered = body.lower()
+    if 'id="root"' not in lowered:
+        return False
+    return "/src/main.jsx" in lowered or "自指引擎" in body or "self-reference" in lowered
 
 
 def is_lan_ipv4(ip: str) -> bool:
@@ -225,7 +259,7 @@ def node_exe() -> str:
     return shutil.which("node") or "node"
 
 
-def frontend_command(host: str, prod: bool) -> list[str]:
+def frontend_command(host: str, prod: bool, port: int | None = None) -> list[str]:
     """开发模式跑 vite dev；--prod 用 scripts/serve-dist.mjs 托管 frontend/dist。
 
     为什么 --prod 不用 vite preview：preview 是一串中间件，任何一处插件顺序变化都可能
@@ -245,13 +279,15 @@ def frontend_command(host: str, prod: bool) -> list[str]:
             str(PROD_PORT),
             "http://%s:%d" % (display_host(host), BACKEND_PORT),
         ]
-    return npm_command(["run", "dev", "--", "--host", host, "--port", str(FRONTEND_PORT), "--strictPort"])
+    return npm_command(["run", "dev", "--", "--host", host, "--port", str(port or FRONTEND_PORT)])
 
-def service_command(kind: str, py: str, host: str, prod: bool, debug: bool) -> tuple[list[str], Path]:
+def service_command(
+    kind: str, py: str, host: str, prod: bool, debug: bool, port: int | None = None
+) -> tuple[list[str], Path]:
     """单个服务的启动命令与工作目录。"""
     if kind == "backend":
         return backend_command(py, host, debug), BACKEND
-    return frontend_command(host, prod), FRONTEND
+    return frontend_command(host, prod, port), FRONTEND
 
 
 def writable_dir(path: Path) -> bool:
@@ -290,13 +326,13 @@ def log_path(kind: str) -> Path:
 
 
 def spawn_service(
-    kind: str, py: str, host: str, prod: bool, debug: bool, no_window: bool
+    kind: str, py: str, host: str, prod: bool, debug: bool, no_window: bool, port: int | None = None
 ) -> subprocess.Popen:
     """启动一个服务进程。默认开独立窗口（关闭窗口即停止该服务），--no-window 时写日志。"""
     label = LABELS[kind]
     env = child_env(debug)
     if no_window:
-        cmd, cwd = service_command(kind, py, host, prod, debug)
+        cmd, cwd = service_command(kind, py, host, prod, debug, port)
         path = log_path(kind)
         handle = open(path, "ab", buffering=0)  # noqa: SIM115 - 生命周期交给子进程
         say("  · %s -> %s" % (label, path))
@@ -304,6 +340,8 @@ def spawn_service(
 
     # 自我重启：参数以列表传进去，不经过 cmd.exe。
     relaunch = [sys.executable, str(Path(__file__).resolve()), "--run-" + kind, "--host", host]
+    if port:
+        relaunch += ["--port", str(port)]
     if prod:
         relaunch.append("--prod")
     if debug:
@@ -353,7 +391,7 @@ def tail_log(path: Path, max_lines: int = 12) -> list[str]:
     return lines[-max_lines:]
 
 
-def run_service(kind: str, host: str, prod: bool, debug: bool) -> int:
+def run_service(kind: str, host: str, prod: bool, debug: bool, port: int | None = None) -> int:
     """在独立控制台窗口内实际运行一个服务，退出后停住窗口以便查看报错。"""
     label = LABELS[kind]
     try:  # 只在真正的控制台里有效；重定向时会抛异常，忽略即可。
@@ -364,7 +402,7 @@ def run_service(kind: str, host: str, prod: bool, debug: bool) -> int:
         pass
 
     py = find_python() or sys.executable
-    cmd, cwd = service_command(kind, py, host, prod, debug)
+    cmd, cwd = service_command(kind, py, host, prod, debug, port)
     say("=" * 44)
     say(" 自指引擎 · %s" % label)
     say("=" * 44)
@@ -513,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run-frontend", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     # --mobile 只是 --host 0.0.0.0 的别名；显式给了 --host 时以 --host 为准。
@@ -531,7 +570,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_backend:
         return run_service("backend", host, args.prod, args.debug)
     if args.run_frontend:
-        return run_service("frontend", host, args.prod, args.debug)
+        return run_service("frontend", host, args.prod, args.debug, args.port)
 
     say(BANNER)
 
@@ -542,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     say("[环境] 解释器: %s" % py)
     say("[环境] 后端目录: %s" % BACKEND)
     say("[环境] 前端目录: %s" % FRONTEND)
-    say("[环境] 模式: %s（%s）" % ("预览构建产物" if args.prod else "开发服务器", frontend_url(host, args.prod) if not args.frontend_only else "-"))
+    say("[环境] 模式: %s" % ("预览构建产物" if args.prod else "开发服务器"))
     say("[环境] 绑定地址: %s" % host)
 
     want_backend = not args.frontend_only
@@ -568,6 +607,8 @@ def main(argv: list[str] | None = None) -> int:
     children: list[subprocess.Popen] = []
     started_backend = False
     started_frontend = False
+    # 前端实际使用的端口：被别的程序占用时顺延。--prod 也允许顺延（4173 → 4174 …）。
+    fe_port: int | None = None
 
     # ---- 后端 ----
     if want_backend:
@@ -582,14 +623,26 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- 前端 ----
     if want_frontend:
-        if port_open(frontend_port(args.prod)):
-            say("[2/3] 前端已在运行: %s" % frontend_url(host, args.prod))
+        preferred = args.port or frontend_port(args.prod)
+        if is_our_page(preferred):
+            fe_port = preferred
+            say("[2/3] 前端已在运行: %s" % frontend_url(host, args.prod, fe_port))
         else:
+            if port_open(preferred):
+                # 端口被人占着但不是本项目：绝不把浏览器指过去，换成顺延端口。
+                say("[2/3] 端口 %d 已被其他程序占用（不是本项目页面），改用下一个空闲端口" % preferred)
+            picked = free_frontend_port(preferred)
+            if picked is None:
+                say("[错误] 从 %d 起连续 20 个端口都被占用，无法启动前端。" % preferred)
+                return 1
+            fe_port = picked
             say(
                 "[2/3] 启动前端: %s（%s，host=%s）"
-                % (frontend_url(host, args.prod), "serve-dist" if args.prod else "vite dev", host)
+                % (frontend_url(host, args.prod, fe_port), "serve-dist" if args.prod else "vite dev", host)
             )
-            children.append(spawn_service("frontend", py, host, args.prod, args.debug, args.no_window))
+            children.append(
+                spawn_service("frontend", py, host, args.prod, args.debug, args.no_window, fe_port)
+            )
             started_frontend = True
     else:
         say("[2/3] 跳过前端（--backend-only）")
@@ -603,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             ok = False
     if started_frontend and ok:
         say("[3/3] 等待前端就绪")
-        if not wait_until(lambda: port_open(frontend_port(args.prod)), 120):
+        if not wait_until(lambda: is_our_page(fe_port or frontend_port(args.prod)), 120):
             print_failure_help("前端", "frontend", show_log=args.no_window)
             ok = False
 
@@ -619,7 +672,7 @@ def main(argv: list[str] | None = None) -> int:
     say("========================================")
     say("  已就绪：")
     if want_frontend:
-        say("  前端    %s" % frontend_url(host, args.prod))
+        say("  前端    %s" % frontend_url(host, args.prod, fe_port))
     if want_backend:
         say("  后端API http://%s:%d/docs" % (display_host(host), BACKEND_PORT))
         say("  健康检查 %s" % HEALTH_URL)
@@ -629,26 +682,28 @@ def main(argv: list[str] | None = None) -> int:
     if host not in WILDCARD_HOSTS and host != DEFAULT_HOST:
         say(
             "  局域网  前端 http://%s:%d  后端 http://%s:%d/docs"
-            % (host, frontend_port(args.prod), host, BACKEND_PORT)
+            % (host, fe_port or frontend_port(args.prod), host, BACKEND_PORT)
         )
     elif host in WILDCARD_HOSTS:
         addrs = lan_ipv4_addresses()
         say("  局域网/手机访问（同一 WiFi 下）：")
         if addrs:
             for ip in addrs:
-                say("    前端    http://%s:%d" % (ip, frontend_port(args.prod)))
+                say("    前端    http://%s:%d" % (ip, fe_port or frontend_port(args.prod)))
             say("    后端API http://%s:%d/docs" % (addrs[0], BACKEND_PORT))
             say("    手机浏览器打开上面的“前端”地址即可；首次访问若被拦截，")
             say("    请在 Windows 防火墙里允许 python.exe / node.exe 访问“专用网络”。")
         else:
             say("    没有找到 192.168./10./172.16-31 网段的 IPv4 地址，可能是没连局域网。")
             say("    可先执行 ipconfig 确认本机地址，再用 --host 0.0.0.0 重试。")
+    if want_frontend and fe_port is not None and fe_port != frontend_port(args.prod):
+        say("  说明    默认端口 %d 被其他程序占用，本次前端跑在 %d" % (frontend_port(args.prod), fe_port))
     say("========================================")
     say("关闭对应终端窗口即可停止服务。")
     say()
 
     if want_frontend and not args.no_browser and not args.no_window:
-        webbrowser.open(frontend_url(host, args.prod))
+        webbrowser.open(frontend_url(host, args.prod, fe_port))
 
     if args.no_window:
         # 前台模式：本进程即“看门狗”，Ctrl+C 时一并结束子进程。
