@@ -15,7 +15,7 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def scenario_id(client):
-    res = client.post("/api/scenarios/", json={"title": "雾港", "language": "zh"})
+    res = client.post("/api/scenarios/", json={"title": "雾港", "language": "zh", "opening_narrative": "雾港的钟敲了十三下。"})
     assert res.status_code == 201, res.text
     return res.json()["id"]
 

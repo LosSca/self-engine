@@ -2,6 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import DEFAULT_OPENING as OPENING
 from tests.support import village_world_data
 
 API = "/api/v1"
@@ -200,7 +201,7 @@ def test_story_endpoint_reports_free_mode_by_default(client):
 
 
 def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
-    created = client.post("/api/scenarios/", json={"title": "Story lines", "language": "zh"})
+    created = client.post("/api/scenarios/", json={"title": "Story lines", "language": "zh", "opening_narrative": OPENING})
     assert created.status_code == 201, created.text
     scenario_id = created.json()["id"]
     lines = [
@@ -494,7 +495,7 @@ def test_ai_world_generation_without_model_is_503(client, monkeypatch):
 
 
 def test_story_endpoint_reports_armed_and_fired_packs(client):
-    created = client.post("/api/scenarios/", json={"title": "Packs", "language": "zh"})
+    created = client.post("/api/scenarios/", json={"title": "Packs", "language": "zh", "opening_narrative": OPENING})
     assert created.status_code == 201, created.text
     scenario_id = created.json()["id"]
     payload = village_world_data()

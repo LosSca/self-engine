@@ -137,14 +137,14 @@ const TABS = [
 ]
 
 const inputClass =
-  'w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30'
+  'w-full bg-[#f3f1ec] border border-[#e4e0d8] rounded-xl px-3 py-2 text-sm text-[#1a1a1a] placeholder:text-[#a8a29a] focus:outline-none focus:border-white/30'
 const tinyInput =
-  'bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-white/30'
+  'bg-[#f3f1ec] border border-[#e4e0d8] rounded-lg px-2 py-1 text-xs text-[#1a1a1a] placeholder:text-[#a8a29a] focus:outline-none focus:border-white/30'
 const primaryButton =
   'px-5 py-2 rounded-xl bg-white text-black text-xs font-bold tracking-[0.15em] hover:bg-gray-200 disabled:opacity-50'
 const ghostButton =
-  'px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white'
-const dangerButton = 'text-[10px] text-white/30 hover:text-rose-400 tracking-[0.15em] uppercase'
+  'px-4 py-2 rounded-xl border border-[#e4e0d8] text-[#5c574f] text-xs hover:border-white/30 hover:text-[#1a1a1a]'
+const dangerButton = 'text-[10px] text-[#8a857c] hover:text-rose-400 tracking-[0.15em] uppercase'
 
 function splitList(text) {
   return String(text)
@@ -169,7 +169,7 @@ function showValue(value) {
 
 function FieldLabel({ children }) {
   return (
-    <span className="block text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 mb-2">
+    <span className="block text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mb-2">
       {children}
     </span>
   )
@@ -183,7 +183,7 @@ function TabButton({ active, children, onClick }) {
         'px-4 py-2 rounded-xl text-xs font-bold tracking-[0.15em] transition-all border ' +
         (active
           ? 'bg-white text-black border-white'
-          : 'bg-white/5 text-white/60 border-white/5 hover:border-white/20 hover:text-white')
+          : 'bg-[#f3f1ec] text-[#5c574f] border-[#eae6de] hover:border-[#dcd8d0] hover:text-[#1a1a1a]')
       }
     >
       {children}
@@ -192,12 +192,12 @@ function TabButton({ active, children, onClick }) {
 }
 
 function SectionNote({ children }) {
-  return <p className="text-xs text-white/40 leading-relaxed max-w-3xl">{children}</p>
+  return <p className="text-xs text-[#8a857c] leading-relaxed max-w-3xl">{children}</p>
 }
 
 function EmptyHint({ children }) {
   return (
-    <div className="rounded-2xl border border-dashed border-white/10 py-10 text-center text-white/30 text-xs">
+    <div className="rounded-2xl border border-dashed border-[#e4e0d8] py-10 text-center text-[#8a857c] text-xs">
       {children}
     </div>
   )
@@ -205,8 +205,8 @@ function EmptyHint({ children }) {
 
 function Badge({ children, tone = 'muted' }) {
   const tones = {
-    muted: 'border-white/10 text-white/40',
-    accent: 'border-white/30 text-white/70',
+    muted: 'border-[#e4e0d8] text-[#8a857c]',
+    accent: 'border-white/30 text-[#3a3630]',
     warn: 'border-amber-400/40 text-amber-300',
     bad: 'border-rose-400/40 text-rose-300',
     good: 'border-emerald-400/40 text-emerald-300',
@@ -328,7 +328,7 @@ function demoWorldTemplate(scenarioId, worldId) {
 }
 function RowShell({ children, onRemove }) {
   return (
-    <div className="flex flex-wrap items-end gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-2">
+    <div className="flex flex-wrap items-end gap-2 rounded-xl border border-[#e4e0d8] bg-[#fbfaf7] p-2">
       {children}
       {onRemove && (
         <button onClick={onRemove} className={dangerButton + ' pb-2'}>
@@ -347,7 +347,7 @@ function ExitRows({ world, value, onChange }) {
       {value.map((row, index) => (
         <RowShell key={index} onRemove={() => onChange(value.filter((_, i) => i !== index))}>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] text-white/30">去往地点</span>
+            <span className="text-[10px] text-[#8a857c]">去往地点</span>
             <select className={tinyInput} value={row.target_id || ''} onChange={(e) => update(index, { target_id: e.target.value })}>
               <option value="">选择地点</option>
               {(world?.locations || []).map((location) => (
@@ -358,11 +358,11 @@ function ExitRows({ world, value, onChange }) {
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] text-white/30">方位</span>
+            <span className="text-[10px] text-[#8a857c]">方位</span>
             <input className={tinyInput + ' w-20'} value={row.label || ''} onChange={(e) => update(index, { label: e.target.value })} placeholder="北" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] text-white/30">经过的门</span>
+            <span className="text-[10px] text-[#8a857c]">经过的门</span>
             <select className={tinyInput} value={row.door_id || ''} onChange={(e) => update(index, { door_id: e.target.value || null })}>
               <option value="">无</option>
               {world.doors.map((door) => (
@@ -373,7 +373,7 @@ function ExitRows({ world, value, onChange }) {
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] text-white/30">需要物品</span>
+            <span className="text-[10px] text-[#8a857c]">需要物品</span>
             <select className={tinyInput} value={row.requires_item_id || ''} onChange={(e) => update(index, { requires_item_id: e.target.value || null })}>
               <option value="">无</option>
               {(world?.items || []).map((item) => (
@@ -387,7 +387,7 @@ function ExitRows({ world, value, onChange }) {
       ))}
       <button
         onClick={() => onChange([...value, { target_id: '', label: '', door_id: null, requires_item_id: null }])}
-        className="self-start text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+        className="self-start text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
       >
         + 添加出口
       </button>
@@ -487,7 +487,7 @@ function ConditionRows({ value, onChange, world }) {
       })}
       <button
         onClick={() => onChange([...value, { kind: 'flag', target: '', op: 'eq', value: true }])}
-        className="self-start text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+        className="self-start text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
       >
         + 添加条件
       </button>
@@ -598,7 +598,7 @@ function EffectRows({ value, onChange, world }) {
       })}
       <button
         onClick={() => onChange([...value, { kind: 'set_flag', target: '', value: true, amount: 1 }])}
-        className="self-start text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+        className="self-start text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
       >
         + 添加效果
       </button>
@@ -634,7 +634,7 @@ function ObjectiveRows({ value, onChange }) {
       ))}
       <button
         onClick={() => onChange([...value, { id: '', kind: 'obtain_item', target: '', required_count: 1, description: '' }])}
-        className="self-start text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+        className="self-start text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
       >
         + 添加目标
       </button>
@@ -654,7 +654,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
   const kind = editor.kind
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 flex flex-col gap-4">
+    <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-5 flex flex-col gap-4">
       {kind === 'location' && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -787,7 +787,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               <FieldLabel>标签（逗号分隔）</FieldLabel>
               <input className={inputClass} value={(value.tags || []).join(', ')} onChange={(e) => update({ tags: splitList(e.target.value) })} />
             </label>
-            <label className="flex items-center gap-2 text-xs text-white/60 mt-6">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f] mt-6">
               <input type="checkbox" checked={Boolean(value.stackable)} onChange={(e) => update({ stackable: e.target.checked })} />
               可堆叠
             </label>
@@ -839,7 +839,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
               />
             </label>
           </div>
-          <label className="flex items-center gap-2 text-xs text-white/60">
+          <label className="flex items-center gap-2 text-xs text-[#5c574f]">
             <input type="checkbox" checked={Boolean(value.consumable)} onChange={(e) => update({ consumable: e.target.checked })} />
             使用后消耗一个
           </label>
@@ -881,11 +881,11 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-2 text-xs text-white/60 mt-6">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f] mt-6">
               <input type="checkbox" checked={Boolean(value.locked)} onChange={(e) => update({ locked: e.target.checked })} />
               上锁
             </label>
-            <label className="flex items-center gap-2 text-xs text-white/60 mt-6">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f] mt-6">
               <input type="checkbox" checked={Boolean(value.consumes_key)} onChange={(e) => update({ consumes_key: e.target.checked })} />
               消耗钥匙
             </label>
@@ -972,7 +972,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                 placeholder="iron_key, potion"
               />
             </label>
-            <label className="flex items-center gap-2 text-xs text-white/60 mt-6">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f] mt-6">
               <input type="checkbox" checked={Boolean(value.hostile)} onChange={(e) => update({ hostile: e.target.checked })} />
               敌对
             </label>
@@ -1031,7 +1031,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-2 text-xs text-white/60 mt-6">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f] mt-6">
               <input type="checkbox" checked={Boolean(value.enabled)} onChange={(e) => update({ enabled: e.target.checked })} />
               启用
             </label>
@@ -1097,18 +1097,18 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                     { label: '', conditions: [], effects: [], followup_events: [] },
                   ],
                 })}
-                className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
               >
                 + 添加分支
               </button>
             </div>
             {(value.branches || []).length === 0 && (
-              <p className="text-xs text-white/30">没有分支时只执行基础效果。</p>
+              <p className="text-xs text-[#8a857c]">没有分支时只执行基础效果。</p>
             )}
             {(value.branches || []).map((branch, index) => (
-              <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3 mb-3">
+              <div key={index} className="rounded-xl border border-[#e4e0d8] p-3 flex flex-col gap-3 mb-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-mono text-white/30">分支 {index + 1}</span>
+                  <span className="text-[10px] font-mono text-[#8a857c]">分支 {index + 1}</span>
                   <div className="flex-1" />
                   <button
                     onClick={() => update({
@@ -1168,15 +1168,15 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                     { id: '', label: '', effects: [] },
                   ],
                 })}
-                className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
               >
                 + 添加选项
               </button>
             </div>
             {(value.choices || []).map((option, index) => (
-              <div key={index} className="rounded-xl border border-white/10 p-3 flex flex-col gap-3 mb-3">
+              <div key={index} className="rounded-xl border border-[#e4e0d8] p-3 flex flex-col gap-3 mb-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-mono text-white/30">选项 {index + 1}</span>
+                  <span className="text-[10px] font-mono text-[#8a857c]">选项 {index + 1}</span>
                   <div className="flex-1" />
                   <button
                     onClick={() => update({
@@ -1250,11 +1250,11 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
             <textarea className={inputClass + ' min-h-[70px]'} value={value.description || ''} onChange={(e) => update({ description: e.target.value })} />
           </label>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <label className="flex items-center gap-2 text-xs text-white/60">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f]">
               <input type="checkbox" checked={Boolean(value.enabled)} onChange={(e) => update({ enabled: e.target.checked })} />
               启用
             </label>
-            <label className="flex items-center gap-2 text-xs text-white/60">
+            <label className="flex items-center gap-2 text-xs text-[#5c574f]">
               <input type="checkbox" checked={value.auto_accept !== false} onChange={(e) => update({ auto_accept: e.target.checked })} />
               满足条件时自动接受
             </label>
@@ -1279,8 +1279,8 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                       className={
                         'text-[10px] font-mono rounded-full px-2 py-1 border transition ' +
                         (picked
-                          ? 'border-white/40 text-white bg-white/10'
-                          : 'border-white/10 text-white/40 hover:text-white/70')
+                          ? 'border-white/40 text-[#1a1a1a] bg-[#efede8]'
+                          : 'border-[#e4e0d8] text-[#8a857c] hover:text-[#3a3630]')
                       }
                     >
                       {other.title || other.id}
@@ -1288,7 +1288,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
                   )
                 })}
               {(world?.quests || []).filter((other) => other.id !== value.id).length === 0 && (
-                <span className="text-[10px] text-white/30">（没有其他任务可选）</span>
+                <span className="text-[10px] text-[#8a857c]">（没有其他任务可选）</span>
               )}
             </div>
           </div>
@@ -1362,7 +1362,7 @@ function ResourceForm({ editor, world, onChange, onSave, onCancel, saving }) {
         <button onClick={onCancel} className={ghostButton}>
           取消
         </button>
-        <span className="text-[10px] text-white/30">
+        <span className="text-[10px] text-[#8a857c]">
           保存时服务端会做结构与引用校验，校验不通过不会写入。
         </span>
       </div>
@@ -1544,12 +1544,12 @@ function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
         传闻与个人猜测永远不进正史。判定全部来自确定性代码，模型只负责把一句话说成提案。
       </SectionNote>
 
-      {!worldId && <p className="text-xs text-white/40">先选择一个世界。</p>}
+      {!worldId && <p className="text-xs text-[#8a857c]">先选择一个世界。</p>}
 
       {worldId && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+        <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-white">提交一条声称</span>
+            <span className="text-sm font-bold text-[#1a1a1a]">提交一条声称</span>
             {pendingCount > 0 && <Badge tone="warn">{pendingCount} 条待定</Badge>}
             {world?.world_id && <Badge tone="muted">{world.world_id}</Badge>}
           </div>
@@ -1567,16 +1567,16 @@ function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
             <button className={primaryButton} onClick={() => propose(true)} disabled={busy || !draft.trim()}>
               提案并尝试自动采纳
             </button>
-            <span className="text-[10px] text-white/30">自动采纳只接受高置信度且校验通过的正史类事实</span>
+            <span className="text-[10px] text-[#8a857c]">自动采纳只接受高置信度且校验通过的正史类事实</span>
           </div>
           {error && <p className="text-xs text-red-300">{error}</p>}
         </div>
       )}
 
       {report && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-2">
+        <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-white">本次推演结果</span>
+            <span className="text-sm font-bold text-[#1a1a1a]">本次推演结果</span>
             <Badge tone="good">采纳 {(report.committed || []).length}</Badge>
             <Badge tone="warn">待定 {(report.pending || []).length}</Badge>
             <Badge tone="bad">驳回 {(report.rejected || []).length}</Badge>
@@ -1588,7 +1588,7 @@ function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
             </ul>
           )}
           {(report.warnings || []).length > 0 && (
-            <ul className="text-[11px] text-white/50 list-disc list-inside">
+            <ul className="text-[11px] text-[#5c574f] list-disc list-inside">
               {(report.warnings || []).map((line, i) => <li key={`rw-${i}`}>{line}</li>)}
             </ul>
           )}
@@ -1597,31 +1597,31 @@ function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
       )}
 
       {worldId && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-bold text-white">提案记录</span>
+            <span className="text-sm font-bold text-[#1a1a1a]">提案记录</span>
             <button className={ghostButton} onClick={load} disabled={busy}>
               刷新
             </button>
           </div>
           {rows.length === 0 ? (
-            <p className="text-xs text-white/40">还没有提案。这个世界的断言历史会出现在这里，包括被驳回的。</p>
+            <p className="text-xs text-[#8a857c]">还没有提案。这个世界的断言历史会出现在这里，包括被驳回的。</p>
           ) : (
             <div className="flex flex-col gap-2">
               {rows.map((row) => {
                 const [label, tone] = EVOLUTION_STATUS[row.status] || [row.status, 'muted']
                 return (
-                  <div key={row.id} className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2 flex flex-col gap-1">
+                  <div key={row.id} className="rounded-xl border border-[#e4e0d8] bg-[#fbfaf7] px-3 py-2 flex flex-col gap-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge tone={tone}>{label}</Badge>
-                      <span className="text-[10px] font-mono text-white/30">{row.kind}</span>
+                      <span className="text-[10px] font-mono text-[#8a857c]">{row.kind}</span>
                       {row.canonical && <Badge tone="accent">正史</Badge>}
                       {row.personal && <Badge tone="muted">个人</Badge>}
-                      <span className="text-[10px] font-mono text-white/25 ml-auto">
+                      <span className="text-[10px] font-mono text-[#a8a29a] ml-auto">
                         {(Number(row.confidence) || 0).toFixed(2)}
                       </span>
                     </div>
-                    <div className="text-xs text-white/75">{row.statement}</div>
+                    <div className="text-xs text-[#1a1a1a]/75">{row.statement}</div>
                     {row.error && <div className="text-[10px] text-rose-300/80">{row.error}</div>}
                     {(row.warnings || []).length > 0 && (
                       <ul className="text-[10px] text-amber-300/70 list-disc list-inside">
@@ -1644,7 +1644,7 @@ function EvolutionStudio({ worldId, campaignId, world, onCommitted }) {
                         >
                           驳回
                         </button>
-                        <span className="text-[10px] text-white/30">采纳前会重新校验整份世界文档</span>
+                        <span className="text-[10px] text-[#8a857c]">采纳前会重新校验整份世界文档</span>
                       </div>
                     )}
                   </div>
@@ -2300,13 +2300,13 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       )}
 
       {kind === 'action' && builtinActions.length > 0 && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-          <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 mb-2">
+        <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
+          <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mb-2">
             内置行动（由引擎提供，无需配置）
           </div>
           <div className="flex flex-wrap gap-2">
             {builtinActions.map((spec) => (
-              <span key={spec.name} className="text-[10px] font-mono text-white/40 border border-white/10 rounded-full px-2 py-0.5">
+              <span key={spec.name} className="text-[10px] font-mono text-[#8a857c] border border-[#e4e0d8] rounded-full px-2 py-0.5">
                 {spec.label} · {spec.name} · 目标 {spec.target}
               </span>
             ))}
@@ -2319,11 +2319,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
       {items.map((item) => (
         <div
           key={item.id}
-          className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-wrap items-start gap-3"
+          className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-wrap items-start gap-3"
         >
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-bold text-white">
+              <span className="text-sm font-bold text-[#1a1a1a]">
                 {item.name || item.title || item.label || item.id}
               </span>
               <Badge>{item.id}</Badge>
@@ -2332,21 +2332,21 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               {kind === 'quest' && <Badge>{(item.objectives || []).length} 个目标</Badge>}
               {kind === 'event' && <Badge>{item.repeat === 'once' ? '只执行一次' : '可重复'}</Badge>}
             </div>
-            <p className="text-xs text-white/40 mt-2 leading-relaxed">{item.description || '（无描述）'}</p>
+            <p className="text-xs text-[#8a857c] mt-2 leading-relaxed">{item.description || '（无描述）'}</p>
             {kind === 'action' && (
-              <div className="text-[10px] font-mono text-white/30 mt-2">
+              <div className="text-[10px] font-mono text-[#8a857c] mt-2">
                 触发词 {(item.verbs || []).join(' / ') || '（无）'} · 目标 {item.target} · 条件{' '}
                 {(item.requires || []).length} · 效果 {(item.effects || []).length}
               </div>
             )}
             {kind === 'item' && (
-              <div className="text-[10px] font-mono text-white/30 mt-2">
+              <div className="text-[10px] font-mono text-[#8a857c] mt-2">
                 拾取条件 {(item.pickup_requires || []).length} · 使用效果 {(item.use_effects || []).length}
                 {item.consumable ? ' · 使用后消耗' : ''}
               </div>
             )}
             {kind === 'entity' && (
-              <div className="text-[10px] font-mono text-white/30 mt-2">
+              <div className="text-[10px] font-mono text-[#8a857c] mt-2">
                 地点 {item.location_id || '—'} · {item.kind}
                 {(item.items || []).length > 0 && ` · 携带 ${item.items.length} 件物品`}
                 {(item.shop_items || []).length > 0 && ` · 商店 ${item.shop_items.length} 件`}
@@ -2355,14 +2355,14 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               </div>
             )}
             {kind === 'quest' && (
-              <div className="text-[10px] font-mono text-white/30 mt-2">
+              <div className="text-[10px] font-mono text-[#8a857c] mt-2">
                 前置 {(item.prerequisites || []).length} · 接受条件 {(item.accept_requires || []).length} ·
                 失败条件 {(item.fail_conditions || []).length} · 奖励 {(item.rewards || []).length}
                 {item.auto_accept === false ? ' · 需手动接受' : ''}
               </div>
             )}
             {kind === 'event' && (
-              <div className="text-[10px] font-mono text-white/30 mt-2">
+              <div className="text-[10px] font-mono text-[#8a857c] mt-2">
                 触发 {item.trigger} / {item.trigger_action || '*'} / {item.trigger_target || '*'} · 条件{' '}
                 {(item.conditions || []).length} · 效果 {(item.effects || []).length} · 优先级 {item.priority}
                 {(item.followup_events || []).length > 0 && ' · 成功→' + item.followup_events.join(', ')}
@@ -2378,13 +2378,13 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               <>
                 <button
                   onClick={() => runValidate(item.id)}
-                  className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                  className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
                 >
                   校验
                 </button>
                 <button
                   onClick={() => runSimulate(item.id)}
-                  className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                  className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
                 >
                   模拟
                 </button>
@@ -2392,7 +2392,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
             )}
             <button
               onClick={() => openEditor(kind, item)}
-              className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+              className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
             >
               编辑
             </button>
@@ -2415,9 +2415,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
-      <div className="w-full max-w-5xl bg-[#0b0b0b] border border-white/10 rounded-[2rem] shadow-2xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 border-b border-white/10">
+    <div className="fixed inset-0 z-50 bg-[#f6f5f1]/80 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
+      <div className="w-full max-w-5xl bg-[#f6f5f1] border border-[#e4e0d8] rounded-[2rem] shadow-2xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 border-b border-[#e4e0d8]">
           <div className="flex items-start gap-4">
             <img
               src="/self-reference-mark.png"
@@ -2429,11 +2429,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               draggable="false"
             />
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-2">
+              <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-[#8a857c] mb-2">
                 世界 · 实体 · 事件 · 任务
               </div>
-              <h2 className="text-2xl font-bold text-white">{(world && world.name) || '世界工坊'}</h2>
-              <p className="text-xs text-white/40 mt-2">
+              <h2 className="text-2xl font-bold text-[#1a1a1a]">{(world && world.name) || '世界工坊'}</h2>
+              <p className="text-xs text-[#8a857c] mt-2">
                 这里配置的世界是规则的事实来源；叙事只能描述已经提交的状态变化。
               </p>
             </div>
@@ -2482,7 +2482,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 report(err)
               }
             }}
-            className="text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+            className="text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
           >
             刷新
           </button>
@@ -2562,7 +2562,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="text-sm font-bold text-cyan-100">AI 生成完整世界</span>
-                  <span className="text-[10px] text-white/35">生成后直接保存为新世界，可继续在地图上编辑</span>
+                  <span className="text-[10px] text-[#1a1a1a]/35">生成后直接保存为新世界，可继续在地图上编辑</span>
                 </div>
                 <textarea
                   className={inputClass + ' min-h-[72px]'}
@@ -2601,7 +2601,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               <div className="flex flex-wrap items-center gap-3">
-                <span className="text-[11px] uppercase tracking-[0.2em] text-white/40">游玩进度</span>
+                <span className="text-[11px] uppercase tracking-[0.2em] text-[#8a857c]">游玩进度</span>
                 <select
                   value={previewCampaignId}
                   onChange={(event) => setPlayCampaignId(event.target.value)}
@@ -2614,7 +2614,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     </option>
                   ))}
                 </select>
-                <span className="text-[11px] text-white/30">地图上的玩家标记来自这份存档的权威状态；不会改变它。</span>
+                <span className="text-[11px] text-[#8a857c]">地图上的玩家标记来自这份存档的权威状态；不会改变它。</span>
               </div>
 
               {(world?.locations || []).length > 0 && (
@@ -2634,10 +2634,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 {((mapData && mapData.locations) || []).map((location) => (
                   <div
                     key={location.id}
-                    className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3"
+                    className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3"
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold text-white">{location.name}</span>
+                      <span className="text-sm font-bold text-[#1a1a1a]">{location.name}</span>
                       <Badge>{location.id}</Badge>
                       {location.region && <Badge>{location.region}</Badge>}
                       {typeof location.x === 'number' && typeof location.y === 'number' && (
@@ -2645,8 +2645,8 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                       )}
                       {location.is_start && <Badge tone="accent">起点</Badge>}
                     </div>
-                    <p className="text-xs text-white/40 leading-relaxed">{location.description || '（无描述）'}</p>
-                    <div className="text-[10px] font-mono text-white/40 flex flex-col gap-1">
+                    <p className="text-xs text-[#8a857c] leading-relaxed">{location.description || '（无描述）'}</p>
+                    <div className="text-[10px] font-mono text-[#8a857c] flex flex-col gap-1">
                       <div>
                         出口：
                         {location.exits.length === 0
@@ -2684,7 +2684,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                             (world.locations || []).find((item) => item.id === location.id) || null
                           )
                         }
-                        className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                        className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
                       >
                         编辑
                       </button>
@@ -2708,11 +2708,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               </div>
 
               {sim && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 mb-2">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
+                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mb-2">
                     最近一次事件模拟：{sim.eventId}
                   </div>
-                  <pre className="text-[11px] text-white/60 whitespace-pre-wrap break-all max-h-64 overflow-auto">
+                  <pre className="text-[11px] text-[#5c574f] whitespace-pre-wrap break-all max-h-64 overflow-auto">
                     {JSON.stringify(sim.result, null, 2)}
                   </pre>
                 </div>
@@ -2729,7 +2729,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               </SectionNote>
 
               <div className="flex flex-wrap items-end gap-3">
-                <label className="flex flex-col gap-1 text-[10px] font-mono uppercase tracking-[0.2em] text-white/40">
+                <label className="flex flex-col gap-1 text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c]">
                   作品
                   <select
                     className={inputClass + ' min-w-[14rem]'}
@@ -2747,7 +2747,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     ))}
                   </select>
                 </label>
-                <label className="flex flex-col gap-1 text-[10px] font-mono uppercase tracking-[0.2em] text-white/40">
+                <label className="flex flex-col gap-1 text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c]">
                   角色
                   <select
                     className={inputClass + ' min-w-[14rem]'}
@@ -2769,34 +2769,34 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 >
                   {worksBusy ? '生成中…' : '生成世界并进入'}
                 </button>
-                <button onClick={loadWorks} className="text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase">
+                <button onClick={loadWorks} className="text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase">
                   刷新作品库
                 </button>
               </div>
 
               {currentWork && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-2">
-                  <div className="text-sm font-bold text-white">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-2">
+                  <div className="text-sm font-bold text-[#1a1a1a]">
                     {currentWork.title}
-                    <span className="ml-2 text-[10px] font-mono uppercase tracking-[0.2em] text-white/35">
+                    <span className="ml-2 text-[10px] font-mono uppercase tracking-[0.2em] text-[#1a1a1a]/35">
                       {currentWork.medium} · {currentWork.source}
                     </span>
                   </div>
-                  {currentWork.summary && <p className="text-xs text-white/60 leading-relaxed">{currentWork.summary}</p>}
-                  {currentWork.tone && <p className="text-[11px] text-white/40">基调：{currentWork.tone}</p>}
-                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30 mt-1">地点</div>
+                  {currentWork.summary && <p className="text-xs text-[#5c574f] leading-relaxed">{currentWork.summary}</p>}
+                  {currentWork.tone && <p className="text-[11px] text-[#8a857c]">基调：{currentWork.tone}</p>}
+                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mt-1">地点</div>
                   <div className="flex flex-wrap gap-2">
                     {(currentWork.locations || []).map((name) => (
                       <Badge key={name} tone="accent">{name}</Badge>
                     ))}
                   </div>
-                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/30 mt-1">角色</div>
+                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mt-1">角色</div>
                   <ul className="flex flex-col gap-1">
                     {(currentWork.characters || []).map((item) => (
-                      <li key={item.name} className="text-xs text-white/60">
-                        <span className="text-white/90 font-bold">{item.name}</span>
-                        {item.role ? <span className="text-white/40"> · {item.role}</span> : null}
-                        {item.description ? <div className="text-[11px] text-white/40">{item.description}</div> : null}
+                      <li key={item.name} className="text-xs text-[#5c574f]">
+                        <span className="text-[#1a1a1a] font-bold">{item.name}</span>
+                        {item.role ? <span className="text-[#8a857c]"> · {item.role}</span> : null}
+                        {item.description ? <div className="text-[11px] text-[#8a857c]">{item.description}</div> : null}
                       </li>
                     ))}
                   </ul>
@@ -2820,7 +2820,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               />
 
               <div className="flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2 text-[11px] text-white/50">
+                <label className="flex items-center gap-2 text-[11px] text-[#5c574f]">
                   <input
                     type="checkbox"
                     checked={authorDryRun}
@@ -2841,10 +2841,10 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               </div>
 
               {authorResult && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
-                  <div className="text-sm font-bold text-white">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
+                  <div className="text-sm font-bold text-[#1a1a1a]">
                     {authorResult.status === 'saved' ? '已保存' : '试运行结果'}
-                    <span className="ml-2 text-[10px] font-mono uppercase tracking-[0.2em] text-white/35">
+                    <span className="ml-2 text-[10px] font-mono uppercase tracking-[0.2em] text-[#1a1a1a]/35">
                       {authorResult.scenario_title}
                     </span>
                   </div>
@@ -2901,7 +2901,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     </option>
                   ))}
                 </select>
-                <label className="flex items-center gap-2 text-[11px] text-white/50">
+                <label className="flex items-center gap-2 text-[11px] text-[#5c574f]">
                   <input
                     type="checkbox"
                     checked={memoryDryRun}
@@ -2925,7 +2925,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               </div>
 
               {memoryResult && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone="accent">回合 {memoryResult.turns_read}</Badge>
                     <Badge tone="accent">提案 {(memoryResult.proposals || []).length}</Badge>
@@ -2945,17 +2945,17 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   )}
                   <ul className="flex flex-col gap-2">
                     {(memoryResult.entries || []).map((entry, index) => (
-                      <li key={index} className="text-xs text-white/60">
-                        <span className="font-mono uppercase tracking-[0.2em] text-white/35 text-[10px]">
+                      <li key={index} className="text-xs text-[#5c574f]">
+                        <span className="font-mono uppercase tracking-[0.2em] text-[#1a1a1a]/35 text-[10px]">
                           {entry.layer}
                         </span>
-                        <div className="text-white/90">{entry.title}</div>
-                        <div className="text-[11px] text-white/40">{entry.content}</div>
+                        <div className="text-[#1a1a1a]">{entry.title}</div>
+                        <div className="text-[11px] text-[#8a857c]">{entry.content}</div>
                       </li>
                     ))}
                   </ul>
                   {(memoryResult.entries || []).length === 0 && (
-                    <div className="text-[11px] text-white/35">没有新内容：这段冒险的叙述都已收录，或还没有可提炼的句子。</div>
+                    <div className="text-[11px] text-[#1a1a1a]/35">没有新内容：这段冒险的叙述都已收录，或还没有可提炼的句子。</div>
                   )}
                 </div>
               )}
@@ -2967,20 +2967,20 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 用一句话不断补全这个世界：说「加一条通往河边的小路」「这扇门需要黄铜钥匙」，系统会把它变成具体的编辑操作。模型只能提出操作，所有改动都先在副本上校验，确认无误才写入世界文档；游戏状态、任务进度、存档一律不动。
               </SectionNote>
 
-              {!worldId && <p className="text-xs text-white/40">先选择一个世界。</p>}
+              {!worldId && <p className="text-xs text-[#8a857c]">先选择一个世界。</p>}
 
               {worldId && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
                   {chatLog.length === 0 ? (
-                    <p className="text-xs text-white/40">还没有对话。试试：「在广场东边加一条通往河边的小路，并写一条关于这条河的设定」。</p>
+                    <p className="text-xs text-[#8a857c]">还没有对话。试试：「在广场东边加一条通往河边的小路，并写一条关于这条河的设定」。</p>
                   ) : (
                     <div className="flex flex-col gap-2">
                       {chatLog.map((turn, index) => (
                         <div
                           key={`turn-${index}`}
-                          className={`rounded-xl px-3 py-2 text-xs ${turn.role === 'user' ? 'bg-white/10 text-white' : 'bg-white/[0.03] text-white/70 border border-white/10'}`}
+                          className={`rounded-xl px-3 py-2 text-xs ${turn.role === 'user' ? 'bg-[#efede8] text-[#1a1a1a]' : 'bg-[#fbfaf7] text-[#3a3630] border border-[#e4e0d8]'}`}
                         >
-                          <div className="text-[10px] text-white/30 mb-1">{turn.role === 'user' ? '你' : '助手'}</div>
+                          <div className="text-[10px] text-[#8a857c] mb-1">{turn.role === 'user' ? '你' : '助手'}</div>
                           <div>{turn.text}</div>
                           {(turn.warnings || []).length > 0 && (
                             <ul className="mt-1 text-[10px] text-amber-300/70 list-disc list-inside">
@@ -3027,9 +3027,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               {chatProposal && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-bold text-white">待确认的改动</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">待确认的改动</span>
                     <Badge tone={chatProposal.empty ? 'muted' : 'good'}>
                       {(chatProposal.ops || []).length} 个操作
                     </Badge>
@@ -3041,7 +3041,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   {(chatProposal.changes || []).length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       {(chatProposal.changes || []).map((row) => (
-                        <span key={row.label} className="text-xs text-white/60">
+                        <span key={row.label} className="text-xs text-[#5c574f]">
                           {row.label} {row.before} → {row.after}
                         </span>
                       ))}
@@ -3049,18 +3049,18 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   )}
 
                   {(chatProposal.ops || []).length > 0 ? (
-                    <ul className="text-xs text-white/70 list-disc list-inside">
+                    <ul className="text-xs text-[#3a3630] list-disc list-inside">
                       {(chatProposal.ops || []).map((op, index) => (
-                        <li key={`op-${index}`}><span className="text-white/40">{op.kind}</span> {op.summary}</li>
+                        <li key={`op-${index}`}><span className="text-[#8a857c]">{op.kind}</span> {op.summary}</li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-xs text-white/40">模型没有给出可执行的改动。</p>
+                    <p className="text-xs text-[#8a857c]">模型没有给出可执行的改动。</p>
                   )}
 
                   {(chatProposal.warnings || []).length > 0 && (
                     <div>
-                      <div className="text-[10px] text-white/30 mb-1">被拒绝或跳过的部分</div>
+                      <div className="text-[10px] text-[#8a857c] mb-1">被拒绝或跳过的部分</div>
                       <ul className="text-[10px] text-amber-300/70 list-disc list-inside">
                         {(chatProposal.warnings || []).map((line, i) => <li key={`pw-${i}`}>{line}</li>)}
                       </ul>
@@ -3078,7 +3078,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     <button className={ghostButton} onClick={() => setChatProposal(null)} disabled={chatBusy}>
                       丢弃
                     </button>
-                    <span className="text-[10px] text-white/30">只写世界文档与知识库，不改游戏状态</span>
+                    <span className="text-[10px] text-[#8a857c]">只写世界文档与知识库，不改游戏状态</span>
                   </div>
                 </div>
               )}
@@ -3099,9 +3099,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 {!campaignId && ' 当前没有进行中的冒险，任务进度与事件历史为空。'}
               </SectionNote>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                 <div className="flex flex-wrap items-center gap-3 mb-2">
-                  <span className="text-sm font-bold text-white">交互预演</span>
+                  <span className="text-sm font-bold text-[#1a1a1a]">交互预演</span>
                   {plan && <Badge tone="muted">@ {(plan.allowed || []).length ? plan.allowed[0].label || plan.location_id : plan.location_id}</Badge>}
                   {plan && <Badge tone="good">{(plan.allowed || []).length} 可行</Badge>}
                   {plan && <Badge tone="warn">{(plan.blocked || []).length} 被拒</Badge>}
@@ -3109,7 +3109,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     {planBusy ? '推演中…' : plan ? '重新推演' : '推演当前地点'}
                   </button>
                 </div>
-                <p className="text-xs text-white/40 mb-3">
+                <p className="text-xs text-[#8a857c] mb-3">
                   对当前地点的每个候选行动，用真实规则引擎在状态副本上判定一次，说明能做什么、为什么不能做、以及缺什么。只读，不写任何状态。
                 </p>
                 {planError && <p className="text-xs text-red-300">{planError}</p>}
@@ -3119,18 +3119,18 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                       {(plan.allowed || []).map((row) => (
                         <div key={`ok-${row.action}-${row.target}`} className="flex flex-wrap items-center gap-2 text-xs">
                           <Badge tone="good">{row.action}</Badge>
-                          <span className="text-white/80">{row.label || row.target}</span>
-                          <span className="text-white/30">{row.message}</span>
+                          <span className="text-[#262421]">{row.label || row.target}</span>
+                          <span className="text-[#8a857c]">{row.message}</span>
                         </div>
                       ))}
                     </div>
                     {(plan.blocked || []).length > 0 && (
-                      <div className="flex flex-col gap-1 border-t border-white/10 pt-2">
+                      <div className="flex flex-col gap-1 border-t border-[#e4e0d8] pt-2">
                         {(plan.blocked || []).map((row) => (
                           <div key={`no-${row.action}-${row.target}`} className="flex flex-wrap items-center gap-2 text-xs">
                             <Badge tone="warn">{row.action}</Badge>
-                            <span className="text-white/60">{row.label || row.target}</span>
-                            <span className="text-white/30">{row.code}</span>
+                            <span className="text-[#5c574f]">{row.label || row.target}</span>
+                            <span className="text-[#8a857c]">{row.code}</span>
                             <button className={tinyInput} onClick={() => explainRow(row.action, row.target)}>
                               为什么
                             </button>
@@ -3141,23 +3141,23 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   </div>
                 )}
                 {explain && (
-                  <div className="mt-3 rounded-xl border border-white/10 p-3 text-xs">
+                  <div className="mt-3 rounded-xl border border-[#e4e0d8] p-3 text-xs">
                     <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <span className="text-white/60">{explain.action} {explain.target}</span>
+                      <span className="text-[#5c574f]">{explain.action} {explain.target}</span>
                       <Badge tone={explain.ok ? 'good' : 'warn'}>{explain.code}</Badge>
                     </div>
-                    <p className="text-white/50">{explain.message}</p>
+                    <p className="text-[#5c574f]">{explain.message}</p>
                     {(explain.requirements || []).map((req) => (
-                      <div key={`${req.kind}-${req.target}`} className="mt-2 text-white/70">
+                      <div key={`${req.kind}-${req.target}`} className="mt-2 text-[#3a3630]">
                         需要 {req.label || req.target}（{req.kind}
                         {req.distance >= 0 ? `，距离 ${req.distance} 步` : ''}）
                         {(req.steps || []).length > 0 && (
-                          <span className="text-white/40">：{req.steps.join(' → ')}</span>
+                          <span className="text-[#8a857c]">：{req.steps.join(' → ')}</span>
                         )}
                       </div>
                     ))}
                     {(explain.unplannable || []).length > 0 && (
-                      <p className="mt-2 text-white/40">
+                      <p className="mt-2 text-[#8a857c]">
                         无法自动规划：{explain.unplannable.map((u) => (u.label || u.target)).join('、')}
                       </p>
                     )}
@@ -3165,9 +3165,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 )}
               </div>
               {campaignId && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-2">
-                    <span className="text-sm font-bold text-white">冒险绑定</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">冒险绑定</span>
                     {debug.state ? (
                       debug.state.world_id === worldId ? (
                         <Badge tone="good">已绑定此世界</Badge>
@@ -3180,7 +3180,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     <Badge>版本 {debug.state ? debug.state.version : '—'}</Badge>
                     {debug.state && <Badge>回合 {debug.state.turn}</Badge>}
                   </div>
-                  <p className="text-xs text-white/40 mb-3">
+                  <p className="text-xs text-[#8a857c] mb-3">
                     绑定后游戏内的行动会走确定性链路：规则判定 → 事务提交 → 事件与任务 → 叙事。
                   </p>
                   <button
@@ -3194,20 +3194,20 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               {campaignId && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-2">
-                    <span className="text-sm font-bold text-white">状态版本与回滚</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">状态版本与回滚</span>
                     <Badge>{(debug.snapshots || []).length} 个快照</Badge>
                     <Badge>当前 {debug.state ? debug.state.version : '—'}</Badge>
                   </div>
                   {(debug.snapshots || []).length === 0 ? (
-                    <p className="text-xs text-white/40">还没有提交过任何版本。</p>
+                    <p className="text-xs text-[#8a857c]">还没有提交过任何版本。</p>
                   ) : (
                     <div className="flex flex-col gap-2">
                       {(debug.snapshots || []).map((snapshot) => (
                         <div
                           key={snapshot.version}
-                          className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 px-3 py-2"
+                          className="flex flex-wrap items-center gap-2 rounded-xl border border-[#e4e0d8] px-3 py-2"
                         >
                           <Badge tone={debug.state && snapshot.version === debug.state.version ? 'good' : 'muted'}>
                             v{snapshot.version}
@@ -3221,7 +3221,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                               {snapshot.request_id}
                             </button>
                           )}
-                          <span className="text-[10px] text-white/30 font-mono">
+                          <span className="text-[10px] text-[#8a857c] font-mono">
                             {snapshot.created_at}
                           </span>
                           <div className="flex items-center gap-2 ml-auto">
@@ -3250,23 +3250,23 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               {diff && (
                 <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-2">
-                    <span className="text-sm font-bold text-white">
+                    <span className="text-sm font-bold text-[#1a1a1a]">
                       {diff.action ? '行动详情 ' + diff.action : '差异 v' + diff.from + ' → v' + diff.to}
                     </span>
                     <button onClick={() => setDiff(null)} className={ghostButton}>
                       关闭
                     </button>
                   </div>
-                  <pre className="text-[11px] leading-relaxed text-white/60 whitespace-pre-wrap break-words max-h-64 overflow-auto">
+                  <pre className="text-[11px] leading-relaxed text-[#5c574f] whitespace-pre-wrap break-words max-h-64 overflow-auto">
                     {JSON.stringify(diff.action ? diff.detail : diff.changed, null, 2)}
                   </pre>
                 </div>
               )}
 
               {debug.diagnostics && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-2">
-                    <span className="text-sm font-bold text-white">状态诊断</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">状态诊断</span>
                     <Badge tone={debug.diagnostics.ok ? 'good' : 'bad'}>
                       {debug.diagnostics.ok ? '一致' : '存在问题'}
                     </Badge>
@@ -3279,9 +3279,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                     <Badge>版本 {debug.diagnostics.version}</Badge>
                   </div>
                   {(debug.diagnostics.issues || []).length === 0 ? (
-                    <p className="text-xs text-white/40">没有发现问题。</p>
+                    <p className="text-xs text-[#8a857c]">没有发现问题。</p>
                   ) : (
-                    <ul className="text-xs text-white/60 list-disc pl-5 space-y-1">
+                    <ul className="text-xs text-[#5c574f] list-disc pl-5 space-y-1">
                       {(debug.diagnostics.issues || []).map((issue, index) => (
                         <li key={index}>
                           [{issue.severity}] {issue.code}：{issue.message}
@@ -3293,11 +3293,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               {campaignId && debug.state && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-3">
-                    <span className="text-sm font-bold text-white">角色技能与实体关系</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">角色技能与实体关系</span>
                   </div>
-                  <div className="flex flex-wrap gap-2 mb-3 text-xs text-white/60">
+                  <div className="flex flex-wrap gap-2 mb-3 text-xs text-[#5c574f]">
                     <Badge tone="accent">货币 {debug.state.currency ?? 0}</Badge>
                     <Badge>经验 {debug.state.xp ?? 0}</Badge>
                     <Badge>等级 {debug.state.level ?? 1}</Badge>
@@ -3305,22 +3305,22 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                       <Badge key={slot}>{slot}: {item}</Badge>
                     ))}
                   </div>
-                  <div className="flex flex-wrap gap-2 mb-3 text-xs text-white/60">
-                    <span className="text-white/40">技能</span>
+                  <div className="flex flex-wrap gap-2 mb-3 text-xs text-[#5c574f]">
+                    <span className="text-[#8a857c]">技能</span>
                     {Object.keys(debug.state.skills || {}).length === 0 && (
-                      <span className="text-white/30">尚未获得技能</span>
+                      <span className="text-[#8a857c]">尚未获得技能</span>
                     )}
                     {Object.entries(debug.state.skills || {}).map(([name, value]) => (
                       <Badge key={name}>{name} {value}</Badge>
                     ))}
                   </div>
                   {Object.keys(debug.state.entities || {}).length === 0 ? (
-                    <p className="text-xs text-white/30">尚无已实体化的实体状态。</p>
+                    <p className="text-xs text-[#8a857c]">尚无已实体化的实体状态。</p>
                   ) : (
                     <div className="flex flex-col gap-2">
                       {Object.values(debug.state.entities).map((entity) => (
-                        <div key={entity.entity_id} className="flex flex-wrap items-center gap-2 text-xs text-white/60">
-                          <span className="font-mono text-white/70">{entity.entity_id}</span>
+                        <div key={entity.entity_id} className="flex flex-wrap items-center gap-2 text-xs text-[#5c574f]">
+                          <span className="font-mono text-[#3a3630]">{entity.entity_id}</span>
                           <Badge>地点 {entity.location_id || '—'}</Badge>
                           <Badge tone={entity.alert > 0 ? 'warn' : 'muted'}>警戒 {entity.alert || 0}</Badge>
                           {Object.entries(entity.relations || {}).map(([other, value]) => (
@@ -3337,12 +3337,12 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               {campaignId && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-2">
-                    <span className="text-sm font-bold text-white">存档导入导出</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">存档导入导出</span>
                     <Badge>权威状态 + 领域事件</Badge>
                   </div>
-                  <p className="text-xs text-white/40 mb-3">
+                  <p className="text-xs text-[#8a857c] mb-3">
                     导出用于备份或迁移；导入会覆盖当前战役，需显式确认。
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
@@ -3408,9 +3408,9 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               {campaignId && debug.state && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-3">
-                    <span className="text-sm font-bold text-white">剧情进度与阻塞原因</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">剧情进度与阻塞原因</span>
                     <button onClick={() => setDebugNonce((value) => value + 1)} disabled={debugBusy} className={ghostButton}>
                       {debugBusy ? '读取中…' : '刷新进度'}
                     </button>
@@ -3418,16 +3418,16 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                   {!debug.story ? (
                     <p className="text-xs text-amber-300">{debugBusy ? '正在读取剧情进度…' : '剧情进度读取失败，请重试。'}</p>
                   ) : debug.story.mode === 'free' ? (
-                    <p className="text-xs text-white/40">自由模式不推进剧情节点，已有历史仍保留在存档中。</p>
+                    <p className="text-xs text-[#8a857c]">自由模式不推进剧情节点，已有历史仍保留在存档中。</p>
                   ) : (
                     <div className="flex flex-col gap-3">
-                      <p className="text-xs text-white/40">只有已写入存档的节点显示为「已进入」；条件满足的节点在下一次有效行动时推进。</p>
+                      <p className="text-xs text-[#8a857c]">只有已写入存档的节点显示为「已进入」；条件满足的节点在下一次有效行动时推进。</p>
                       {(debug.story.storyline.lines || []).map((line) => (
-                        <div key={line.id} className="flex flex-wrap items-center gap-2 text-xs text-white/60">
+                        <div key={line.id} className="flex flex-wrap items-center gap-2 text-xs text-[#5c574f]">
                           <span>{line.title}</span>
                           <Badge>{({ main: '主线', branch: '分支', side: '独立剧情' })[line.kind]}</Badge>
                           <Badge tone={line.enabled ? 'good' : 'warn'}>{line.enabled ? '启用' : '已停用'}</Badge>
-                          {line.description && <span className="text-white/30">{line.description}</span>}
+                          {line.description && <span className="text-[#8a857c]">{line.description}</span>}
                         </div>
                       ))}
                       {(debug.story.storyline.nodes || []).map((node) => {
@@ -3435,16 +3435,16 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                         const ready = !entered && debug.story.entered.includes(node.id)
                         const line = (debug.story.storyline.lines || []).find((item) => item.id === node.line)
                         return (
-                          <div key={node.id} className="rounded-xl border border-white/10 p-3 text-xs">
-                            <div className="flex flex-wrap items-center gap-2 text-white/70">
+                          <div key={node.id} className="rounded-xl border border-[#e4e0d8] p-3 text-xs">
+                            <div className="flex flex-wrap items-center gap-2 text-[#3a3630]">
                               <span>{node.title}</span>
-                              <span className="text-white/30 font-mono">{node.id}</span>
+                              <span className="text-[#8a857c] font-mono">{node.id}</span>
                               <Badge>{({ main: '主线', branch: '分支', side: '独立剧情' })[node.kind]}</Badge>
                               <Badge tone={entered ? 'good' : 'muted'}>{entered ? '已进入' : ready ? '条件已满足' : debug.story.locked.includes(node.id) ? '前置未完成' : '等待触发'}</Badge>
-                              <span className="text-white/40">{line ? line.title : '未分组'}</span>
+                              <span className="text-[#8a857c]">{line ? line.title : '未分组'}</span>
                               {line && !line.enabled && <Badge tone="warn">剧情线已停用</Badge>}
                             </div>
-                            {node.summary && <p className="mt-2 text-white/40">{node.summary}</p>}
+                            {node.summary && <p className="mt-2 text-[#8a857c]">{node.summary}</p>}
                             {!entered && debug.story.reasons[node.id] && <p className="mt-2 text-amber-300">{debug.story.reasons[node.id]}</p>}
                           </div>
                         )
@@ -3455,20 +3455,20 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               )}
 
               {debug.progress && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="flex flex-wrap items-center gap-3 mb-3">
-                    <span className="text-sm font-bold text-white">任务进度</span>
+                    <span className="text-sm font-bold text-[#1a1a1a]">任务进度</span>
                     <Badge>版本 {debug.progress.version}</Badge>
                     {debugBusy && <Badge tone="warn">读取中…</Badge>}
                   </div>
                   {(debug.progress.quests || []).length === 0 && (
-                    <p className="text-xs text-white/40">这个世界还没有配置任务。</p>
+                    <p className="text-xs text-[#8a857c]">这个世界还没有配置任务。</p>
                   )}
                   <div className="flex flex-col gap-3">
                     {(debug.progress.quests || []).map((quest) => (
-                      <div key={quest.quest_id} className="rounded-xl border border-white/10 p-3">
+                      <div key={quest.quest_id} className="rounded-xl border border-[#e4e0d8] p-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-bold text-white">{quest.title}</span>
+                          <span className="text-xs font-bold text-[#1a1a1a]">{quest.title}</span>
                           <Badge
                             tone={
                               quest.status === 'completed'
@@ -3482,11 +3482,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                           >
                             {quest.status}
                           </Badge>
-                          <span className="text-[10px] font-mono text-white/30">
+                          <span className="text-[10px] font-mono text-[#8a857c]">
                             {quest.completed_objectives}/{quest.total_objectives}
                           </span>
                         </div>
-                        <ul className="mt-2 text-[11px] text-white/50 space-y-1">
+                        <ul className="mt-2 text-[11px] text-[#5c574f] space-y-1">
                           {quest.objectives.map((objective) => (
                             <li key={objective.id} className="flex flex-wrap items-center gap-2">
                               <span>
@@ -3495,7 +3495,7 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                               </span>
                               {!objective.done && quest.status === 'active' && (
                                 <button
-                                  className="text-[10px] text-white/40 hover:text-white tracking-[0.15em] uppercase"
+                                  className="text-[10px] text-[#8a857c] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
                                   onClick={() => progressObjective(quest.quest_id, objective.id)}
                                 >
                                   手动推进
@@ -3510,24 +3510,24 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                 </div>
               )}
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                 <div className="flex flex-wrap items-center gap-3 mb-3">
-                  <span className="text-sm font-bold text-white">事件执行历史</span>
+                  <span className="text-sm font-bold text-[#1a1a1a]">事件执行历史</span>
                   <Badge>{(debug.executions || []).length} 条</Badge>
                 </div>
                 {(debug.executions || []).length === 0 ? (
-                  <p className="text-xs text-white/40">还没有事件被执行过。</p>
+                  <p className="text-xs text-[#8a857c]">还没有事件被执行过。</p>
                 ) : (
                   <div className="flex flex-col gap-2 max-h-80 overflow-auto">
                     {debug.executions.map((execution, index) => (
                       <div
                         key={index}
-                        className="rounded-xl border border-white/10 px-3 py-2 text-[11px] text-white/60"
+                        className="rounded-xl border border-[#e4e0d8] px-3 py-2 text-[11px] text-[#5c574f]"
                         style={{ marginLeft: Math.min(Number(execution.depth) || 0, 6) * 18 }}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           {(execution.depth || 0) > 0 && (
-                            <span className="font-mono text-white/30">↳ {execution.parent_event_id || 'parent'}</span>
+                            <span className="font-mono text-[#8a857c]">↳ {execution.parent_event_id || 'parent'}</span>
                           )}
                           <Badge
                             tone={
@@ -3540,13 +3540,13 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
                           >
                             {execution.status}
                           </Badge>
-                          <span className="font-bold text-white/80">{execution.name || execution.event_id}</span>
+                          <span className="font-bold text-[#262421]">{execution.name || execution.event_id}</span>
                           {execution.branch && <Badge>{execution.branch}</Badge>}
-                          <span className="font-mono text-white/30">v{execution.state_version}</span>
+                          <span className="font-mono text-[#8a857c]">v{execution.state_version}</span>
                         </div>
                         {execution.reason && <div className="text-rose-300/80 mt-1">{execution.reason}</div>}
                         {(execution.effects || []).length > 0 && (
-                          <div className="font-mono text-white/30 mt-1">
+                          <div className="font-mono text-[#8a857c] mt-1">
                             {execution.effects
                               .map(
                                 (effect) =>
@@ -3562,11 +3562,11 @@ export default function WorldStudio({ open, onClose, scenarioId, campaignId }) {
               </div>
 
               {sim && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 mb-2">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
+                  <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mb-2">
                     最近一次事件模拟：{sim.eventId}
                   </div>
-                  <pre className="text-[11px] text-white/60 whitespace-pre-wrap break-all max-h-64 overflow-auto">
+                  <pre className="text-[11px] text-[#5c574f] whitespace-pre-wrap break-all max-h-64 overflow-auto">
                     {JSON.stringify(sim.result, null, 2)}
                   </pre>
                 </div>

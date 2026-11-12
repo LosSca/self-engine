@@ -51,7 +51,7 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
   return (
     <aside
       data-testid="tool-dock"
-      className={`flex-none flex flex-col h-full border-l border-white/10 bg-[#0b0d10] overflow-hidden transition-[width] duration-200 ${
+      className={`flex-none flex flex-col h-full border-l border-white/10 bg-[#efece6] overflow-hidden transition-[width] duration-200 ${
         open ? 'w-[380px] xl:w-[420px]' : 'w-0'
       }`}
     >

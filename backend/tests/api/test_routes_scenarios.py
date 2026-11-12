@@ -35,7 +35,7 @@ def test_list_scenarios(client):
     # Create one first
     client.post("/api/scenarios/", json={
         "title": "Test World", "description": "", "tone_instructions": "",
-        "opening_narrative": "", "language": "en"
+        "opening_narrative": "You wake in a dark hall.", "language": "en"
     })
     r = client.get("/api/scenarios/")
     assert r.status_code == 200
@@ -52,7 +52,7 @@ def test_add_story_card(client):
     # Create scenario first
     scenario = client.post("/api/scenarios/", json={
         "title": "Test", "description": "", "tone_instructions": "",
-        "opening_narrative": "", "language": "en"
+        "opening_narrative": "You wake in a dark hall.", "language": "en"
     }).json()
     r = client.post(f"/api/scenarios/{scenario['id']}/story-cards", json={
         "card_type": "NPC",
@@ -148,7 +148,10 @@ def test_import_scenario_missing_scenario_key(client):
     assert r.status_code == 422
 
 def test_export_import_roundtrip_carries_knowledge_and_storyline(client):
-    scenario = client.post("/api/scenarios/", json={"title": "Lore World"}).json()
+    scenario = client.post("/api/scenarios/", json={
+        "title": "Lore World",
+        "opening_narrative": "海上的灯塔亮起。",
+    }).json()
     first = client.post(f"/api/v1/scenarios/{scenario['id']}/knowledge", json={
         "layer": "global",
         "title": "世界总览",
@@ -203,7 +206,7 @@ def test_export_import_roundtrip_carries_knowledge_and_storyline(client):
 def test_import_rejects_bad_storyline_and_rolls_back(client):
     payload = {
         "version": "1.1",
-        "scenario": {"title": "Broken World"},
+        "scenario": {"title": "Broken World", "opening_narrative": "雨里有人敲门。"},
         "knowledge": [
             {"id": "k1", "layer": "story", "title": "片段", "content": "x"},
         ],

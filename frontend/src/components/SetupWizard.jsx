@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   fetchCharactersByScenario,
   fetchLibraryCharacters,
+  fetchSetupState,
   saveSetupAnswers,
   setCampaignCharacter,
 } from '../api'
 import { interpolate } from '../lib/interpolate'
 
 const inputBase =
-  'w-full bg-white/[0.03] backdrop-blur-sm border border-white/10 rounded-2xl px-5 py-4 text-white placeholder-white/20 focus:outline-none focus:border-white/30 transition-all text-base font-light'
+  'w-full bg-[#fbfaf7] border border-[#dcd8d0] rounded-2xl px-5 py-4 text-[#1a1a1a] placeholder-[#9a958c] focus:outline-none focus:border-[#dcd8d0] transition-all text-base font-light'
 
 export default function SetupWizard({ scenario, campaignId, questions, onComplete }) {
   const ordered = useMemo(() => questions.filter(Boolean), [questions])
@@ -26,6 +27,24 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
   const [characterId, setCharacterId] = useState('')
   const [lookId, setLookId] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  // A campaign that already picked a character skips the picker: re-asking on
+  // every entry made the first answer feel ignored. 'loading' keeps the
+  // wizard from flashing the picker before the saved choice arrives.
+  const [boundCharacter, setBoundCharacter] = useState(null) // null | { id, name } | 'loading'
+
+  // Ask the server which character this campaign already plays.
+  useEffect(() => {
+    if (!campaignId) return undefined
+    let cancelled = false
+    setBoundCharacter('loading')
+    fetchSetupState(campaignId)
+      .then((state) => {
+        if (cancelled) return
+        setBoundCharacter(state?.character_id ? { id: state.character_id, name: state.character_name || '' } : null)
+      })
+      .catch(() => { if (!cancelled) setBoundCharacter(null) })
+    return () => { cancelled = true }
+  }, [campaignId])
 
   useEffect(() => {
     let cancelled = false
@@ -104,7 +123,9 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     }
   })
   // 任何一个角色都能进这一步：没有立绘的角色照样可以让玩家点名。
-  const showCharacterStage = Boolean(character)
+  // 已经选过角色的战役不再重问：那是玩家开局时给过的答案。
+  const alreadyBound = Boolean(boundCharacter && boundCharacter !== 'loading')
+  const showCharacterStage = Boolean(character) && !alreadyBound
   const total = ordered.length + (showCharacterStage ? 1 : 0)
   const isCharacterStage = showCharacterStage && step === 0
   const questionIndex = showCharacterStage ? step - 1 : step
@@ -261,9 +282,9 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
     loadStepIntoLocalState(next, answers)
   }
 
-  if (!Array.isArray(characters)) {
+  if (!Array.isArray(characters) || boundCharacter === 'loading') {
     return (
-      <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
+      <div className="min-h-screen bg-[#f6f5f1] text-[#8a857c] flex items-center justify-center text-xs uppercase tracking-[0.3em]">
         载入角色…
       </div>
     )
@@ -271,12 +292,12 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
 
   if (!isCharacterStage && !current) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="min-h-screen bg-[#f6f5f1] text-[#1a1a1a] flex items-center justify-center">
         <div className="text-center">
-          <p className="text-white/40 text-sm mb-6">尚未配置初始化问题。</p>
+          <p className="text-[#8a857c] text-sm mb-6">尚未配置初始化问题。</p>
           <button
             onClick={finish}
-            className="px-8 py-3 bg-white text-black rounded-full text-xs font-bold tracking-[0.2em] uppercase"
+            className="px-8 py-3 bg-[#262421] text-white rounded-full text-xs font-bold tracking-[0.2em] uppercase hover:bg-[#3a3733]"
           >
             直接开始
           </button>
@@ -286,19 +307,19 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
   }
 
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-white/10">
-      <div className="min-h-screen bg-black/80 backdrop-blur-sm py-12 px-4">
+    <div className="min-h-screen bg-[#f6f5f1] text-[#3a3630] selection:bg-[#1a1a1a]/10">
+      <div className="min-h-screen bg-[#f6f5f1] py-12 px-4">
         <div className="max-w-3xl mx-auto">
-          <div className="flex items-baseline justify-between mb-12 pb-4 border-b border-white/10">
+          <div className="flex items-baseline justify-between mb-12 pb-4 border-b border-[#e4e0d8]">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.3em] text-white/40 font-mono mb-1">
+              <p className="text-[10px] uppercase tracking-[0.3em] text-[#8a857c] font-mono mb-1">
                 初始化
               </p>
               <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
                 {scenario?.title || '角色设定'}
               </h1>
             </div>
-            <p className="text-[10px] uppercase tracking-[0.3em] text-white/40 font-mono">
+            <p className="text-[10px] uppercase tracking-[0.3em] text-[#8a857c] font-mono">
               第 {step + 1} / {total} 步
             </p>
           </div>
@@ -306,10 +327,10 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
           {isCharacterStage ? (
             <>
               <div className="mb-8">
-                <p className="text-xl md:text-2xl font-light leading-relaxed text-white/90">
+                <p className="text-xl md:text-2xl font-light leading-relaxed text-[#1a1a1a]">
                   选择你的角色
                 </p>
-                <p className="text-sm text-white/40 mt-3 leading-relaxed">
+                <p className="text-sm text-[#8a857c] mt-3 leading-relaxed">
                   角色独立于世界存在：这里既有本世界的角色，也有你角色库里带来的角色。服装与表情会影响之后叙事插图中的形象，随时可以在游戏内更换。
                 </p>
               </div>
@@ -319,11 +340,11 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                   <button
                     type="button"
                     onClick={() => setPickerOpen(true)}
-                    className="px-5 py-2.5 rounded-xl border border-white/15 text-white/70 hover:text-white hover:border-white/40 text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
+                    className="px-5 py-2.5 rounded-xl border border-[#dcd8d0] text-[#3a3630] hover:text-[#1a1a1a] hover:border-[#8a857c] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
                   >
                     {characterList.length > 1 ? `换一个角色（共 ${characterList.length} 个）` : '角色库快照'}
                   </button>
-                  <span className="text-[10px] text-white/30">
+                  <span className="text-[10px] text-[#8a857c]">
                     {libraryIds.has(character.id) ? '来自角色库' : '本世界角色'}
                     {looks.length === 0 ? ' · 还没有立绘' : ''}
                   </span>
@@ -340,17 +361,17 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                       className={
                         'text-left rounded-2xl border overflow-hidden transition-all ' +
                         (c.active
-                          ? 'bg-white/[0.08] border-white/40'
-                          : 'bg-white/[0.02] border-white/10 hover:border-white/25')
+                          ? 'bg-[#efede8] border-[#8a857c]'
+                          : 'bg-[#fbfaf7] border-[#e4e0d8] hover:border-[#8a857c]')
                       }
                     >
-                      <span className="block h-28 bg-white/5 flex items-center justify-center">
+                      <span className="block h-28 bg-[#f3f1ec] flex items-center justify-center">
                         {c.art && <img src={c.art} alt={c.name} className="w-full h-full object-cover" />}
-                        {!c.art && <span className="text-[10px] text-white/30">无立绘</span>}
+                        {!c.art && <span className="text-[10px] text-[#8a857c]">无立绘</span>}
                       </span>
                       <span className="block px-3 py-2">
-                        <span className="block text-xs text-white truncate">{c.name}</span>
-                        <span className="block text-[10px] text-white/35 truncate">
+                        <span className="block text-xs text-[#1a1a1a] truncate">{c.name}</span>
+                        <span className="block text-[10px] text-[#8a857c] truncate">
                           {c.role}
                           {c.inLibrary ? ' · 库' : ''}
                         </span>
@@ -361,7 +382,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
               )}
 
               <div className="flex flex-col sm:flex-row gap-8 mb-10">
-                <div className="w-40 h-56 rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden flex items-center justify-center shrink-0 mx-auto sm:mx-0">
+                <div className="w-40 h-56 rounded-2xl border border-[#e4e0d8] bg-[#efede8] overflow-hidden flex items-center justify-center shrink-0 mx-auto sm:mx-0">
                   {hasArt && (
                     <img
                       src={selectedLook.image_url}
@@ -369,22 +390,22 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                       className="w-full h-full object-cover"
                     />
                   )}
-                  {!hasArt && <span className="text-white/20 text-xs">暂无立绘</span>}
+                  {!hasArt && <span className="text-[#a8a29a] text-xs">暂无立绘</span>}
                 </div>
 
                 <div className="flex-1">
                   <div className="mb-5">
-                    <div className="text-lg font-semibold text-white">{character.name}</div>
-                    <div className="text-xs text-white/40 mt-1">
+                    <div className="text-lg font-semibold text-[#1a1a1a]">{character.name}</div>
+                    <div className="text-xs text-[#8a857c] mt-1">
                       {character.role || '玩家角色'}
                     </div>
                     {hasNoLook && (
-                      <p className="text-[10px] text-white/30 mt-2 leading-relaxed">
+                      <p className="text-[10px] text-[#8a857c] mt-2 leading-relaxed">
                         这个角色还没有立绘，叙事照常进行，只是不会被画进插图。可以在角色库里补一张。
                       </p>
                     )}
                     {character.description && (
-                      <p className="text-sm text-white/50 mt-3 leading-relaxed">
+                      <p className="text-sm text-[#5c574f] mt-3 leading-relaxed">
                         {character.description}
                       </p>
                     )}
@@ -392,7 +413,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2">
+                      <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8a857c] mb-2">
                         服装
                       </label>
                       <select
@@ -408,7 +429,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2">
+                      <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8a857c] mb-2">
                         表情
                       </label>
                       <select
@@ -431,7 +452,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
           ) : (
             <>
               <div className="mb-10">
-                <p className="text-xl md:text-2xl font-light leading-relaxed text-white/90 whitespace-pre-line">
+                <p className="text-xl md:text-2xl font-light leading-relaxed text-[#1a1a1a] whitespace-pre-line">
                   {resolvedPrompt}
                 </p>
               </div>
@@ -460,22 +481,22 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                           className={
                             'w-full text-left p-5 rounded-2xl border transition-all flex items-start gap-4 ' +
                             (selected
-                              ? 'bg-white/[0.08] border-white/40'
-                              : 'bg-white/[0.02] border-white/10 hover:border-white/25')
+                              ? 'bg-[#efede8] border-[#8a857c]'
+                              : 'bg-[#fbfaf7] border-[#e4e0d8] hover:border-[#8a857c]')
                           }
                         >
                           <span
                             className={
                               'mt-1 inline-block w-3 h-3 rounded-full border ' +
-                              (selected ? 'bg-white border-white' : 'border-white/30')
+                              (selected ? 'bg-[#262421] border-[#262421]' : 'border-[#dcd8d0]')
                             }
                           />
                           <span className="flex-1">
-                            <span className="block font-semibold text-white text-base mb-1">
+                            <span className="block font-semibold text-[#1a1a1a] text-base mb-1">
                               {opt.label}
                             </span>
                             {opt.description && (
-                              <span className="block text-sm text-white/50 leading-relaxed font-light">
+                              <span className="block text-sm text-[#5c574f] leading-relaxed font-light">
                                 {opt.description}
                               </span>
                             )}
@@ -489,8 +510,8 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                         className={
                           'p-5 rounded-2xl border transition-all ' +
                           (choiceLabel === '__custom__'
-                            ? 'bg-white/[0.08] border-white/40'
-                            : 'bg-white/[0.02] border-white/10 hover:border-white/25')
+                            ? 'bg-[#efede8] border-[#8a857c]'
+                            : 'bg-[#fbfaf7] border-[#e4e0d8] hover:border-[#8a857c]')
                         }
                       >
                         <button
@@ -501,10 +522,10 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                           <span
                             className={
                               'inline-block w-3 h-3 rounded-full border ' +
-                              (choiceLabel === '__custom__' ? 'bg-white border-white' : 'border-white/30')
+                              (choiceLabel === '__custom__' ? 'bg-[#262421] border-[#262421]' : 'border-[#dcd8d0]')
                             }
                           />
-                          <span className="font-semibold text-white text-base">自定义</span>
+                          <span className="font-semibold text-[#1a1a1a] text-base">自定义</span>
                         </button>
                         {choiceLabel === '__custom__' && (
                           <input
@@ -512,7 +533,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                             value={customValue}
                             onChange={(e) => setCustomValue(e.target.value)}
                             placeholder="输入自定义回答……"
-                            className="mt-3 w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/20 focus:outline-none focus:border-white/30 text-sm font-light"
+                            className="mt-3 w-full bg-[#fbfaf7] border border-[#dcd8d0] rounded-xl px-4 py-3 text-[#1a1a1a] placeholder-[#9a958c] focus:outline-none focus:border-[#dcd8d0] text-sm font-light"
                           />
                         )}
                       </div>
@@ -529,13 +550,13 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-6 border-t border-white/10">
+          <div className="flex items-center justify-between pt-6 border-t border-[#e4e0d8]">
             <div className="flex items-center gap-4">
               <button
                 type="button"
                 onClick={handleBack}
                 disabled={step === 0 || submitting}
-                className="px-6 py-3 text-xs uppercase tracking-[0.2em] text-white/50 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors font-bold"
+                className="px-6 py-3 text-xs uppercase tracking-[0.2em] text-[#5c574f] hover:text-[#1a1a1a] disabled:opacity-30 disabled:cursor-not-allowed transition-colors font-bold"
               >
                 ← 上一步
               </button>
@@ -544,7 +565,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
                   type="button"
                   onClick={handleSkipCharacter}
                   disabled={submitting}
-                  className="text-[10px] tracking-widest text-white/30 hover:text-white/70 transition-colors"
+                  className="text-[10px] tracking-widest text-[#8a857c] hover:text-[#3a3630] transition-colors"
                 >
                   这次不选角色
                 </button>
@@ -555,7 +576,7 @@ export default function SetupWizard({ scenario, campaignId, questions, onComplet
               type="button"
               onClick={handleNext}
               disabled={!canAdvance() || submitting}
-              className="px-10 py-4 bg-white text-black hover:bg-gray-200 disabled:bg-white/30 disabled:text-black/50 disabled:cursor-not-allowed uppercase text-xs tracking-[0.2em] font-bold rounded-full flex items-center gap-3 transition-all"
+              className="px-10 py-4 bg-[#262421] text-white hover:bg-[#3a3733] disabled:bg-[#efede8] disabled:text-[#a8a29a] disabled:cursor-not-allowed uppercase text-xs tracking-[0.2em] font-bold rounded-full flex items-center gap-3 transition-all"
             >
               {submitting ? '保存中……' : isLast && !isCharacterStage ? (
                 <>

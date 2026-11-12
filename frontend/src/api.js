@@ -83,6 +83,8 @@ export function streamAction({
   scenarioTone,
   language,
   action,
+  targetName = '',
+  targetId = '',
   openingNarrative,
   maxTokens,
   provider = null,
@@ -112,6 +114,10 @@ export function streamAction({
       language,
       action,
       opening_narrative: openingNarrative || '',
+      // Who the turn is aimed at: the narrator uses the name as a directive,
+      // the rule lane uses the id to bind the reaction to one character.
+      target_name: targetName || '',
+      target_id: targetId || '',
       max_tokens: maxTokens || 2000,
       // Do not invent a model here: an empty value lets the server use its
       // configured provider. Hardcoding a model made every turn fall back.
@@ -845,7 +851,10 @@ export async function fetchEngineState(campaignId) {
  * effects / events / narrative). A non-2xx response is not swallowed: the
  * caller needs to distinguish "rejected by rules" from "request failed".
  */
-export async function submitTextAction(campaignId, text, { requestId, narrate = true } = {}) {
+export async function submitTextAction(campaignId, text, options) {
+  // 调用方常把「目标」直接当第三个参数传进来（可能是 null / {id,name}），
+  // 直接解构会在 null 上抛 "Cannot destructure ... as it is null"，所以这里兜一次。
+  const { requestId, narrate = true } = options && typeof options === 'object' ? options : {}
   const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/text-actions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -860,7 +869,13 @@ export async function submitTextAction(campaignId, text, { requestId, narrate = 
     throw new Error(`${r.status} ${detail.slice(0, 300)}`)
   }
   const response = await r.json()
-  return response.result
+  const result = response.result
+  // The turn itself comes from the rules lane; the three options ride along at
+  // the envelope level (the SSE lane sends them as a [SUGGESTIONS] tag).
+  if (result && !Array.isArray(result.suggestions) && Array.isArray(response.suggestions)) {
+    result.suggestions = response.suggestions
+  }
+  return result
 }
 
 /** Structured action (used by UI affordances that already know the target). */

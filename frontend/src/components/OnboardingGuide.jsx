@@ -249,7 +249,7 @@ export default function OnboardingGuide({ collapsed, activeTool, onHighlight, va
             </ul>
           )}
 
-          <p className="mb-2 rounded-lg bg-black/30 px-2 py-1 text-[10px] text-cyan-200/80">{step.hint}</p>
+          <p className="mb-2 rounded-lg bg-[#fbfaf7] px-2 py-1 text-[10px] text-cyan-200/80">{step.hint}</p>
 
           {step.key === 'system' && (
             <button

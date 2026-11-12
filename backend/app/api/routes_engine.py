@@ -48,6 +48,7 @@ from app.models.knowledge import ScenarioPlayContext
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services import narrator_factory
 from app.services.text_action_service import TextActionService
+from app.services.suggestions import suggestions_for_result
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,9 @@ class TextActionResponse(BaseModel):
     # still carries the raw text in `result` so the player sees what happened.
     parsed: Optional[Dict[str, Any]] = None
     result: ActionResult
+    # Three advisory next steps (same shape as the SSE [SUGGESTIONS] tag).
+    # Optional: a campaign without a world still returns a turn.
+    suggestions: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 
@@ -1913,6 +1917,55 @@ async def run_action(campaign_id: str, request: ActionRequest):
         service.scenario_store.close()
 
 
+
+def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, str]]:
+    """(name, entity id) for characters the player could address right now."""
+    people: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        name = value if isinstance(value, str) else getattr(value, "name", None)
+        text = (name or "").strip() if isinstance(name, str) else ""
+        if not text or text.casefold() in seen:
+            return
+        seen.add(text.casefold())
+        entity_id = getattr(value, "entity_id", None) or getattr(value, "id", None) or ""
+        people.append((text, entity_id if isinstance(entity_id, str) else ""))
+
+    try:
+        with _get_scenario_store() as store:
+            campaign = store.get_campaign(campaign_id)
+            cast = store.list_characters(campaign.scenario_id) if campaign else []
+        for character in cast:
+            add(character)
+    except Exception:
+        logger.debug("campaign cast unavailable for %s", campaign_id, exc_info=True)
+    return people[:limit]
+
+
+def _campaign_language(campaign_id: str) -> str:
+    """Language the campaign was written in (suggestions are localized)."""
+    try:
+        with _get_scenario_store() as store:
+            campaign = store.get_campaign(campaign_id)
+            scenario = store.get_scenario(campaign.scenario_id) if campaign else None
+        return getattr(scenario, "language", "") or "zh"
+    except Exception:
+        return "zh"
+
+
+def _load_world_for_campaign(campaign_id: str):
+    """The rules world a campaign is bound to (worlds live in the game store)."""
+    try:
+        with GameStateStore(_game_state_db_path()) as game_store:
+            state = game_store.get_state(campaign_id)
+            if state is None or not getattr(state, "world_id", ""):
+                return None
+            return game_store.get_world(state.world_id)
+    except Exception:
+        logger.debug("campaign world unavailable for %s", campaign_id, exc_info=True)
+        return None
+
 class TextActionBody(BaseModel):
     """A free-text utterance resolved into the structured action lane."""
 
@@ -1936,7 +1989,7 @@ async def run_text_action(campaign_id: str, request: TextActionBody):
         advisor=_build_advisor(),
     )
     try:
-        return await text_service.execute(
+        result = await text_service.execute(
             campaign_id,
             request.text,
             request_id=request.request_id,
@@ -1947,6 +2000,24 @@ async def run_text_action(campaign_id: str, request: TextActionBody):
     finally:
         service.store.close()
         service.scenario_store.close()
+    # The client shows three options after every turn; the SSE lane emits them
+    # as a [SUGGESTIONS] tag, this lane returns them in the response body.
+    try:
+        dump = getattr(result, "model_dump", None)
+        payload = result if isinstance(result, dict) else (dump() if callable(dump) else {})
+        payload = dict(payload)
+        inner = payload.get("result")
+        inner = dict(inner) if isinstance(inner, dict) else {}
+        payload["suggestions"] = suggestions_for_result(
+            inner,
+            characters=_campaign_characters(campaign_id),
+            world_getter=lambda: _load_world_for_campaign(campaign_id),
+            language=_campaign_language(campaign_id),
+        )
+        return payload
+    except Exception:  # noqa: BLE001 - suggestions must never break a turn
+        logger.debug("suggestions unavailable for %s", campaign_id, exc_info=True)
+        return result
 
 
 @router.get("/campaigns/{campaign_id}/events", response_model=List[DomainEventView])

@@ -39,6 +39,7 @@ from app.services.action_service import ActionService
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services.text_action_service import TextActionService
 from app.services.scenario_interpolation import interpolate
+from app.services.suggestions import build_suggestions, exits_from_state, target_directive
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +457,10 @@ class PlayerActionRequest(BaseModel):
     model: str = Field(default="deepseek-v4-flash", max_length=64)
     temperature: float = Field(default=0.85, ge=0.0, le=2.0)
     combat_enabled: bool | None = None
+    #: Optional character/entity the player is aiming this turn at. The rule
+    #: lane binds the reaction to it; the narrator lane gets it as a directive.
+    target_id: str = Field(default="", max_length=64)
+    target_name: str = Field(default="", max_length=200)
 
 
 # ---------------------------------------------------------------- unified lane
@@ -645,6 +650,123 @@ def _get_state_world(world_id: str):
         return None
 
 
+def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, str]]:
+    """(name, entity id) for characters the player could address right now.
+
+    Sources, in order: NPC minds (they only exist once the scene introduced
+    them), the campaign's authored cast, then graph entities. Every layer is
+    optional — a missing store just narrows the list.
+    """
+    people: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        name = value if isinstance(value, str) else getattr(value, "name", None)
+        text = (name or "").strip() if isinstance(name, str) else ""
+        if not text or text.casefold() in seen:
+            return
+        seen.add(text.casefold())
+        entity_id = getattr(value, "entity_id", None) or getattr(value, "id", None) or ""
+        people.append((text, entity_id if isinstance(entity_id, str) else ""))
+
+    try:
+        for mind in _npc_minds.get_all_minds(campaign_id):
+            add(mind)
+    except Exception:
+        logger.debug("NPC minds unavailable for %s", campaign_id, exc_info=True)
+
+    try:
+        with ScenarioStore(_scenario_db_path()) as store:
+            campaign = store.get_campaign(campaign_id)
+            pack = store.list_characters(campaign.scenario_id) if campaign else []
+        for character in pack:
+            add(character)
+    except Exception:
+        logger.debug("Scenarios unavailable for %s", campaign_id, exc_info=True)
+
+    try:
+        graph = _get_graph_engine(campaign_id)
+        if graph:
+            # The rule world already knows which people are in the room; the
+            # graph is a fallback for campaigns that predate it.
+            for node in getattr(graph, "nodes", {}).values() if isinstance(getattr(graph, "nodes", None), dict) else []:
+                add(node)
+    except Exception:
+        logger.debug("Graph entities unavailable for %s", campaign_id, exc_info=True)
+
+    return people[:limit]
+
+
+def _next_step_suggestions(req: PlayerActionRequest, result: dict) -> list[dict]:
+    """Three advisory next steps for a rule-lane turn (never committed).
+
+    The authoritative GameState only stores location ids and an item-id ->
+    count map, so names and exits come from the world document the engine
+    resolved for this turn (result["world"]) with the campaign store as a
+    fallback. Everything is optional: an unreadable world narrows the list
+    to the generic lines rather than failing the turn.
+    """
+    payload = result if isinstance(result, dict) else {}
+    state = payload.get("state") or {}
+    if not isinstance(state, dict):
+        dump = getattr(state, "model_dump", None)
+        state = dump() if callable(dump) else {}
+    world = payload.get("world")
+
+    location_id = str(state.get("location_id") or "")
+    held_ids = list(state.get("inventory") or {}) if isinstance(state.get("inventory"), dict) else []
+
+    location_name = ""
+    place_names: list[str] = []
+    item_names: list[str] = []
+    try:
+        if world is None:
+            world = _load_world_for_campaign(req.campaign_id)
+        locations = {loc.id: loc for loc in getattr(world, "locations", []) or []}
+        if location_id in locations:
+            here = locations[location_id]
+            location_name = here.name
+            for exit_def in getattr(here, "exits", []) or []:
+                target = locations.get(exit_def.target_id)
+                label = (getattr(exit_def, "label", "") or "").strip()
+                if label:
+                    place_names.append(label)
+                elif target is not None:
+                    place_names.append(target.name)
+        items_by_id = {item.id: item for item in getattr(world, "items", []) or []}
+        item_names = [items_by_id[i].name for i in held_ids if i in items_by_id]
+    except Exception:
+        logger.debug("world unavailable while building suggestions for %s", req.campaign_id, exc_info=True)
+
+    present = _campaign_characters(req.campaign_id)
+    return build_suggestions(
+        location=location_name,
+        exits=place_names,
+        characters=[name for name, _ in present],
+        character_ids=[entity_id for _, entity_id in present],
+        items=item_names,
+        language=req.language or "zh",
+    )
+
+
+def _load_world_for_campaign(campaign_id: str):
+    """The rules world a campaign is bound to, or None when it has none.
+
+    Worlds live in the game store, not on the scenario (the scenario only
+    carries prose), so this reads the campaign state first and then the world
+    it points at.
+    """
+    try:
+        with GameStateStore(_game_state_db_path()) as game_store:
+            state = game_store.get_state(campaign_id)
+            if state is None or not getattr(state, "world_id", ""):
+                return None
+            return game_store.get_world(state.world_id)
+    except Exception:
+        logger.debug("campaign world unavailable for %s", campaign_id, exc_info=True)
+        return None
+
+
 async def _unified_event_stream(req: PlayerActionRequest, service, scenario_store):
     """SSE adapter: commit first, then describe, then stream one narrative."""
     reset_call_log()
@@ -676,6 +798,11 @@ async def _unified_event_stream(req: PlayerActionRequest, service, scenario_stor
                 yield f"data: {line}\n"
             yield "\n"
         _mirror_unified_turn(req, before, result)
+        # The rule lane never asks the model for next steps, so without this the
+        # player would sit in front of an empty input box with no options.
+        next_steps = _next_step_suggestions(req, result)
+        if next_steps:
+            yield f"data: [SUGGESTIONS]{json.dumps(next_steps, ensure_ascii=False)}\n\n"
         summary = get_call_summary()
         yield f"data: [USAGE]{json.dumps(summary)}\n\n"
         trace = get_call_trace()
@@ -784,6 +911,18 @@ async def player_action(req: PlayerActionRequest):
     session.language = req.language or session.language
     if req.combat_enabled is not None:
         session.set_combat_enabled(req.combat_enabled)
+    # A turn aimed at a named character: the free-form lane has no rule engine
+    # to bind the reaction, so the binding has to be stated in the prompt.
+    if req.target_name:
+        directive = target_directive(req.target_name, req.language or session.language)
+        if directive:
+            # Scenario tone is the one per-session instruction block the
+            # narrator already receives; append rather than replace so the
+            # world's own directions survive.
+            base_tone = getattr(session, "scenario_tone", "") or ""
+            session.scenario_tone = (
+                f"{base_tone}\n\n{directive}" if base_tone else directive
+            )
 
     async def event_stream():
         reset_call_log()
@@ -885,10 +1024,18 @@ async def get_setup_state(campaign_id: str):
     questions = scenario.setup_questions or []
     answers = campaign.setup_answers or {}
     needs_setup = bool(questions) and not answers
+    # Which character this campaign already plays. The wizard used to force the
+    # picker on every entry; with this the client can start past a stage that
+    # was answered once and stay on it only when the player asks to change.
+    bound = getattr(campaign, "character_picks", None) or {}
+    character_id = bound.get("character_id") if isinstance(bound, dict) else ""
+    character_name = bound.get("name") if isinstance(bound, dict) else ""
     return {
         "questions": questions,
         "answers": answers,
         "needs_setup": needs_setup,
+        "character_id": character_id or "",
+        "character_name": character_name or "",
     }
 
 

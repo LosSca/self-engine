@@ -6,6 +6,7 @@ re-implement reference resolution or guess quest progress.
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import DEFAULT_OPENING as OPENING
 from tests.support import village_world_data
 
 API = "/api/v1"
@@ -197,7 +198,7 @@ def test_event_execution_history_filters_by_state_version(client):
     assert [entry["event_id"] for entry in later] == ["keeper_alert"]
 
 def test_world_map_exposes_regions_and_coordinates(client):
-    scenario = client.post("/api/scenarios/", json={"title": "Regions", "language": "zh"}).json()
+    scenario = client.post("/api/scenarios/", json={"title": "Regions", "language": "zh", "opening_narrative": OPENING}).json()
     world = {
         "world_id": "region_world",
         "scenario_id": scenario["id"],

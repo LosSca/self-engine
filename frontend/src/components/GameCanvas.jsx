@@ -36,6 +36,7 @@ import PlotGeneratorPanel from './PlotGeneratorPanel'
 import TimeskipModal from './TimeskipModal'
 import NpcInspector from './NpcInspector'
 import MemoryInspector from './MemoryInspector'
+import MiniMap from './MiniMap'
 // 地图看一眼才用到，ForceGraph2D 连同 d3 有 300KB+，不能让它压在游玩首屏上。
 const WorldMapModal = lazy(() => import('./WorldMapModal'))
 import InventoryPanel from './InventoryPanel'
@@ -107,7 +108,7 @@ function CharacterCard({ image }) {
         className="w-full block"
       />
       {(image.caption || image.name) && (
-        <figcaption className="px-4 py-2 bg-black/40 text-[10px] font-bold uppercase tracking-widest font-mono text-white/50">
+        <figcaption className="px-4 py-2 bg-[#fffdf9] text-[10px] font-bold uppercase tracking-widest font-mono text-white/50">
           {image.caption ? `${image.caption} · ${image.name}` : image.name}
         </figcaption>
       )}
@@ -529,13 +530,21 @@ export default function GameCanvas() {
     }
   }
 
-  const handleEngineAction = async (action) => {
+  const handleEngineAction = async (action, target) => {
     setSuggestions([])
     appendMessage({ role: 'user', content: action })
     setStreaming(true)
     try {
-      const result = await submitTextAction(activeCampaignId, action)
+      // 规则链路也认 @目标：把「对谁说话」写进行动文本，解析器才能绑定人物。
+      const spoken = target?.name && !String(action).includes(`@${target.name}`)
+        ? `${action} @${target.name}`
+        : action
+      const result = await submitTextAction(activeCampaignId, spoken)
       applyEngineResult(result)
+      // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
+      if (Array.isArray(result?.suggestions) && result.suggestions.length) {
+        setSuggestions(result.suggestions)
+      }
     } catch (err) {
       appendMessage({
         role: 'assistant',
@@ -546,9 +555,9 @@ export default function GameCanvas() {
     }
   }
 
-  const handleAction = (action) => {
+  const handleAction = (action, target) => {
     if (engineLane.checked && engineLane.bound) {
-      return handleEngineAction(action)
+      return handleEngineAction(action, target)
     }
     setSuggestions([])
     appendMessage({ role: 'user', content: action })
@@ -558,6 +567,8 @@ export default function GameCanvas() {
       scenarioTone: resolvedTone,
       language: scenarioView?.language ?? activeScenario?.language ?? 'zh',
       action,
+      targetName: target?.name || '',
+      targetId: target?.id || '',
       openingNarrative: resolvedOpening,
       maxTokens: maxTokens || 2000,
       provider: llmProvider,
@@ -618,9 +629,9 @@ export default function GameCanvas() {
   }
 
   return (
-    <div className="flex h-screen bg-black bg-cover bg-center bg-fixed overflow-hidden">
+    <div className="flex h-screen bg-[#f6f5f1] bg-cover bg-center bg-fixed overflow-hidden">
       <Sidebar variant="play" activeTool={activeTool} onTool={openTool} traces={traces.length} />
-      <div className="flex-1 min-w-0 flex flex-col h-full bg-black/80 backdrop-blur-md">
+      <div className="flex-1 min-w-0 flex flex-col h-full bg-[#fbfaf8]/90 backdrop-blur-md">
 
         {/* Combat Overlay */}
         <CombatOverlay
@@ -629,8 +640,11 @@ export default function GameCanvas() {
           onResolved={applyEngineResult}
         />
 
+        {/* 常驻小地图：固定在右上角，点击展开完整地图。 */}
+        <MiniMap campaignId={activeCampaignId} onOpen={() => setActiveTool('map')} />
+
         {/* Header */}
-        <header className="flex-none flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-black/80 backdrop-blur-xl border-b border-white/5 z-10 shadow-lg gap-2">
+        <header className="flex-none flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-[#fbfaf8]/90 backdrop-blur-xl border-b border-white/5 z-10 shadow-lg gap-2">
           <div className="flex items-center gap-4">
             <button
               onClick={() => setActiveTool(activeTool === 'character' ? null : 'character')}
@@ -823,7 +837,7 @@ export default function GameCanvas() {
         </div>
 
         {/* Input Area */}
-        <div className="flex-none bg-black/80 backdrop-blur-2xl border-t border-white/5 relative z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+        <div className="flex-none bg-[#fbfaf8]/90 backdrop-blur-2xl border-t border-white/5 relative z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
           {engineLane.bound && engineLane.state?.pending_choice && (
             <div className="max-w-4xl mx-auto w-full px-4 md:px-6 pt-3">
               <div className="rounded-2xl border border-amber-400/30 bg-amber-400/[0.06] p-4 flex flex-col gap-3">
@@ -854,8 +868,11 @@ export default function GameCanvas() {
             <SuggestionList
               suggestions={suggestions}
               disabled={isStreaming}
-              onSend={(input) => { setSuggestions([]); handleAction(input) }}
-              onEdit={(input) => { setSuggestions([]); setDraft({ text: input, at: Date.now() }) }}
+              onSend={(input, picked) => { setSuggestions([]); handleAction(input, picked) }}
+              onEdit={(input, picked) => {
+                setSuggestions([])
+                setDraft({ text: input, target: picked, at: Date.now() })
+              }}
             />
           </div>
           <div className="flex items-end max-w-4xl mx-auto w-full">

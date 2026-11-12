@@ -152,7 +152,7 @@ export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 
   return (
     <aside
       data-testid="app-sidebar"
-      className={`flex-none flex flex-col h-full bg-[#0b0d10] border-r border-white/10 transition-[width] duration-200 ${
+      className={`flex-none flex flex-col h-full bg-[#efece6] border-r border-white/10 transition-[width] duration-200 ${
         collapsed ? 'w-[60px]' : 'w-[196px]'
       }`}
     >

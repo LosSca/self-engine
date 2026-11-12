@@ -346,10 +346,10 @@ export default function WorldMapGraph({
     : null
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-[#071014] overflow-hidden">
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-white/10 bg-white/[0.02]">
-        <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-white/40">世界地图</span>
-        <span className="text-[10px] text-white/25">
+    <div className="rounded-2xl border border-[#e4e0d8] bg-[#f6f5f1] overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-[#e4e0d8] bg-[#fbfaf7]">
+        <span className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#8a857c]">世界地图</span>
+        <span className="text-[10px] text-[#a8a29a]">
           {regions.length} 区域 · {locations.length} 地点 · {edges.length} 路线
         </span>
         {cursor && cursorLocation && (
@@ -358,11 +358,11 @@ export default function WorldMapGraph({
           </span>
         )}
         <div className="flex-1" />
-        <button onClick={() => zoom(1.15)} className="px-2 py-1 rounded-lg text-xs text-white/60 border border-white/10 hover:text-white" title="放大">＋</button>
-        <span className="text-[10px] font-mono text-white/40 w-12 text-center">{Math.round(view.scale * 100)}%</span>
-        <button onClick={() => zoom(0.87)} className="px-2 py-1 rounded-lg text-xs text-white/60 border border-white/10 hover:text-white" title="缩小">－</button>
-        <button onClick={() => setView({ x: 0, y: 0, scale: 1 })} className="px-2 py-1 rounded-lg text-xs text-white/60 border border-white/10 hover:text-white" title="居中">⌂</button>
-        <button onClick={resetLayout} className="px-2 py-1 rounded-lg text-xs text-white/60 border border-white/10 hover:text-white" title="清除本地布局">重置</button>
+        <button onClick={() => zoom(1.15)} className="px-2 py-1 rounded-lg text-xs text-[#5c574f] border border-[#e4e0d8] hover:text-[#1a1a1a]" title="放大">＋</button>
+        <span className="text-[10px] font-mono text-[#8a857c] w-12 text-center">{Math.round(view.scale * 100)}%</span>
+        <button onClick={() => zoom(0.87)} className="px-2 py-1 rounded-lg text-xs text-[#5c574f] border border-[#e4e0d8] hover:text-[#1a1a1a]" title="缩小">－</button>
+        <button onClick={() => setView({ x: 0, y: 0, scale: 1 })} className="px-2 py-1 rounded-lg text-xs text-[#5c574f] border border-[#e4e0d8] hover:text-[#1a1a1a]" title="居中">⌂</button>
+        <button onClick={resetLayout} className="px-2 py-1 rounded-lg text-xs text-[#5c574f] border border-[#e4e0d8] hover:text-[#1a1a1a]" title="清除本地布局">重置</button>
         {selectedNode && onSavePosition && (
           <button onClick={saveSelectedPosition} className="px-2.5 py-1 rounded-lg text-[10px] text-cyan-200 border border-cyan-400/30 bg-cyan-500/10 hover:bg-cyan-500/20" title="把当前显示位置写回地点坐标">
             写入坐标
@@ -513,22 +513,22 @@ export default function WorldMapGraph({
           </g>
         </svg>
 
-        <div className="absolute right-5 top-5 w-14 h-14 rounded-full border border-white/20 bg-black/40 flex items-center justify-center pointer-events-none">
+        <div className="absolute right-5 top-5 w-14 h-14 rounded-full border border-[#dcd8d0] bg-[#ffffff] flex items-center justify-center pointer-events-none">
           <div className="text-center leading-none">
-            <div className="text-[10px] font-mono text-white/60">N</div>
+            <div className="text-[10px] font-mono text-[#5c574f]">N</div>
             <div className="text-lg text-emerald-200">↑</div>
           </div>
         </div>
         <div className="absolute right-5 bottom-4 flex items-center gap-2 pointer-events-none">
           <div className="h-px w-20 bg-white/35" />
-          <span className="text-[9px] font-mono text-white/40">1 GRID ≈ 1 REGION STEP</span>
+          <span className="text-[9px] font-mono text-[#8a857c]">1 GRID ≈ 1 REGION STEP</span>
         </div>
-        <div className="absolute left-3 bottom-3 rounded-lg border border-white/10 bg-black/55 px-2 py-1 text-[10px] font-mono text-white/35">
+        <div className="absolute left-3 bottom-3 rounded-lg border border-[#e4e0d8] bg-[#f6f5f1]/55 px-2 py-1 text-[10px] font-mono text-[#1a1a1a]/35">
           拖拽地点移动 · 空白拖拽平移 · 滚轮缩放 · 双击编辑
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[10px] font-mono text-white/35 border-t border-white/10">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-[10px] font-mono text-[#1a1a1a]/35 border-t border-[#e4e0d8]">
         <span>道路：虚线为小径</span>
         <span>红色虚线：门未开启</span>
         <span>区域：地形色块</span>
@@ -537,8 +537,8 @@ export default function WorldMapGraph({
 
       {selected && (
         <div className="px-4 pb-4">
-          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 flex flex-wrap items-center gap-3">
-            <span className="text-xs text-white/70">
+          <div className="rounded-xl border border-[#e4e0d8] bg-[#fbfaf7] p-3 flex flex-wrap items-center gap-3">
+            <span className="text-xs text-[#3a3630]">
               {selected.sourceId} → {selected.targetId}
               {selected.label ? '（' + selected.label + '）' : ''}
             </span>
@@ -548,9 +548,9 @@ export default function WorldMapGraph({
               </span>
             )}
             {selected.requires && <span className="text-[10px] font-mono text-amber-300/80">需要：{selected.requires.name}</span>}
-            <button onClick={() => onEditLocation && onEditLocation(selected.sourceId)} className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase">编辑来源地点</button>
+            <button onClick={() => onEditLocation && onEditLocation(selected.sourceId)} className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase">编辑来源地点</button>
             <button onClick={() => onDeleteExit && onDeleteExit(selected.sourceId, selected.targetId)} className="text-[10px] text-red-300/70 hover:text-red-200 tracking-[0.15em] uppercase">删除这条出口</button>
-            <button onClick={() => setSelectedEdge(null)} className="text-[10px] text-white/40 hover:text-white/70 tracking-[0.15em] uppercase">取消选择</button>
+            <button onClick={() => setSelectedEdge(null)} className="text-[10px] text-[#8a857c] hover:text-[#3a3630] tracking-[0.15em] uppercase">取消选择</button>
           </div>
         </div>
       )}

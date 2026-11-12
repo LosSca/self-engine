@@ -7,6 +7,19 @@
 
 import pytest
 
+#: 每个世界都必须有开场白（CreateScenarioRequest 校验）。测试里绝大多数场景
+#: 并不关心开场文本，用这句占位即可，别把用例写成「没有开场白也算合法」。
+DEFAULT_OPENING = "测试开场：你在一间点着灯的房间里醒来。"
+
+
+def make_scenario(client, **fields):
+    """按必填字段建一个情景，返回响应 JSON；失败时把响应体带进断言。"""
+    payload = {"title": "Test World", "opening_narrative": DEFAULT_OPENING}
+    payload.update(fields)
+    resp = client.post("/api/scenarios/", json=payload)
+    assert resp.status_code in (200, 201), resp.text
+    return resp.json()
+
 
 @pytest.fixture
 def client():

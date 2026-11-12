@@ -5,6 +5,8 @@ chat surface answered from memory while the rules engine had no state at all,
 so the two systems could disagree about the same player.
 """
 import pytest
+
+from tests.conftest import DEFAULT_OPENING as OPENING
 from fastapi.testclient import TestClient
 
 
@@ -23,7 +25,7 @@ def client(monkeypatch, tmp_path):
 
 @pytest.fixture
 def campaign(client):
-    scenario = client.post("/api/scenarios/", json={"title": "Mist Inn", "language": "en"}).json()
+    scenario = client.post("/api/scenarios/", json={"title": "Mist Inn", "language": "en", "opening_narrative": OPENING}).json()
     created = client.post(
         f"/api/scenarios/{scenario['id']}/campaigns", json={"player_name": "Tester"}
     ).json()

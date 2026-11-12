@@ -365,7 +365,7 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#fbfaf8]/90 backdrop-blur-sm">
       <div
         ref={containerRef}
         className="bg-white/[0.03] backdrop-blur-xl border border-white/5 rounded-2xl sm:rounded-[2rem] w-full max-w-4xl mx-2 sm:mx-4 overflow-hidden flex flex-col"

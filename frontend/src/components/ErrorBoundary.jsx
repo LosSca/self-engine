@@ -62,7 +62,7 @@ export default class ErrorBoundary extends Component {
       const chunkFailure = isChunkLoadError(this.state.error)
       if (chunkFailure) {
         return (
-          <div className="min-h-screen bg-black flex items-center justify-center p-8">
+          <div className="min-h-screen bg-[#f6f5f1] flex items-center justify-center p-8">
             <div className="max-w-md text-center">
               <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-amber-500/10 flex items-center justify-center">
                 <span className="text-amber-300 text-2xl">↻</span>
@@ -88,7 +88,7 @@ export default class ErrorBoundary extends Component {
         )
       }
       return (
-        <div className="min-h-screen bg-black flex items-center justify-center p-8">
+        <div className="min-h-screen bg-[#f6f5f1] flex items-center justify-center p-8">
           <div className="max-w-md text-center">
             <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-rose-500/10 flex items-center justify-center">
               <span className="text-rose-400 text-2xl">!</span>

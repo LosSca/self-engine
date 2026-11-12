@@ -224,7 +224,7 @@ export default function CharacterLibrary({ open, onClose }) {
             </button>
             <button
               onClick={onClose}
-              className="px-5 py-2.5 rounded-xl bg-[#1a1a1a] text-white text-[10px] font-bold tracking-[0.15em] uppercase hover:bg-[#333] transition-all"
+              className="px-5 py-2.5 rounded-xl bg-[#3f3a34] text-white text-[10px] font-bold tracking-[0.15em] uppercase hover:bg-[#524c45] transition-all"
             >
               关闭
             </button>
@@ -290,7 +290,7 @@ export default function CharacterLibrary({ open, onClose }) {
                 <button
                   onClick={handleCreate}
                   disabled={busy || !draft.name.trim()}
-                  className="w-full py-2.5 rounded-xl bg-[#1a1a1a] text-white text-[10px] font-bold tracking-[0.2em] uppercase disabled:opacity-30 hover:bg-[#333] transition-all"
+                  className="w-full py-2.5 rounded-xl bg-[#3f3a34] text-white text-[10px] font-bold tracking-[0.2em] uppercase disabled:opacity-30 hover:bg-[#524c45] transition-all"
                 >
                   创建
                 </button>
@@ -488,7 +488,7 @@ export default function CharacterLibrary({ open, onClose }) {
                       <button
                         onClick={handleAddLook}
                         disabled={busy || !lookForm.image_url}
-                        className="ml-auto px-5 py-2 rounded-xl bg-[#1a1a1a] text-white text-[10px] font-bold tracking-[0.15em] uppercase disabled:opacity-30 hover:bg-[#333] transition-all"
+                        className="ml-auto px-5 py-2 rounded-xl bg-[#3f3a34] text-white text-[10px] font-bold tracking-[0.15em] uppercase disabled:opacity-30 hover:bg-[#524c45] transition-all"
                       >
                         添加这张立绘
                       </button>

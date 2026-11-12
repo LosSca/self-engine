@@ -28,13 +28,16 @@ const LANGUAGES = [
   { id: 'en', label: 'English' },
 ]
 
+// Paper palette, shared with the character library: the light theme cannot
+// invert a black canvas into something readable, so nothing here is black.
 const inputClass =
-  'w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-colors'
-const labelClass = 'block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2'
+  'w-full bg-[#fbfaf7] border border-[#dcd8d0] rounded-xl px-4 py-3 text-sm text-[#1a1a1a] placeholder:text-[#9a958c] focus:outline-none focus:border-[#8a857c] transition-colors'
+const labelClass = 'block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8a857c] mb-2'
 const labelRowClass = 'flex items-center justify-between gap-3 mb-2'
-const sectionClass = 'bg-white/[0.03] border border-white/5 rounded-3xl p-6 sm:p-8 backdrop-blur-xl'
+const sectionClass =
+  'bg-white border border-[#e4e0d8] rounded-3xl p-6 sm:p-8 shadow-[0_1px_2px_rgba(24,20,16,0.04),0_18px_40px_-28px_rgba(24,20,16,0.35)]'
 const tinyBtnClass =
-  'px-3 py-1.5 rounded-lg border border-white/10 text-[10px] tracking-widest uppercase text-white/50 hover:text-white hover:border-white/30 transition-all'
+  'px-3 py-1.5 rounded-lg border border-[#dcd8d0] text-[10px] tracking-widest uppercase text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#8a857c] transition-all'
 
 let uid = 0
 const nextUid = () => 'local-' + ++uid
@@ -259,6 +262,11 @@ export default function ScenarioBuilder({ onCreated }) {
       setError('请先填写情景名称。')
       return
     }
+    // 后端也校验这一条（CreateScenarioRequest），这里先拦一次，别让玩家提交后才看到报错。
+    if (!form.opening_narrative.trim() && !form.ai_opening_directive.trim()) {
+      setError('这个世界的开场白还不能空：写一段开场，或让 AI 按指令生成。')
+      return
+    }
     setSubmitting(true)
     try {
       const questionsPayload = buildQuestionsPayload()
@@ -320,30 +328,30 @@ export default function ScenarioBuilder({ onCreated }) {
   }
 
   return (
-    <div className="min-h-screen bg-black text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden">
+    <div className="min-h-screen bg-[#f6f5f1] text-[#3a3630] font-sans selection:bg-[#1a1a1a]/10 selection:text-[#1a1a1a] relative overflow-hidden">
       <div
-        className="page-bg absolute inset-0 bg-cover bg-center bg-no-repeat opacity-30 mix-blend-screen"
+        className="page-bg absolute inset-0 bg-cover bg-center bg-no-repeat opacity-25"
         style={{ backgroundImage: "url('/lunar-bg.jpg')" }}
       ></div>
-      <div className="page-mask absolute inset-0 bg-gradient-to-b from-black via-black/80 to-black pointer-events-none"></div>
+      <div className="page-mask absolute inset-0 bg-gradient-to-b from-[#f6f5f1] via-[#f6f5f1]/85 to-[#f6f5f1] pointer-events-none"></div>
 
       <div className="relative z-10 max-w-4xl mx-auto px-4 sm:px-8 py-10">
         <button
           onClick={() => navigate('/')}
-          className="text-[10px] uppercase tracking-[0.3em] text-white/40 hover:text-white transition-colors mb-8"
+          className="text-[10px] uppercase tracking-[0.3em] text-[#8a857c] hover:text-[#1a1a1a] transition-colors mb-8"
         >
           ← 返回首页
         </button>
 
         <header className="mb-10">
-          <h1 className="text-3xl sm:text-5xl font-bold text-white tracking-tight mb-3">构建情景</h1>
-          <p className="text-sm text-gray-400 max-w-2xl leading-relaxed">
+          <h1 className="text-3xl sm:text-5xl font-bold text-[#1a1a1a] tracking-tight mb-3">构建情景</h1>
+          <p className="text-sm text-[#5c574f] max-w-2xl leading-relaxed">
             先定义世界类型与基调，再补充角色、地点和开场。所有配置都会成为之后规则与叙事的事实来源。
           </p>
         </header>
 
         {error && (
-          <div className="mb-6 px-5 py-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 text-rose-200 text-sm whitespace-pre-wrap">
+          <div className="mb-6 px-5 py-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-700 text-sm whitespace-pre-wrap">
             {error}
           </div>
         )}
@@ -352,8 +360,8 @@ export default function ScenarioBuilder({ onCreated }) {
           {/* 世界类型 */}
           <section className={sectionClass}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-white/50">世界类型</h2>
-              <span className="text-[10px] text-white/30">已选：{typeLabel}</span>
+              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-[#5c574f]">世界类型</h2>
+              <span className="text-[10px] text-[#8a857c]">已选：{typeLabel}</span>
             </div>
             <div className="flex flex-wrap gap-2">
               {ALL_TYPES.map((t) => (
@@ -367,8 +375,8 @@ export default function ScenarioBuilder({ onCreated }) {
                   className={
                     'px-4 py-2 rounded-xl border text-xs transition-all ' +
                     (t.id === selectedType
-                      ? 'border-white/40 text-white bg-white/10'
-                      : 'border-white/10 text-white/40 hover:text-white hover:border-white/25')
+                      ? 'border-[#8a857c] text-[#1a1a1a] bg-[#efede8]'
+                      : 'border-[#dcd8d0] text-[#8a857c] hover:text-[#1a1a1a] hover:border-[#8a857c]')
                   }
                 >
                   <span className="mr-2">{t.icon}</span>
@@ -377,7 +385,7 @@ export default function ScenarioBuilder({ onCreated }) {
               ))}
             </div>
             {preset && preset.id !== 'custom' && (
-              <p className="text-[11px] text-white/30 mt-4 leading-relaxed">
+              <p className="text-[11px] text-[#8a857c] mt-4 leading-relaxed">
                 已按「{preset.name}」预填基调、背景、开场与示例卡片，可自由修改。
               </p>
             )}
@@ -385,7 +393,7 @@ export default function ScenarioBuilder({ onCreated }) {
 
           {/* 基础设定 */}
           <section className={sectionClass}>
-            <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-white/50 mb-6">基础设定</h2>
+            <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-[#5c574f] mb-6">基础设定</h2>
             <div className="flex flex-col gap-5">
               <div>
                 <label className={labelClass}>情景名称 *</label>
@@ -470,7 +478,7 @@ export default function ScenarioBuilder({ onCreated }) {
 
           {/* 开场 */}
           <section className={sectionClass}>
-            <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-white/50 mb-6">开场</h2>
+            <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-[#5c574f] mb-6">开场</h2>
             <div className="flex gap-2 mb-5">
               {[
                 { id: 'fixed', label: '固定文本' },
@@ -482,8 +490,8 @@ export default function ScenarioBuilder({ onCreated }) {
                   className={
                     'px-4 py-2 rounded-xl border text-xs transition-all ' +
                     (form.opening_mode === mode.id
-                      ? 'border-white/40 text-white bg-white/10'
-                      : 'border-white/10 text-white/40 hover:text-white')
+                      ? 'border-[#8a857c] text-[#1a1a1a] bg-[#efede8]'
+                      : 'border-[#dcd8d0] text-[#8a857c] hover:text-[#1a1a1a]')
                   }
                 >
                   {mode.label}
@@ -526,11 +534,11 @@ export default function ScenarioBuilder({ onCreated }) {
                     {previewing ? '生成中…' : '预览生成的开场'}
                   </button>
                   {preview && (
-                    <span className="text-[10px] text-white/30">预览只做展示，不会保存</span>
+                    <span className="text-[10px] text-[#8a857c]">预览只做展示，不会保存</span>
                   )}
                 </div>
                 {preview && (
-                  <div className="rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-white/70 whitespace-pre-wrap leading-relaxed">
+                  <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 text-sm text-[#3a3630] whitespace-pre-wrap leading-relaxed">
                     {preview}
                   </div>
                 )}
@@ -541,17 +549,17 @@ export default function ScenarioBuilder({ onCreated }) {
           {/* 故事卡片 */}
           <section className={sectionClass}>
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-white/50">
+              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-[#5c574f]">
                 故事卡片 · {cards.length} 张
               </h2>
               <button onClick={addCard} className={tinyBtnClass}>+ 添加卡片</button>
             </div>
             <div className="flex flex-col gap-4">
               {cards.length === 0 && (
-                <p className="text-xs text-white/30">还没有卡片。角色、地点、阵营和物品都可以先写成卡片。</p>
+                <p className="text-xs text-[#8a857c]">还没有卡片。角色、地点、阵营和物品都可以先写成卡片。</p>
               )}
               {cards.map((card) => (
-                <div key={card.uid} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div key={card.uid} className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4">
                   <div className="grid grid-cols-1 sm:grid-cols-[120px_1fr_auto] gap-3 mb-3">
                     <select
                       className={inputClass}
@@ -586,24 +594,24 @@ export default function ScenarioBuilder({ onCreated }) {
           {/* 角色包 */}
           <section className={sectionClass}>
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-white/50">
+              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-[#5c574f]">
                 角色包 · {characters.length} 位
               </h2>
               <button onClick={addCharacter} className={tinyBtnClass}>+ 添加角色</button>
             </div>
-            <p className="text-[11px] text-white/30 mb-6 leading-relaxed">
+            <p className="text-[11px] text-[#8a857c] mb-6 leading-relaxed">
               每位角色可以配置多套「服装 × 表情」立绘。玩家开局时从中选择一套，之后的叙事插图会跟随当前形象。
             </p>
 
             <div className="flex flex-col gap-5">
               {characters.length === 0 && (
-                <p className="text-xs text-white/30">还没有角色。添加一位玩家角色后才能开始冒险。</p>
+                <p className="text-xs text-[#8a857c]">还没有角色。添加一位玩家角色后才能开始冒险。</p>
               )}
               {characters.map((character) => (
-                <div key={character.uid} className="rounded-2xl border border-white/10 bg-black/30 p-5">
+                <div key={character.uid} className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-5">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <span className="text-sm text-white/80">{character.name || '未命名角色'}</span>
+                      <span className="text-sm text-[#1a1a1a]">{character.name || '未命名角色'}</span>
                       {character.is_player && (
                         <span className="text-[9px] px-2 py-0.5 rounded-full border border-emerald-400/30 text-emerald-300/80">
                           玩家角色
@@ -643,7 +651,7 @@ export default function ScenarioBuilder({ onCreated }) {
                   />
 
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[10px] uppercase tracking-[0.2em] text-white/40">
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-[#8a857c]">
                       立绘差分 · {character.looks.length} 套
                     </span>
                     <button onClick={() => addLook(character.uid)} className={tinyBtnClass}>+ 差分</button>
@@ -685,14 +693,14 @@ export default function ScenarioBuilder({ onCreated }) {
                           <img
                             src={look.image_url}
                             alt={look.outfit + look.expression}
-                            className="w-10 h-14 object-cover rounded-lg border border-white/10"
+                            className="w-10 h-14 object-cover rounded-lg border border-[#e4e0d8]"
                           />
                         )}
                         <button onClick={() => removeLook(character.uid, look.uid)} className={tinyBtnClass}>移除</button>
                       </div>
                     ))}
                     {character.looks.length === 0 && (
-                      <p className="text-[11px] text-white/25">还没有立绘差分，可以先添加「常服 / 平静」。</p>
+                      <p className="text-[11px] text-[#a8a29a]">还没有立绘差分，可以先添加「常服 / 平静」。</p>
                     )}
                   </div>
                 </div>
@@ -703,21 +711,21 @@ export default function ScenarioBuilder({ onCreated }) {
           {/* 首次游玩问答 */}
           <section className={sectionClass}>
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-white/50">
+              <h2 className="text-xs font-bold uppercase tracking-[0.25em] text-[#5c574f]">
                 首次游玩问答 · {questions.length} 题
               </h2>
               <button onClick={addQuestion} className={tinyBtnClass}>+ 添加问题</button>
             </div>
-            <p className="text-[11px] text-white/30 mb-6 leading-relaxed">
+            <p className="text-[11px] text-[#8a857c] mb-6 leading-relaxed">
               这些问答会在冒险开始前询问玩家，答案会作为开局上下文交给叙事模型。
             </p>
 
             <div className="flex flex-col gap-4">
               {questions.length === 0 && (
-                <p className="text-xs text-white/30">没有问答也可以，玩家会直接进入开场。</p>
+                <p className="text-xs text-[#8a857c]">没有问答也可以，玩家会直接进入开场。</p>
               )}
               {questions.map((q) => (
-                <div key={q.uid} className="rounded-2xl border border-white/10 bg-black/30 p-4 flex flex-col gap-3">
+                <div key={q.uid} className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
                   <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
                     <input
                       className={inputClass}
@@ -750,7 +758,7 @@ export default function ScenarioBuilder({ onCreated }) {
                         placeholder="每行一个选项"
                       />
                     ) : (
-                      <div className="flex items-center gap-4 text-[11px] text-white/40">
+                      <div className="flex items-center gap-4 text-[11px] text-[#8a857c]">
                         <label className="flex items-center gap-2">
                           <input
                             type="checkbox"
@@ -780,7 +788,7 @@ export default function ScenarioBuilder({ onCreated }) {
         </div>
 
         <div className="mt-10 flex flex-col sm:flex-row items-center gap-4 justify-between">
-          <p className="text-[11px] text-white/25">
+          <p className="text-[11px] text-[#a8a29a]">
             {playerCharacter
               ? '玩家角色：' + playerCharacter.name
               : '提示：还没有设置玩家角色，开局时会使用默认旅人。'}
@@ -788,7 +796,7 @@ export default function ScenarioBuilder({ onCreated }) {
           <button
             onClick={handleSubmit}
             disabled={submitting}
-            className="px-10 py-4 rounded-full bg-white text-black font-bold text-xs uppercase tracking-[0.2em] hover:bg-gray-200 transition-all disabled:opacity-40"
+            className="px-10 py-4 rounded-full bg-[#3f3a34] text-white font-bold text-xs uppercase tracking-[0.2em] hover:bg-[#3a3733] disabled:opacity-40 disabled:cursor-not-allowed border border-[#dcd8d0] transition-all"
           >
             {submitting ? '正在构建世界…' : '创建情景'}
           </button>

@@ -1,4 +1,6 @@
 import pytest
+
+from tests.conftest import DEFAULT_OPENING as OPENING
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
@@ -32,7 +34,7 @@ def test_graph_search_endpoint(client):
 
 def test_inventory_reads_the_authoritative_state_when_a_world_is_bound(client):
     scenario = client.post(
-        "/api/scenarios/", json={"title": "Inventory", "language": "zh"}
+        "/api/scenarios/", json={"title": "Inventory", "language": "zh", "opening_narrative": OPENING}
     ).json()
     world = {
         "world_id": "inventory_world",

@@ -17,7 +17,8 @@ def client(tmp_path, monkeypatch):
 @pytest.fixture
 def campaign(client):
     scenario = client.post(
-        "/api/scenarios", json={"title": "Lane Test", "language": "en"}
+        "/api/scenarios",
+        json={"title": "Lane Test", "language": "en", "opening_narrative": "A dim corridor."},
     ).json()
     created = client.post(
         f"/api/scenarios/{scenario['id']}/campaigns", json={"player_name": "Tester"}

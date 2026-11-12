@@ -89,7 +89,7 @@ function TabButton({ active, children, onClick }) {
         'px-4 py-2 rounded-xl text-xs font-bold tracking-[0.15em] transition-all border ' +
         (active
           ? 'bg-white text-black border-white'
-          : 'bg-white/5 text-white/60 border-white/5 hover:border-white/20 hover:text-white')
+          : 'bg-[#f3f1ec] text-[#5c574f] border-[#eae6de] hover:border-[#dcd8d0] hover:text-[#1a1a1a]')
       }
     >
       {children}
@@ -99,14 +99,14 @@ function TabButton({ active, children, onClick }) {
 
 function FieldLabel({ children }) {
   return (
-    <span className="block text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 mb-2">
+    <span className="block text-[10px] font-mono uppercase tracking-[0.2em] text-[#8a857c] mb-2">
       {children}
     </span>
   )
 }
 
 const inputClass =
-  'w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30'
+  'w-full bg-[#f3f1ec] border border-[#e4e0d8] rounded-xl px-3 py-2 text-sm text-[#1a1a1a] placeholder:text-[#a8a29a] focus:outline-none focus:border-white/30'
 
 function KnowledgeEntryForm({ draft, setDraft, layers, onSubmit, onCancel, saving, submitLabel }) {
   const [tagsText, setTagsText] = useState((draft.tags || []).join(', '))
@@ -114,7 +114,7 @@ function KnowledgeEntryForm({ draft, setDraft, layers, onSubmit, onCancel, savin
   const update = (patch) => setDraft({ ...draft, ...patch })
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 flex flex-col gap-4">
+    <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-5 flex flex-col gap-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <label>
           <FieldLabel>知识分层</FieldLabel>
@@ -195,7 +195,7 @@ function KnowledgeEntryForm({ draft, setDraft, layers, onSubmit, onCancel, savin
           </select>
         </label>
       </div>
-      <div className="flex flex-wrap items-center gap-5 text-xs text-white/60">
+      <div className="flex flex-wrap items-center gap-5 text-xs text-[#5c574f]">
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -223,7 +223,7 @@ function KnowledgeEntryForm({ draft, setDraft, layers, onSubmit, onCancel, savin
         </button>
         <button
           onClick={onCancel}
-          className="px-5 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white"
+          className="px-5 py-2 rounded-xl border border-[#e4e0d8] text-[#5c574f] text-xs hover:border-white/30 hover:text-[#1a1a1a]"
         >
           取消
         </button>
@@ -473,9 +473,9 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
-      <div className="w-full max-w-5xl bg-[#0b0b0b] border border-white/10 rounded-[2rem] shadow-2xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 border-b border-white/10">
+    <div className="fixed inset-0 z-50 bg-[#f6f5f1]/80 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
+      <div className="w-full max-w-5xl bg-[#f6f5f1] border border-[#e4e0d8] rounded-[2rem] shadow-2xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 border-b border-[#e4e0d8]">
           <div className="flex items-start gap-4">
             <img
               src="/self-reference-mark.png"
@@ -487,18 +487,18 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
               draggable="false"
             />
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-2">
+              <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-[#8a857c] mb-2">
                 知识 · 模式 · 预设
               </div>
-              <h2 className="text-2xl font-bold text-white">{scenarioTitle || '情景配置'}</h2>
-              <p className="text-xs text-white/40 mt-2">
+              <h2 className="text-2xl font-bold text-[#1a1a1a]">{scenarioTitle || '情景配置'}</h2>
+              <p className="text-xs text-[#8a857c] mt-2">
                 知识只作为叙事背景注入；模式的推进由权威状态与规则决定。
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="px-5 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white self-start"
+            className="px-5 py-2 rounded-xl border border-[#e4e0d8] text-[#5c574f] text-xs hover:border-white/30 hover:text-[#1a1a1a] self-start"
           >
             关闭
           </button>
@@ -542,7 +542,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
               <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="text-sm font-bold text-cyan-100">AI 生成知识草稿</span>
-                  <span className="text-[10px] text-white/35">生成后先预览，确认再写入</span>
+                  <span className="text-[10px] text-[#1a1a1a]/35">生成后先预览，确认再写入</span>
                 </div>
                 <textarea
                   className={inputClass + ' min-h-[80px]'}
@@ -551,7 +551,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                   placeholder="例如：为雾港写一组世界总览、酒馆场景、守夜人和一个夜间事件。"
                 />
                 <div className="flex flex-wrap items-center gap-3">
-                  <label className="text-xs text-white/50 flex items-center gap-2">
+                  <label className="text-xs text-[#5c574f] flex items-center gap-2">
                     条数
                     <input
                       type="number"
@@ -574,24 +574,24 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                       <button onClick={applyAiDrafts} disabled={aiBusy} className="px-4 py-2 rounded-xl border border-emerald-400/40 text-emerald-200 text-xs hover:bg-emerald-400/10">
                         全部写入知识库
                       </button>
-                      <button onClick={() => setAiDrafts([])} className="text-xs text-white/40 hover:text-white">清空</button>
+                      <button onClick={() => setAiDrafts([])} className="text-xs text-[#8a857c] hover:text-[#1a1a1a]">清空</button>
                     </>
                   )}
                 </div>
                 {aiDrafts.length > 0 && (
                   <div className="flex flex-col gap-2 max-h-72 overflow-auto">
                     {aiDrafts.map((item, index) => (
-                      <div key={index} className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs">
+                      <div key={index} className="rounded-xl border border-[#e4e0d8] bg-[#fbfaf7] p-3 text-xs">
                         {item._error ? (
                           <span className="text-rose-300">{item._error}</span>
                         ) : (
                           <>
-                            <div className="flex flex-wrap items-center gap-2 text-white/70">
+                            <div className="flex flex-wrap items-center gap-2 text-[#3a3630]">
                               <span className="font-bold">{item.title}</span>
-                              <span className="text-white/30">[{item.layer}] 深度 {item.depth}</span>
-                              {(item.tags || []).map((tag) => <span key={tag} className="text-white/30">#{tag}</span>)}
+                              <span className="text-[#8a857c]">[{item.layer}] 深度 {item.depth}</span>
+                              {(item.tags || []).map((tag) => <span key={tag} className="text-[#8a857c]">#{tag}</span>)}
                             </div>
-                            <p className="mt-1 text-white/45 whitespace-pre-wrap">{item.content}</p>
+                            <p className="mt-1 text-[#1a1a1a]/45 whitespace-pre-wrap">{item.content}</p>
                           </>
                         )}
                       </div>
@@ -600,7 +600,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 )}
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-white/40 leading-relaxed max-w-2xl">
+                <p className="text-xs text-[#8a857c] leading-relaxed max-w-2xl">
                   深度链从 0 到 9：数值越小越先载入，超出运行模式上限的条目会被跳过（常驻条目除外）。
                   自由模式下「仅故事线」条目不会被载入，但事件层的小事件只要设为常驻就始终开启。
                 </p>
@@ -634,7 +634,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
               )}
 
               {entries.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-white/10 py-10 text-center text-white/30 text-xs">
+                <div className="rounded-2xl border border-dashed border-[#e4e0d8] py-10 text-center text-[#8a857c] text-xs">
                   还没有知识条目。先写一条世界总览，再逐步补充场景与人物。
                 </div>
               )}
@@ -644,22 +644,22 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 if (list.length === 0) return null
                 return (
                   <div key={layer.id} className="flex flex-col gap-3">
-                    <div className="flex items-center gap-3 text-[10px] font-mono uppercase tracking-[0.25em] text-white/40">
+                    <div className="flex items-center gap-3 text-[10px] font-mono uppercase tracking-[0.25em] text-[#8a857c]">
                       <span>{layer.label}</span>
-                      <span className="text-white/20">{list.length}</span>
-                      <div className="flex-1 h-px bg-white/5" />
+                      <span className="text-[#a8a29a]">{list.length}</span>
+                      <div className="flex-1 h-px bg-[#f3f1ec]" />
                     </div>
                     {list.map((entry) => (
                       <div
                         key={entry.id}
-                        className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3"
+                        className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3"
                       >
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-bold text-white">{entry.title}</span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-white/10 text-white/50">
+                          <span className="text-sm font-bold text-[#1a1a1a]">{entry.title}</span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-[#e4e0d8] text-[#5c574f]">
                             深度 {entry.depth}
                           </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-white/10 text-white/50">
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-[#e4e0d8] text-[#5c574f]">
                             {SCOPE_LABELS[entry.mode_scope] || entry.mode_scope}
                           </span>
                           {entry.always_on && (
@@ -696,18 +696,18 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                               setCreating(false)
                               setErrors([])
                             }}
-                            className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                            className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
                           >
                             编辑
                           </button>
                           <button
                             onClick={() => removeEntry(entry)}
-                            className="text-[10px] text-white/30 hover:text-rose-400 tracking-[0.15em] uppercase"
+                            className="text-[10px] text-[#8a857c] hover:text-rose-400 tracking-[0.15em] uppercase"
                           >
                             删除
                           </button>
                         </div>
-                        <p className="text-xs text-white/50 leading-relaxed whitespace-pre-wrap">
+                        <p className="text-xs text-[#5c574f] leading-relaxed whitespace-pre-wrap">
                           {entry.content}
                         </p>
                         {entry.tags && entry.tags.length > 0 && (
@@ -715,7 +715,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                             {entry.tags.map((tag) => (
                               <span
                                 key={tag}
-                                className="text-[10px] font-mono text-white/30 border border-white/5 rounded-md px-2 py-0.5"
+                                className="text-[10px] font-mono text-[#8a857c] border border-[#eae6de] rounded-md px-2 py-0.5"
                               >
                                 {tag}
                               </span>
@@ -739,11 +739,11 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                     'text-left p-5 rounded-2xl border transition-all ' +
                     (config.mode === 'free'
                       ? 'border-white/40 bg-white/[0.07]'
-                      : 'border-white/10 bg-white/[0.02] hover:border-white/20')
+                      : 'border-[#e4e0d8] bg-[#fbfaf7] hover:border-[#dcd8d0]')
                   }
                 >
-                  <div className="text-sm font-bold text-white mb-1">自由模式</div>
-                  <p className="text-xs text-white/50 leading-relaxed">
+                  <div className="text-sm font-bold text-[#1a1a1a] mb-1">自由模式</div>
+                  <p className="text-xs text-[#5c574f] leading-relaxed">
                     不设主故事线，玩家可以自由探索；世界知识与常驻小事件仍然生效。
                   </p>
                 </button>
@@ -753,11 +753,11 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                     'text-left p-5 rounded-2xl border transition-all ' +
                     (config.mode === 'storyline'
                       ? 'border-white/40 bg-white/[0.07]'
-                      : 'border-white/10 bg-white/[0.02] hover:border-white/20')
+                      : 'border-[#e4e0d8] bg-[#fbfaf7] hover:border-[#dcd8d0]')
                   }
                 >
-                  <div className="text-sm font-bold text-white mb-1">故事线模式</div>
-                  <p className="text-xs text-white/50 leading-relaxed">
+                  <div className="text-sm font-bold text-[#1a1a1a] mb-1">故事线模式</div>
+                  <p className="text-xs text-[#5c574f] leading-relaxed">
                     按主干线与分支推进；节点只由前置节点与已满足条件进入，模型无法自行跳转。
                   </p>
                 </button>
@@ -865,7 +865,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 </label>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/50">
+              <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 text-xs text-[#5c574f]">
                 故事线节点、分组、停用与 AI 生成已移至独立「故事线工坊」；
                 这里保留运行模式、知识预算与模型预设。
               </div>
@@ -889,40 +889,40 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 </button>
                 <button
                   onClick={runValidate}
-                  className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white"
+                  className="px-4 py-2 rounded-xl border border-[#e4e0d8] text-[#5c574f] text-xs hover:border-white/30 hover:text-[#1a1a1a]"
                 >
                   校验配置
                 </button>
                 <button
                   onClick={runPreview}
-                  className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white"
+                  className="px-4 py-2 rounded-xl border border-[#e4e0d8] text-[#5c574f] text-xs hover:border-white/30 hover:text-[#1a1a1a]"
                 >
                   预览已保存配置的知识
                 </button>
               </div>
 
               {preview && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-3">
-                  <div className="text-xs text-white/60">
+                <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-3">
+                  <div className="text-xs text-[#5c574f]">
                     模式 {preview.stats.mode === 'free' ? '自由' : '故事线'} · 载入{' '}
                     {preview.stats.included}/{preview.stats.total} 条 · 深度上限{' '}
                     {preview.stats.max_depth}
                   </div>
-                  <p className="text-xs text-white/40">优先知识来源节点：{(preview.story_nodes || []).join('、') || '无'}</p>
+                  <p className="text-xs text-[#8a857c]">优先知识来源节点：{(preview.story_nodes || []).join('、') || '无'}</p>
                   <div className="flex flex-col gap-2">
                     {preview.blocks.map((block) => (
-                      <div key={block.entry_id} className="text-xs text-white/70">
-                        <span className="text-white/30 font-mono mr-2">[{block.layer}]</span>
+                      <div key={block.entry_id} className="text-xs text-[#3a3630]">
+                        <span className="text-[#8a857c] font-mono mr-2">[{block.layer}]</span>
                         {block.title}
-                        <span className="text-white/30 font-mono ml-2">深度 {block.depth}</span>
+                        <span className="text-[#8a857c] font-mono ml-2">深度 {block.depth}</span>
                       </div>
                     ))}
                     {preview.blocks.length === 0 && (
-                      <span className="text-xs text-white/30">没有条目会被载入</span>
+                      <span className="text-xs text-[#8a857c]">没有条目会被载入</span>
                     )}
                   </div>
                   {preview.stats.excluded.length > 0 && (
-                    <div className="text-xs text-white/40">
+                    <div className="text-xs text-[#8a857c]">
                       <p>另有 {preview.stats.excluded.length} 条被排除</p>
                       <ul className="mt-2 list-disc pl-5 space-y-1">
                         {preview.stats.excluded.map((entry) => <li key={entry.entry_id}>{entry.title}：{entry.reason}</li>)}
@@ -936,11 +936,11 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
 
           {tab === 'presets' && (
             <div className="flex flex-col gap-5">
-              <p className="text-xs text-white/40 leading-relaxed">
+              <p className="text-xs text-[#8a857c] leading-relaxed">
                 预设参考 SillyTavern 的采样器：温度、top_p/top_k、min_p、重复与存在惩罚、停止词和系统提示。所有参数只影响生成，不会绕过规则判定。
               </p>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-col gap-4">
+              <div className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-col gap-4">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <label>
                     <FieldLabel>名称</FieldLabel>
@@ -1083,7 +1083,7 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                         setEditingPresetId(null)
                         setPresetDraft(EMPTY_PRESET)
                       }}
-                      className="px-4 py-2 rounded-xl border border-white/10 text-white/60 text-xs hover:border-white/30 hover:text-white"
+                      className="px-4 py-2 rounded-xl border border-[#e4e0d8] text-[#5c574f] text-xs hover:border-white/30 hover:text-[#1a1a1a]"
                     >
                       取消编辑
                     </button>
@@ -1095,18 +1095,18 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                 {presets.map((preset) => (
                   <div
                     key={preset.id}
-                    className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 flex flex-wrap items-center gap-3"
+                    className="rounded-2xl border border-[#e4e0d8] bg-[#fbfaf7] p-4 flex flex-wrap items-center gap-3"
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-white">{preset.name}</span>
+                        <span className="text-sm font-bold text-[#1a1a1a]">{preset.name}</span>
                         {preset.is_builtin && (
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-white/10 text-white/40">
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-[#e4e0d8] text-[#8a857c]">
                             内置
                           </span>
                         )}
                       </div>
-                      <div className="text-[10px] font-mono text-white/40 mt-1">
+                      <div className="text-[10px] font-mono text-[#8a857c] mt-1">
                         {ROLE_LABELS[preset.role] || preset.role} · {preset.provider || '全局供应商'} ·{' '}
                         {preset.model || '全局模型'} · 温度 {preset.temperature} · 上限{' '}
                         {preset.max_tokens}
@@ -1136,14 +1136,14 @@ export default function KnowledgeStudio({ open, onClose, scenarioId, scenarioTit
                           notes: preset.notes || '',
                         })
                       }}
-                      className="text-[10px] text-white/50 hover:text-white tracking-[0.15em] uppercase"
+                      className="text-[10px] text-[#5c574f] hover:text-[#1a1a1a] tracking-[0.15em] uppercase"
                     >
                       编辑
                     </button>
                     {!preset.is_builtin && (
                       <button
                         onClick={() => removePreset(preset)}
-                        className="text-[10px] text-white/30 hover:text-rose-400 tracking-[0.15em] uppercase"
+                        className="text-[10px] text-[#8a857c] hover:text-rose-400 tracking-[0.15em] uppercase"
                       >
                         删除
                       </button>

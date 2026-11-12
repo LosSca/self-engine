@@ -48,7 +48,7 @@ export default function StoryProgressPanel({ open, onClose, story, engineBound, 
   const byLine = (lineId) => nodes.filter((node) => (node.line || '') === lineId)
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex justify-end bg-[#fffdf9]/95 backdrop-blur-sm" onClick={onClose}>
       <div
         className="w-full max-w-md h-full bg-neutral-950/95 border-l border-white/10 overflow-y-auto p-5 flex flex-col gap-4"
         onClick={(event) => event.stopPropagation()}

@@ -19,13 +19,13 @@ const CharacterLibrary = lazy(() => import('./components/CharacterLibrary'))
 
 // 懒加载期间的占位：同款全屏底色与文案，避免空白闪一下。
 const ChunkFallback = () => (
-  <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
+  <div className="min-h-screen bg-[#f6f5f1] text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
     载入中…
   </div>
 )
 
 const ModalFallback = () => (
-  <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center text-white/40 text-xs uppercase tracking-[0.3em]">
+  <div className="fixed inset-0 z-50 bg-[#fbfaf8]/92 backdrop-blur-md flex items-center justify-center text-white/40 text-xs uppercase tracking-[0.3em]">
     载入中…
   </div>
 )
@@ -183,7 +183,7 @@ function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden flex flex-col items-center justify-center py-16">
+    <div className="min-h-screen bg-[#f6f5f1] text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden flex flex-col items-center justify-center py-16">
 
       {/* 背景层：深色主题铺山峦照片，浅色主题由 .hero-bg 换成纸面暖光 */}
       <div
@@ -483,7 +483,7 @@ function PlayGate() {
 
   if (effectiveState.status === 'loading') {
     return (
-      <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
+      <div className="min-h-screen bg-[#f6f5f1] text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
         载入中…
       </div>
     )
@@ -515,7 +515,7 @@ const AppShell = ({ children }) => {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const activeScenarioId = useGameStore((s) => s.activeScenario?.id)
   return (
-    <div className="flex h-screen bg-black overflow-hidden">
+    <div className="flex h-screen bg-[#f6f5f1] overflow-hidden">
       <Sidebar
         variant="app"
         onSettings={setSettingsOpen}

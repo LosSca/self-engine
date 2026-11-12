@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.scenario_store import ScenarioStore, StoryCardType
 from app.db.event_store import EventStore
@@ -67,6 +67,18 @@ class CreateScenarioRequest(BaseModel):
     opening_mode: Literal["fixed", "ai"] = "fixed"
     ai_opening_directive: str = Field(default="", max_length=4000)
     world_type: str = Field(default="", max_length=40)
+
+    @model_validator(mode="after")
+    def _opening_required(self) -> "CreateScenarioRequest":
+        """Every world needs an opening scene.
+
+        A world with no opening leaves the player staring at an empty screen
+        with no premise, so either a written opening or an AI directive to
+        generate one is mandatory.
+        """
+        if not self.opening_narrative.strip() and not self.ai_opening_directive.strip():
+            raise ValueError("每个世界都需要开场白：请写下开场，或让 AI 按指令生成")
+        return self
 
 
 class PreviewOpeningRequest(BaseModel):
@@ -274,6 +286,12 @@ def list_scenarios():
 
 @router.post("/import", status_code=201)
 def import_scenario(req: ImportScenarioRequest):
+    # 导入同样要开场白：老导出文件里可能没有，给出可执行的提示而不是静默建出空世界。
+    if not req.scenario.opening_narrative.strip() and not req.scenario.ai_opening_directive.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="这个世界没有开场白：请先在导入文件里补 opening_narrative 或 ai_opening_directive",
+        )
     _validate_unique_var_names(req.scenario.setup_questions)
     with _get_store() as store:
         scenario = store.create_scenario(

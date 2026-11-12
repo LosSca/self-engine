@@ -61,7 +61,7 @@ const C = {
     + 'placeholder-[#9a958c] focus:outline-none focus:border-[#8a857c] transition-colors',
   help: 'text-[10px] leading-relaxed text-[#8a857c] mt-2',
   primary:
-    'bg-[#262421] text-white hover:bg-[#3a3733] rounded-lg px-5 py-2.5 text-xs font-bold '
+    'bg-[#3f3a34] text-white hover:bg-[#3a3733] rounded-lg px-5 py-2.5 text-xs font-bold '
     + 'tracking-[0.15em] transition-colors disabled:opacity-50',
   ghost:
     'border border-[#d8d4cc] text-[#5c574f] hover:border-[#8a857c] hover:text-[#1a1a1a] '
@@ -69,7 +69,7 @@ const C = {
   option: (on) => (
     'px-3 py-2.5 rounded-lg border text-xs font-semibold tracking-wide transition-colors '
     + (on
-      ? 'bg-[#262421] text-white border-[#262421]'
+      ? 'bg-[#3f3a34] text-white border-[#262421]'
       : 'bg-white text-[#5c574f] border-[#d8d4cc] hover:border-[#8a857c]')
   ),
 }
@@ -378,7 +378,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     aria-checked={combat}
                     onClick={() => setCombat((v) => !v)}
                     className={`relative inline-flex shrink-0 items-center w-11 h-6 rounded-full border transition-colors ${
-                      combat ? 'bg-[#262421] border-[#262421]' : 'bg-[#e8e5de] border-[#d8d4cc]'
+                      combat ? 'bg-[#3f3a34] border-[#262421]' : 'bg-[#e8e5de] border-[#d8d4cc]'
                     }`}
                   >
                     <span
