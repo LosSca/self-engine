@@ -5,6 +5,7 @@ import {
   Globe, Settings, UserRound, PanelLeftClose, PanelLeftOpen, Home, Plus, Power,
 } from 'lucide-react'
 import { useGameStore } from '../store'
+import OnboardingGuide from './OnboardingGuide'
 
 const TOOL_GROUPS = [
   {
@@ -64,15 +65,24 @@ function useCollapsed() {
  */
 export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 0 }) {
   const [collapsed, setCollapsed] = useCollapsed()
+  // 新手引导会点亮对应的边栏条目，提示「下一步点这里」
+  const [highlight, setHighlight] = useState(null)
+  useEffect(() => {
+    const expand = () => setCollapsed(false)
+    window.addEventListener('lunar:expand-sidebar', expand)
+    return () => window.removeEventListener('lunar:expand-sidebar', expand)
+  }, [setCollapsed])
   const activeCampaignId = useGameStore((s) => s.activeCampaignId)
   const clearSession = useGameStore((s) => s.clearSession)
 
-  const itemClass = (on) => [
+  const itemClass = (on, id) => [
     'group relative flex items-center gap-3 rounded-xl transition-all duration-150 select-none',
     collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2.5 w-full',
     on
       ? 'bg-white/[0.16] text-white border border-white/25'
-      : 'text-white/75 hover:text-white hover:bg-white/[0.10] border border-transparent',
+      : highlight && highlight === id
+        ? 'text-white bg-cyan-400/[0.12] border border-cyan-400/40 animate-pulse-slow'
+        : 'text-white/75 hover:text-white hover:bg-white/[0.10] border border-transparent',
   ].join(' ')
 
   const navItem = (to, Icon, label) => (
@@ -107,7 +117,7 @@ export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 
         aria-label={label}
         aria-pressed={on}
         data-testid={`sidebar-tool-${id}`}
-        className={itemClass(on)}
+        className={itemClass(on, id)}
       >
         <Icon size={16} className="shrink-0" />
         {!collapsed && <span className="text-xs font-medium tracking-wide truncate flex-1 text-left">{label}</span>}
@@ -166,7 +176,8 @@ export default function Sidebar({ variant = 'app', activeTool, onTool, traces = 
         )}
       </nav>
 
-      <div className="flex-none border-t border-white/5 p-2 space-y-1">
+      <div className="flex-none p-2 space-y-1">
+        <OnboardingGuide collapsed={collapsed} activeTool={activeTool} onHighlight={setHighlight} variant={variant} />
         {variant === 'play' && (
           <button
             type="button"
