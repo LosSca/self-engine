@@ -10,9 +10,10 @@ import {
   updateCharacterLook,
   uploadCharacterImage,
 } from '../api'
+import QuickDraft from './QuickDraft'
 
 const inputBase =
-  'w-full bg-white/[0.06] border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/35 focus:outline-none focus:border-white/50 focus:bg-white/[0.09] transition-all text-sm font-light'
+  'w-full bg-[#fbfaf7] border border-[#dcd8d0] rounded-xl px-4 py-3 text-[#1a1a1a] placeholder-[#9a958c] focus:outline-none focus:border-[#8a857c] focus:bg-white transition-all text-sm font-light'
 
 const emptyDraft = { name: '', role: '', description: '', is_player: false }
 
@@ -199,17 +200,17 @@ export default function CharacterLibrary({ open, onClose }) {
   const cover = looks.find((l) => l.image_url) || looks[0] || null
 
   return (
-    <div className="character-library fixed inset-0 z-[70] bg-[#0b0b0d]/95 overflow-y-auto overflow-x-hidden">
-      {/* 一层很淡的暖光，避免整块面板压在纯黑上显得发闷；
+    <div className="character-library fixed inset-0 z-[70] bg-[#f6f5f1] overflow-y-auto overflow-x-hidden">
+      {/* 纸白底上一层极淡的暖光，避免整块面板像一张空白 A4；
           只做背景，不参与交互，也不影响子元素的对比度。 */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,rgba(255,244,230,0.07),transparent_65%)]"></div>
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,rgba(255,252,246,0.9),transparent_65%)]"></div>
 
       <div className="relative max-w-6xl mx-auto px-4 sm:px-8 py-10">
-        <div className="flex items-start justify-between mb-8 pb-5 border-b border-white/20">
+        <div className="flex items-start justify-between mb-8 pb-5 border-b border-[#dcd8d0]">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.35em] text-white/75 font-mono mb-2">Character Library</p>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">角色库</h1>
-            <p className="text-xs sm:text-sm text-white/75 mt-2 leading-relaxed max-w-xl">
+            <p className="text-[10px] uppercase tracking-[0.35em] text-[#8a857c] font-mono mb-2">Character Library</p>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1a1a1a]">角色库</h1>
+            <p className="text-xs sm:text-sm text-[#5c574f] mt-2 leading-relaxed max-w-xl">
               角色独立于世界存在：在这里创建，任意世界开局时都能挑走。
             </p>
           </div>
@@ -217,13 +218,13 @@ export default function CharacterLibrary({ open, onClose }) {
             <button
               onClick={handleImport}
               disabled={busy}
-              className="px-4 py-2.5 rounded-xl border border-white/20 text-white/70 hover:text-white hover:border-white/30 text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
+              className="px-4 py-2.5 rounded-xl border border-[#dcd8d0] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#a8a29a] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
             >
               收录世界角色
             </button>
             <button
               onClick={onClose}
-              className="px-5 py-2.5 rounded-xl bg-white text-black text-[10px] font-bold tracking-[0.15em] uppercase hover:bg-gray-200 transition-all"
+              className="px-5 py-2.5 rounded-xl bg-[#1a1a1a] text-white text-[10px] font-bold tracking-[0.15em] uppercase hover:bg-[#333] transition-all"
             >
               关闭
             </button>
@@ -231,23 +232,23 @@ export default function CharacterLibrary({ open, onClose }) {
         </div>
 
         {error && (
-          <div className="mb-5 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">{error}</div>
+          <div className="mb-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs">{error}</div>
         )}
         {notice && (
-          <div className="mb-5 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-xs">{notice}</div>
+          <div className="mb-5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">{notice}</div>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6">
           <aside className="space-y-3">
             <button
               onClick={() => setCreating((v) => !v)}
-              className="w-full p-4 rounded-2xl border border-dashed border-white/25 text-white/70 hover:text-white hover:border-white/35 text-xs font-bold tracking-[0.15em] uppercase transition-all"
+              className="w-full p-4 rounded-2xl border border-dashed border-[#cfcabf] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#a8a29a] text-xs font-bold tracking-[0.15em] uppercase transition-all"
             >
               {creating ? '取消新建' : '+ 新建角色'}
             </button>
 
             {creating && (
-              <div className="p-4 rounded-2xl border border-white/20 bg-white/[0.06] space-y-3">
+              <div className="p-4 rounded-2xl border border-[#dcd8d0] bg-white space-y-3 shadow-[0_1px_2px_rgba(24,20,16,0.04)]">
                 <input
                   autoFocus
                   value={draft.name}
@@ -268,7 +269,7 @@ export default function CharacterLibrary({ open, onClose }) {
                   rows={3}
                   className={inputBase + ' resize-none'}
                 />
-                <label className="flex items-center gap-2 text-[11px] text-white/70">
+                <label className="flex items-center gap-2 text-[11px] text-[#5c574f]">
                   <input
                     type="checkbox"
                     checked={draft.is_player}
@@ -276,19 +277,27 @@ export default function CharacterLibrary({ open, onClose }) {
                   />
                   作为玩家角色候选
                 </label>
+                <QuickDraft
+                  kind="character"
+                  topic={draft.name}
+                  tone="light"
+                  label="按名字快速生成设定"
+                  testId="draft-new-character"
+                  onDraft={(text) => setDraft((d) => ({ ...d, description: text }))}
+                />
                 <button
                   onClick={handleCreate}
                   disabled={busy || !draft.name.trim()}
-                  className="w-full py-2.5 rounded-xl bg-white text-black text-[10px] font-bold tracking-[0.2em] uppercase disabled:opacity-30 transition-all"
+                  className="w-full py-2.5 rounded-xl bg-[#1a1a1a] text-white text-[10px] font-bold tracking-[0.2em] uppercase disabled:opacity-30 hover:bg-[#333] transition-all"
                 >
                   创建
                 </button>
               </div>
             )}
 
-            {characters === null && <p className="text-xs text-white/70 px-1">载入中…</p>}
+            {characters === null && <p className="text-xs text-[#8a857c] px-1">载入中…</p>}
             {characters !== null && list.length === 0 && (
-              <p className="text-xs text-white/70 px-1 leading-relaxed">角色库还是空的。先新建一个，或在开局向导里挑本世界的角色后点「收录世界角色」。</p>
+              <p className="text-xs text-[#5c574f] px-1 leading-relaxed">角色库还是空的。先新建一个，或在开局向导里挑本世界的角色后点「收录世界角色」。</p>
             )}
 
             {list.map((c) => {
@@ -301,18 +310,18 @@ export default function CharacterLibrary({ open, onClose }) {
                   className={
                     'w-full flex items-center gap-3 p-3 rounded-2xl border text-left transition-all ' +
                     (active
-                      ? 'bg-white/[0.12] border-white/35'
-                      : 'bg-white/[0.05] border-white/25 hover:border-white/20')
+                      ? 'bg-white border-[#1a1a1a]/25 shadow-[0_1px_3px_rgba(24,20,16,0.08)]'
+                      : 'bg-white/70 border-[#dcd8d0] hover:border-[#bdb7ad]')
                   }
                 >
-                  <span className="w-11 h-14 rounded-lg overflow-hidden bg-white/5 flex items-center justify-center shrink-0 text-[10px] text-white/45">
+                  <span className="w-11 h-14 rounded-lg overflow-hidden bg-[#efede8] flex items-center justify-center shrink-0 text-[10px] text-[#a8a29a]">
                     {lk?.image_url ? (
                       <img src={lk.image_url} alt={c.name} className="w-full h-full object-cover" />
                     ) : '无图'}
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-sm text-white truncate">{c.name}</span>
-                    <span className="block text-[10px] text-white/75 truncate">
+                    <span className="block text-sm text-[#1a1a1a] truncate">{c.name}</span>
+                    <span className="block text-[10px] text-[#8a857c] truncate">
                       {c.role || (c.is_player ? '玩家角色' : '角色')} · {(c.looks || []).length} 张
                     </span>
                   </span>
@@ -321,19 +330,19 @@ export default function CharacterLibrary({ open, onClose }) {
             })}
           </aside>
 
-          <section className="rounded-3xl border border-white/20 bg-white/[0.05] p-5 sm:p-7">
+          <section className="rounded-3xl border border-[#dcd8d0] bg-white p-5 sm:p-7 shadow-[0_1px_2px_rgba(24,20,16,0.04),0_18px_40px_-28px_rgba(24,20,16,0.35)]">
             {!selected && (
-              <p className="text-xs text-white/70">左侧选一个角色，或者新建一个。</p>
+              <p className="text-xs text-[#5c574f]">左侧选一个角色，或者新建一个。</p>
             )}
 
             {selected && (
               <div className="space-y-7">
                 <div className="flex flex-col sm:flex-row gap-6">
-                  <div className="w-40 h-56 rounded-2xl border border-white/20 bg-white/[0.06] overflow-hidden flex items-center justify-center shrink-0 mx-auto sm:mx-0">
+                  <div className="w-40 h-56 rounded-2xl border border-[#dcd8d0] bg-[#efede8] overflow-hidden flex items-center justify-center shrink-0 mx-auto sm:mx-0">
                     {cover?.image_url ? (
                       <img src={cover.image_url} alt={selected.name} className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-white/75 text-[10px]">还没有立绘</span>
+                      <span className="text-[#a8a29a] text-[10px]">还没有立绘</span>
                     )}
                   </div>
                   <div className="flex-1 space-y-3">
@@ -349,7 +358,7 @@ export default function CharacterLibrary({ open, onClose }) {
                       onCommit={(v) => handlePatch({ role: v })}
                       busy={busy}
                     />
-                    <label className="flex items-center gap-2 text-[11px] text-white/70">
+                    <label className="flex items-center gap-2 text-[11px] text-[#5c574f]">
                       <input
                         type="checkbox"
                         checked={!!selected.is_player}
@@ -358,7 +367,21 @@ export default function CharacterLibrary({ open, onClose }) {
                       作为玩家角色候选
                     </label>
                     <div>
-                      <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/75 mb-2">设定</span>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8a857c]">设定</span>
+                        <QuickDraft
+                          kind="character"
+                          topic={selected.name}
+                          context={selected.description || ''}
+                          tone="light"
+                          label="快速生成"
+                          testId="draft-character-description"
+                          onDraft={(text) => {
+                            setCharacters((prev) => (prev || []).map((c) => (c.id === selected.id ? { ...c, description: text } : c)))
+                            handlePatch({ description: text })
+                          }}
+                        />
+                      </div>
                       <textarea
                         value={selected.description || ''}
                         onChange={(e) => setCharacters((prev) => (prev || []).map((c) => (c.id === selected.id ? { ...c, description: e.target.value } : c)))}
@@ -370,28 +393,28 @@ export default function CharacterLibrary({ open, onClose }) {
                     <button
                       onClick={handleDelete}
                       disabled={busy}
-                      className="text-[10px] tracking-[0.2em] uppercase text-white/45 hover:text-rose-300 transition-colors"
+                      className="text-[10px] tracking-[0.2em] uppercase text-[#a8a29a] hover:text-rose-600 transition-colors"
                     >
                       删除这个角色
                     </button>
                   </div>
                 </div>
 
-                <div className="pt-6 border-t border-white/20">
+                <div className="pt-6 border-t border-[#dcd8d0]">
                   <div className="flex items-baseline gap-3 mb-4">
-                    <h3 className="text-xs font-bold uppercase tracking-[0.25em] text-white/75">立绘差分</h3>
-                    <span className="text-[10px] text-white/70 font-mono">{looks.length} 张</span>
+                    <h3 className="text-xs font-bold uppercase tracking-[0.25em] text-[#1a1a1a]">立绘差分</h3>
+                    <span className="text-[10px] text-[#8a857c] font-mono">{looks.length} 张</span>
                   </div>
 
                   {looks.length > 0 && (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-6">
                       {looks.map((l) => (
-                        <div key={l.id} className="rounded-xl border border-white/20 bg-white/[0.05] overflow-hidden">
-                          <div className="h-32 bg-white/5 flex items-center justify-center">
+                        <div key={l.id} className="rounded-xl border border-[#dcd8d0] bg-white overflow-hidden">
+                          <div className="h-32 bg-[#efede8] flex items-center justify-center">
                             {l.image_url ? (
                               <img src={l.image_url} alt={l.expression} className="w-full h-full object-cover" />
                             ) : (
-                              <span className="text-[10px] text-white/75">无图</span>
+                              <span className="text-[10px] text-[#a8a29a]">无图</span>
                             )}
                           </div>
                           <div className="p-2 space-y-1">
@@ -399,17 +422,17 @@ export default function CharacterLibrary({ open, onClose }) {
                               value={l.outfit}
                               onChange={(e) => setCharacters((prev) => (prev || []).map((c) => (c.id !== selected.id ? c : { ...c, looks: c.looks.map((x) => (x.id === l.id ? { ...x, outfit: e.target.value } : x)) })))}
                               onBlur={(e) => handleRenameLook(l, { outfit: e.target.value })}
-                              className="w-full bg-transparent text-[11px] text-white/80 focus:outline-none border-b border-transparent focus:border-white/20"
+                              className="w-full bg-transparent text-[11px] text-[#1a1a1a] focus:outline-none border-b border-transparent focus:border-[#dcd8d0]"
                             />
                             <input
                               value={l.expression}
                               onChange={(e) => setCharacters((prev) => (prev || []).map((c) => (c.id !== selected.id ? c : { ...c, looks: c.looks.map((x) => (x.id === l.id ? { ...x, expression: e.target.value } : x)) })))}
                               onBlur={(e) => handleRenameLook(l, { expression: e.target.value })}
-                              className="w-full bg-transparent text-[10px] text-white/75 focus:outline-none border-b border-transparent focus:border-white/20"
+                              className="w-full bg-transparent text-[10px] text-[#8a857c] focus:outline-none border-b border-transparent focus:border-[#dcd8d0]"
                             />
                             <button
                               onClick={() => handleDeleteLook(l.id)}
-                              className="text-[9px] tracking-widest uppercase text-white/75 hover:text-rose-300 transition-colors"
+                              className="text-[9px] tracking-widest uppercase text-[#a8a29a] hover:text-rose-600 transition-colors"
                             >
                               删除
                             </button>
@@ -419,7 +442,7 @@ export default function CharacterLibrary({ open, onClose }) {
                     </div>
                   )}
 
-                  <div className="rounded-2xl border border-white/20 bg-black/20 p-4 space-y-3">
+                  <div className="rounded-2xl border border-[#dcd8d0] bg-[#fbfaf7] p-4 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <input
                         value={lookForm.outfit}
@@ -445,19 +468,19 @@ export default function CharacterLibrary({ open, onClose }) {
                       <button
                         onClick={() => fileRef.current?.click()}
                         disabled={busy}
-                        className="px-4 py-2 rounded-xl border border-white/20 text-white/75 hover:text-white hover:border-white/30 text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
+                        className="px-4 py-2 rounded-xl border border-[#dcd8d0] text-[#5c574f] hover:text-[#1a1a1a] hover:border-[#a8a29a] text-[10px] font-bold tracking-[0.15em] uppercase transition-all"
                       >
                         上传图片
                       </button>
                       {lookForm.image_url && (
-                        <span className="w-10 h-10 rounded-lg overflow-hidden bg-white/5">
+                        <span className="w-10 h-10 rounded-lg overflow-hidden bg-[#efede8]">
                           <img src={lookForm.image_url} alt="预览" className="w-full h-full object-cover" />
                         </span>
                       )}
                       <button
                         onClick={handleAddLook}
                         disabled={busy || !lookForm.image_url}
-                        className="ml-auto px-5 py-2 rounded-xl bg-white text-black text-[10px] font-bold tracking-[0.15em] uppercase disabled:opacity-30 transition-all"
+                        className="ml-auto px-5 py-2 rounded-xl bg-[#1a1a1a] text-white text-[10px] font-bold tracking-[0.15em] uppercase disabled:opacity-30 hover:bg-[#333] transition-all"
                       >
                         添加这张立绘
                       </button>
@@ -475,10 +498,17 @@ export default function CharacterLibrary({ open, onClose }) {
 
 function NamedField({ label, value, onCommit, busy }) {
   const [text, setText] = useState(value || '')
-  useEffect(() => { setText(value || '') }, [value])
+  // 外部值变了（切角色、快速生成回填）就重算草稿：用「渲染期比对上一次的 value」
+  // 的方式同步，而不是在 effect 里 setState——后者会多跑一轮渲染。
+  const [seen, setSeen] = useState(value || '')
+  const next = value || ''
+  if (next !== seen) {
+    setSeen(next)
+    setText(next)
+  }
   return (
     <label className="block">
-      <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-white/75 mb-2">{label}</span>
+      <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8a857c] mb-2">{label}</span>
       <input
         value={text}
         disabled={busy}

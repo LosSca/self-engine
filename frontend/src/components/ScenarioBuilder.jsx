@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { importScenario, previewOpening, uploadCharacterImage } from '../api'
+import QuickDraft from './QuickDraft'
 import {
   ALL_TYPES,
   DEFAULT_EXPRESSIONS,
@@ -30,6 +31,7 @@ const LANGUAGES = [
 const inputClass =
   'w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-colors'
 const labelClass = 'block text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-2'
+const labelRowClass = 'flex items-center justify-between gap-3 mb-2'
 const sectionClass = 'bg-white/[0.03] border border-white/5 rounded-3xl p-6 sm:p-8 backdrop-blur-xl'
 const tinyBtnClass =
   'px-3 py-1.5 rounded-lg border border-white/10 text-[10px] tracking-widest uppercase text-white/50 hover:text-white hover:border-white/30 transition-all'
@@ -395,7 +397,18 @@ export default function ScenarioBuilder({ onCreated }) {
                 />
               </div>
               <div>
-                <label className={labelClass}>简介</label>
+                <div className={labelRowClass}>
+                  <label className={labelClass + ' mb-0'}>简介</label>
+                  <QuickDraft
+                    kind="world"
+                    topic={form.title}
+                    context={form.lore_text}
+                    language={form.language}
+                    label="快速生成"
+                    testId="draft-world-description"
+                    onDraft={(text) => setField('description', text)}
+                  />
+                </div>
                 <textarea
                   className={inputClass + ' min-h-[80px]'}
                   value={form.description}
@@ -429,7 +442,18 @@ export default function ScenarioBuilder({ onCreated }) {
                 </div>
               </div>
               <div>
-                <label className={labelClass}>世界背景</label>
+                <div className={labelRowClass}>
+                  <label className={labelClass + ' mb-0'}>世界背景</label>
+                  <QuickDraft
+                    kind="world"
+                    topic={form.title}
+                    context={form.description}
+                    language={form.language}
+                    label="快速生成"
+                    testId="draft-world-lore"
+                    onDraft={(text) => setField('lore_text', text)}
+                  />
+                </div>
                 <textarea
                   className={inputClass + ' min-h-[120px]'}
                   value={form.lore_text}
@@ -464,12 +488,25 @@ export default function ScenarioBuilder({ onCreated }) {
             </div>
 
             {form.opening_mode === 'fixed' ? (
-              <textarea
-                className={inputClass + ' min-h-[160px]'}
-                value={form.opening_narrative}
-                onChange={(e) => setField('opening_narrative', e.target.value)}
-                placeholder="玩家进入游戏时看到的开场段落。"
-              />
+              <div>
+                <div className="flex justify-end mb-2">
+                  <QuickDraft
+                    kind="world"
+                    topic={form.title}
+                    context={[form.description, form.lore_text].filter(Boolean).join('\n\n')}
+                    language={form.language}
+                    label="快速生成开场"
+                    testId="draft-opening"
+                    onDraft={(text) => setField('opening_narrative', text)}
+                  />
+                </div>
+                <textarea
+                  className={inputClass + ' min-h-[160px] w-full'}
+                  value={form.opening_narrative}
+                  onChange={(e) => setField('opening_narrative', e.target.value)}
+                  placeholder="玩家进入游戏时看到的开场段落。"
+                />
+              </div>
             ) : (
               <div className="flex flex-col gap-4">
                 <textarea

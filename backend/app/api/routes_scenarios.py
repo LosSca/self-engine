@@ -22,6 +22,7 @@ from app.engines.opening_generator import (
     generate_opening,
     synthesize_sample_answers,
 )
+from app.services.draft_generator import DRAFT_KINDS, generate_draft
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,15 @@ class PreviewOpeningRequest(BaseModel):
     directive: str = Field(default="", max_length=4000)
     setup_questions: list[SetupQuestion] = []
     sample_answers: dict = Field(default_factory=dict)
+
+
+class DraftRequest(BaseModel):
+    """One "write me a first draft" call from the authoring UIs."""
+
+    kind: str = Field(..., max_length=20)
+    topic: str = Field(default="", max_length=200)
+    context: str = Field(default="", max_length=8000)
+    language: str = Field(default="zh", max_length=10)
 
 
 class AddStoryCardRequest(BaseModel):
@@ -164,6 +174,25 @@ def create_scenario(req: CreateScenarioRequest):
             ),
         )
     return scenario.__dict__
+
+
+@router.post("/draft")
+async def draft_text(req: DraftRequest):
+    """Draft one field for the character library or the scenario builder.
+
+    Lives under /scenarios because both authoring screens need it and neither
+    should carry its own prompt. With no model configured this still answers
+    with a template draft, so the button is never dead.
+    """
+    if req.kind not in DRAFT_KINDS:
+        raise HTTPException(status_code=400, detail=f"unsupported kind: {req.kind}")
+    text, provider = await generate_draft(
+        req.kind,
+        topic=req.topic,
+        context=req.context,
+        language=req.language,
+    )
+    return {"text": text, "provider": provider}
 
 
 @router.post("/preview-opening")

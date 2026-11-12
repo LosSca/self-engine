@@ -475,6 +475,22 @@ export async function previewOpening({
   return r.json()
 }
 
+/**
+ * 让后端写一段草稿（角色设定 / 世界背景 / 地点 / 势力 / 物品 / 设定）。
+ * 没有配模型时后端会回退到模板文本，所以按钮永远不会「死」。
+ * @param {{kind: string, topic?: string, context?: string, language?: string}} req
+ * @returns {Promise<{text: string, provider: 'llm'|'template'}>}
+ */
+export async function generateDraft({ kind, topic = '', context = '', language = 'zh' }) {
+  const r = await fetch(`${BASE}/scenarios/draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, topic, context, language }),
+  })
+  if (!r.ok) throw new Error('生成失败')
+  return r.json()
+}
+
 export async function regenerateOpening(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/regenerate-opening`, {
     method: 'POST',

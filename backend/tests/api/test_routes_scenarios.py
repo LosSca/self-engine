@@ -217,6 +217,27 @@ def test_import_rejects_bad_storyline_and_rolls_back(client):
     }
     r = client.post("/api/scenarios/import", json=payload)
     assert r.status_code == 400
-    assert any("ghost" in e for e in r.json()["detail"])
+    # A rejected import must not leave a half-written scenario behind.
+    assert client.get("/api/scenarios/").json() == []
+
+
+def test_draft_returns_template_text_for_every_kind(client, monkeypatch):
+    # No model configured: the endpoint must still answer, using templates.
+    import app.services.draft_generator as dg
+
+    assert dg.DRAFT_KINDS
+    for kind in ("character", "world", "location", "faction", "item", "lore"):
+        r = client.post("/api/scenarios/draft", json={"kind": kind, "topic": "北境", "language": "zh"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["provider"] in {"llm", "template"}
+        assert isinstance(body["text"], str) and body["text"].strip()
+        assert "北境" in body["text"]
+
+
+def test_draft_rejects_unknown_kind(client):
+    r = client.post("/api/scenarios/draft", json={"kind": "nonsense"})
+    assert r.status_code == 400
+    assert "nonsense" in r.json()["detail"]
     titles = [s["title"] for s in client.get("/api/scenarios/").json()]
     assert "Broken World" not in titles
