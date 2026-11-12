@@ -51,14 +51,14 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
   return (
     <aside
       data-testid="tool-dock"
-      className={`flex-none flex flex-col h-full border-l border-white/5 bg-black/40 overflow-hidden transition-[width] duration-200 ${
+      className={`flex-none flex flex-col h-full border-l border-white/10 bg-[#0b0d10] overflow-hidden transition-[width] duration-200 ${
         open ? 'w-[380px] xl:w-[420px]' : 'w-0'
       }`}
     >
       {open && (
         <>
-          <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-white/5">
-            <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/60">
+          <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-white/10">
+            <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/85">
               {TITLES[active] || '面板'}
             </div>
             <div className="flex items-center gap-1">
@@ -67,7 +67,7 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
                 onClick={closeAll}
                 title="关闭面板"
                 aria-label="关闭面板"
-                className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10 transition-colors"
+                className="p-1.5 rounded-lg text-white/55 hover:text-white hover:bg-white/15 transition-colors"
               >
                 <X size={14} />
               </button>
