@@ -22,7 +22,7 @@ from app.engines.opening_generator import (
     generate_opening,
     synthesize_sample_answers,
 )
-from app.services.draft_generator import DRAFT_KINDS, generate_draft
+from app.services.draft_generator import DRAFT_KINDS, expand_draft, generate_draft
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,25 @@ class DraftRequest(BaseModel):
     topic: str = Field(default="", max_length=200)
     context: str = Field(default="", max_length=8000)
     language: str = Field(default="zh", max_length=10)
+    #: Ground the draft in a web lookup of the topic (real people, myths, worlds).
+    search: bool = False
+
+
+class ExpandRequest(BaseModel):
+    """Continue what the author already wrote instead of replacing it."""
+
+    kind: str = Field(..., max_length=20)
+    text: str = Field(..., max_length=8000)
+    topic: str = Field(default="", max_length=200)
+    language: str = Field(default="zh", max_length=10)
+    search: bool = False
+
+
+class SearchRequest(BaseModel):
+    """Preview the web hits a grounded draft would use."""
+
+    query: str = Field(..., max_length=200)
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class AddStoryCardRequest(BaseModel):
@@ -191,8 +210,37 @@ async def draft_text(req: DraftRequest):
         topic=req.topic,
         context=req.context,
         language=req.language,
+        search=req.search,
     )
     return {"text": text, "provider": provider}
+
+
+@router.post("/draft/expand")
+async def expand_text(req: ExpandRequest):
+    """Continue an existing draft; the UI appends the answer to the field."""
+    if req.kind not in DRAFT_KINDS:
+        raise HTTPException(status_code=400, detail=f"unsupported kind: {req.kind}")
+    text, provider = await expand_draft(
+        req.kind,
+        text=req.text,
+        topic=req.topic,
+        language=req.language,
+        search=req.search,
+    )
+    return {"text": text, "provider": provider}
+
+
+@router.post("/draft/search")
+async def draft_search(req: SearchRequest):
+    """The web hits a grounded draft would be built from.
+
+    Separate from /draft so the UI can show what the model is about to read and
+    let the author keep or drop the lookup before spending a generation.
+    """
+    from app.services.web_search import web_search
+
+    hits = await web_search(req.query, limit=req.limit)
+    return {"results": hits, "count": len(hits)}
 
 
 @router.post("/preview-opening")

@@ -478,16 +478,46 @@ export async function previewOpening({
 /**
  * 让后端写一段草稿（角色设定 / 世界背景 / 地点 / 势力 / 物品 / 设定）。
  * 没有配模型时后端会回退到模板文本，所以按钮永远不会「死」。
- * @param {{kind: string, topic?: string, context?: string, language?: string}} req
+ * `search` 为真时先联网检索主题，再把检索到的要点交给模型，草稿基于事实。
+ * @param {{kind: string, topic?: string, context?: string, language?: string, search?: boolean}} req
  * @returns {Promise<{text: string, provider: 'llm'|'template'}>}
  */
-export async function generateDraft({ kind, topic = '', context = '', language = 'zh' }) {
+export async function generateDraft({ kind, topic = '', context = '', language = 'zh', search = false }) {
   const r = await fetch(`${BASE}/scenarios/draft`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind, topic, context, language }),
+    body: JSON.stringify({ kind, topic, context, language, search }),
   })
   if (!r.ok) throw new Error('生成失败')
+  return r.json()
+}
+
+/**
+ * 在作者已写的文字后面续写（不覆盖原文）。
+ * @param {{kind: string, text: string, topic?: string, language?: string, search?: boolean}} req
+ * @returns {Promise<{text: string, provider: 'llm'|'template'}>}
+ */
+export async function expandDraft({ kind, text, topic = '', language = 'zh', search = false }) {
+  const r = await fetch(`${BASE}/scenarios/draft/expand`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, text, topic, language, search }),
+  })
+  if (!r.ok) throw new Error('续写失败')
+  return r.json()
+}
+
+/**
+ * 预览一次联网检索的命中结果，界面上让作者先看清再决定要不要用。
+ * @returns {Promise<{results: {title: string, url: string, snippet: string}[], count: number}>}
+ */
+export async function searchWeb({ query, limit = 5 }) {
+  const r = await fetch(`${BASE}/scenarios/draft/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, limit }),
+  })
+  if (!r.ok) throw new Error('检索失败')
   return r.json()
 }
 

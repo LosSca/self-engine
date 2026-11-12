@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     custom_llm_base_url: str = ""
     custom_llm_api_key: str = ""
     custom_llm_model: str = ""
+    # Web search used by authoring (draft/expand for characters and worlds).
+    # Empty means "try the built-in keyless chain" (DuckDuckGo HTML, DuckDuckGo
+    # lite, Bing). A non-empty value *replaces* the chain, so a self-hosted
+    # SearxNG can be used instead: SEARCH_BASE_URL=https://searxng.local/search
+    search_base_url: str = ""
+    search_timeout_seconds: float = 8.0
+    search_max_results: int = 5
     debug: bool = False
     # Root directory for scenario assets (character cards, art). Served at /media.
     media_dir: str = "../local/media"

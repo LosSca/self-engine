@@ -280,10 +280,12 @@ export default function CharacterLibrary({ open, onClose }) {
                 <QuickDraft
                   kind="character"
                   topic={draft.name}
+                  value={draft.description}
                   tone="light"
                   label="按名字快速生成设定"
                   testId="draft-new-character"
                   onDraft={(text) => setDraft((d) => ({ ...d, description: text }))}
+                  onAppend={(text) => setDraft((d) => ({ ...d, description: [d.description?.trim(), text].filter(Boolean).join('') }))}
                 />
                 <button
                   onClick={handleCreate}
@@ -373,9 +375,15 @@ export default function CharacterLibrary({ open, onClose }) {
                           kind="character"
                           topic={selected.name}
                           context={selected.description || ''}
+                          value={selected.description || ''}
                           tone="light"
                           label="快速生成"
                           testId="draft-character-description"
+                          onAppend={(text) => {
+                            const merged = [(selected.description || '').trim(), text].filter(Boolean).join('')
+                            setCharacters((prev) => (prev || []).map((c) => (c.id === selected.id ? { ...c, description: merged } : c)))
+                            handlePatch({ description: merged })
+                          }}
                           onDraft={(text) => {
                             setCharacters((prev) => (prev || []).map((c) => (c.id === selected.id ? { ...c, description: text } : c)))
                             handlePatch({ description: text })

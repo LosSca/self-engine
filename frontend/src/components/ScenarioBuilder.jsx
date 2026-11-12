@@ -403,10 +403,12 @@ export default function ScenarioBuilder({ onCreated }) {
                     kind="world"
                     topic={form.title}
                     context={form.lore_text}
+                    value={form.description}
                     language={form.language}
                     label="快速生成"
                     testId="draft-world-description"
                     onDraft={(text) => setField('description', text)}
+                    onAppend={(text) => setField('description', [form.description?.trim(), text].filter(Boolean).join(''))}
                   />
                 </div>
                 <textarea
@@ -448,10 +450,12 @@ export default function ScenarioBuilder({ onCreated }) {
                     kind="world"
                     topic={form.title}
                     context={form.description}
+                    value={form.lore_text}
                     language={form.language}
                     label="快速生成"
                     testId="draft-world-lore"
                     onDraft={(text) => setField('lore_text', text)}
+                    onAppend={(text) => setField('lore_text', [form.lore_text?.trim(), text].filter(Boolean).join('\n\n'))}
                   />
                 </div>
                 <textarea
@@ -494,10 +498,12 @@ export default function ScenarioBuilder({ onCreated }) {
                     kind="world"
                     topic={form.title}
                     context={[form.description, form.lore_text].filter(Boolean).join('\n\n')}
+                    value={form.opening_narrative}
                     language={form.language}
                     label="快速生成开场"
                     testId="draft-opening"
                     onDraft={(text) => setField('opening_narrative', text)}
+                    onAppend={(text) => setField('opening_narrative', [form.opening_narrative?.trim(), text].filter(Boolean).join('\n\n'))}
                   />
                 </div>
                 <textarea
