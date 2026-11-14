@@ -26,6 +26,15 @@
 
 ### Added
 
+- **混合式世界模拟 · Phase 2（世界时钟与事件调度器）**：新增 `scheduled_events` 表
+  （迁移 5）与 `backend/app/engines/world_scheduler.py`——“18:00 关门”从此是一个**记住的**
+  未来事件，而不是每回合重算一遍的推导。Domain Event 仍是“已经发生的事实”，Scheduled Event 是
+  “还没发生、必须持久化且可恢复”的待办，两者分开存放。时钟不需要逐分钟轮询：
+  `catch_up_minute` 直接跳到“下一个到期事件或目标时刻”，所以等待 8 小时是一次跳转，而不是
+  480 次空转；有事件时按 `(due, priority, sequence_id)` 的因果顺序逐个执行。
+  `ActionService` 在每次行动后自动结算这段时间内到期的事件，触发标记与状态、领域事件
+  在同一个 CAS 事务里提交，任一失败都不会留下“事件已触发但状态没变”的半截世界。
+  定时器 handler 抛异常不会中断时钟，而是记一条 `WORLD_TICK`（`status: failed`）。
 - **混合式世界模拟 · Phase 1（统一行动模型与动作原语）**：`ActionRequest.actor_type`
   （`player` / `npc` / `environment` / `system`，默认 `player`）让玩家与 NPC 走**同一套**规则判定
   和同一条 `ActionService` 写入路径——NPC 没有独立执行链路，也不能直写权威状态。新增

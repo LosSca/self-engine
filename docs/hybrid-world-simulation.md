@@ -75,7 +75,7 @@
 
 ## 3. 分阶段交付
 
-每阶段都必须可运行、有测试、不破坏现有 1752 个测试。
+每阶段都必须可运行、有测试、不破坏现有测试（进入 Phase 2 时的基线是 1775 个）。
 
 ### Phase 1 — 统一行动模型 + 原语 + Affordance ✅ 已完成
 
@@ -99,12 +99,33 @@
 - 测试：`tests/services/test_action_actor.py`、`test_action_crafting.py`、
   `test_text_action_crafting.py`、`test_text_action_actor.py`（共 20 条）。
 
-### Phase 2 — World Clock + Event Scheduler
+### Phase 2 — World Clock + Event Scheduler ✅ 已完成
 
-- `GameClock` 增加"推进到下一个到期事件"的纯函数（不改其状态所有权）。
-- 新增最少的持久化调度：一张 `scheduled_events(sim_minute, priority, sequence_id, payload, …)` 表，
-  到点触发 → 写入 `EventStore` → 删除。支持取消与改期。
-- `wait` / `sleep` 原语 + 时间快进，走现有 `ActionService` 事务。
+- **时钟驱动**：`app/engines/world_scheduler.py`。时钟仍然只有 `GameState.day/minute` 一份，
+  驱动逻辑是纯函数：`catch_up_minute(store, campaign_id, now)` 返回「下一个到期事件或 `now`」，
+  `plan_tick` 取 `due_events`，`run_tick` 在一份**副本**上执行，`commit_tick` 才落盘。
+  **不逐分钟轮询**：空排程时一次跳到目标时刻，有事件时逐段前进，事件因此在"它自己的那一分钟"生效。
+- **持久化调度**：`game_state_store.py` 迁移 5 新增 `scheduled_events`
+  `(due_abs_minute, priority, sequence_id, kind, payload_json, status, created_abs_minute, fired_at)`，
+  `sequence_id` 全表单调递增——同分钟的两个事件按"谁先排"执行，这是场景可重放的前提。
+  API：`schedule_event` / `due_events` / `next_due_minute` / `cancel_event` /
+  `reschedule_event` / `mark_event_fired` / `list_scheduled_events` / `has_pending_event`。
+- **两种事件严格分开**：`EventStore` 里只有**已经发生**的 Domain Event（触发后写一条
+  `WORLD_TICK`，与其它事件同一张表、同一个事务）；`scheduled_events` 里只有**还没发生**的计划。
+  触发时把该行 `status` 置 `fired` 而不是删除——「这个计划为什么没生效」仍然可查。
+- **与行动共用一次提交**：`ActionService._apply` 在 `advance_state` 之前调 `_tick_with_clock`，
+  把这一段时间内到期的事件跑完；`_commit_turn` 在有事件被触发时走 `commit_simulation_tick`
+  （状态、领域事件、`fired` 标记同一个 CAS 事务），否则仍是原来的 `commit_action`。
+  时间只由调度器推进一次，外层不再重复累加（曾经 08:00 等 120 分钟变成 11:00，
+  因为 `run_tick` 已经把时钟推到目标时刻又被加了一遍）。
+- **失败不吞也不炸**：handler 抛异常 → 记一条 `WORLD_TICK`（`status: "failed"` + 错误类型），
+  时钟继续走下去；这一行仍被标为 `fired`，所以不会每个回合重试同一个坏排程。
+- **重复排程保护**：`has_pending_event(campaign_id, kind)` 让"上班/巡逻"这类循环计划
+  每轮重新排时不会堆副本。
+- 测试：`tests/services/test_world_scheduler.py`（13）、
+  `tests/services/test_time_carries_events.py`（7）——覆盖空 tick 也推进时钟、
+  提交后事件只触发一次、tick 写 request 行可重放、跨越睡眠时段的事件在正确分钟生效、
+  handler 可以让世界再排下一个班次。
 
 ### Phase 3 — NPC Utility AI（先简单，不上 GOAP）
 
@@ -145,8 +166,8 @@
 | 4 NPC 自主选择并执行目标 | Phase 3 |
 | 5 NPC 有日程与持续行为状态 | Phase 2 + 3 |
 | 6 NPC 行动真实改变状态 | Phase 3（经 ActionService） |
-| 7 时间不再只靠玩家推进 | Phase 2 |
-| 8 Scheduled Events 正确触发与恢复 | Phase 2 |
+| 7 时间不再只靠玩家推进 | Phase 2 `world_scheduler.plan_tick/run_tick` |
+| 8 Scheduled Events 正确触发与恢复 | Phase 2 `scheduled_events` 表 + `commit_simulation_tick` |
 | 9 NPC 不获得未授权知识 | 复用 `witnessed_by` + `NpcMindEngine` 知识边界 |
 | 10 关键状态变化可追溯 | Domain Event 记录 |
 | 11 相同输入重现相同权威状态 | 现有 `_seed` + request_id |
