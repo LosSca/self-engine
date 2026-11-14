@@ -3,6 +3,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useGameStore } from './store'
 import { fetchScenarios, exportScenario, fetchCampaigns, createCampaign, checkNeo4j, deleteCampaign, deleteScenario, fetchSetupState } from './api'
 import ErrorBoundary from './components/ErrorBoundary'
+import Sidebar from './components/Sidebar'
+import SettingsPanel from './components/SettingsPanel'
 import { ALL_TYPES, WORLD_TYPE_LABELS } from './lib/scenarioTypes'
 
 // 编辑器与游戏画布占了主包一半以上，首屏只需要首页。
@@ -17,13 +19,13 @@ const CharacterLibrary = lazy(() => import('./components/CharacterLibrary'))
 
 // 懒加载期间的占位：同款全屏底色与文案，避免空白闪一下。
 const ChunkFallback = () => (
-  <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
+  <div className="min-h-screen bg-[#f6f5f1] text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
     载入中…
   </div>
 )
 
 const ModalFallback = () => (
-  <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center text-white/40 text-xs uppercase tracking-[0.3em]">
+  <div className="fixed inset-0 z-50 bg-[#fbfaf8]/92 backdrop-blur-md flex items-center justify-center text-white/40 text-xs uppercase tracking-[0.3em]">
     载入中…
   </div>
 )
@@ -181,7 +183,7 @@ function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden flex flex-col items-center justify-center py-16">
+    <div className="min-h-screen bg-[#f6f5f1] text-[#d1d1d1] font-sans selection:bg-white/20 selection:text-white relative overflow-hidden flex flex-col items-center justify-center py-16">
 
       {/* 背景层：深色主题铺山峦照片，浅色主题由 .hero-bg 换成纸面暖光 */}
       <div
@@ -481,7 +483,7 @@ function PlayGate() {
 
   if (effectiveState.status === 'loading') {
     return (
-      <div className="min-h-screen bg-black text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
+      <div className="min-h-screen bg-[#f6f5f1] text-white/40 flex items-center justify-center text-xs uppercase tracking-[0.3em]">
         载入中…
       </div>
     )
@@ -505,31 +507,63 @@ function PlayGate() {
   )
 }
 
+// 首页 / 编辑器 / 角色库共用「左侧边栏 + 右侧内容」的外壳。
+// 边栏自身滚动，内容区独立滚动，两者互不影响。
+const AppShell = ({ children }) => {
+  // 首页 / 编辑器 / 角色库也要能随时打开设置，所以入口和弹层放在外壳里，
+  // 而不是只挂在游戏内的工具面板上。
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const activeScenarioId = useGameStore((s) => s.activeScenario?.id)
+  return (
+    <div className="flex h-screen bg-[#f6f5f1] overflow-hidden">
+      <Sidebar
+        variant="app"
+        onSettings={setSettingsOpen}
+        settingsOpen={settingsOpen}
+      />
+      <div className="flex-1 min-w-0 h-full overflow-y-auto custom-scrollbar">{children}</div>
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => setSettingsOpen(false)}
+          activeScenarioId={activeScenarioId}
+        />
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   useEffect(() => {
-    useGameStore.getState().restoreSettings()
+    const store = useGameStore.getState()
+    store.restoreSettings()
+    // 后端保存的设置优先：localStorage 只在后端不可达时兜底。
+    store.restoreServerSettings?.()
   }, [])
 
   return (
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<AppShell><Home /></AppShell>} />
           <Route
             path="/create"
             element={
-              <Suspense fallback={<ChunkFallback />}>
-                <ScenarioBuilder onCreated={() => window.location.href = '/'} />
-              </Suspense>
+              <AppShell>
+                <Suspense fallback={<ChunkFallback />}>
+                  <ScenarioBuilder onCreated={() => window.location.href = '/'} />
+                </Suspense>
+              </AppShell>
             }
           />
           <Route path="/play" element={<PlayGate />} />
           <Route
             path="/characters"
             element={
-              <Suspense fallback={<ChunkFallback />}>
-                <CharacterLibrary open onClose={() => window.location.href = '/'} />
-              </Suspense>
+              <AppShell>
+                <Suspense fallback={<ChunkFallback />}>
+                  <CharacterLibrary open onClose={() => window.location.href = '/'} />
+                </Suspense>
+              </AppShell>
             }
           />
         </Routes>

@@ -180,11 +180,18 @@ def build_context(
                 depth=entry.depth,
             )
         )
+    # Only the entries that survived the filters are ranked: a disabled or
+    # out-of-scope entry can neither be injected nor influence the IDF weights
+    # of the ones that can.
+    by_id: Dict[str, KnowledgeEntry] = {entry.id: entry for entry in entries}
+    ranked_ids = [block.entry_id for block in blocks]
     doc_tokens = {
-        entry.id: _tokens(" ".join([entry.title, entry.content, *entry.tags]))
-        for entry in entries
+        entry_id: _tokens(
+            " ".join([by_id[entry_id].title, by_id[entry_id].content, *by_id[entry_id].tags])
+        )
+        for entry_id in ranked_ids
     }
-    document_count = max(1, len(entries))
+    document_count = max(1, len(doc_tokens))
     document_frequency: Dict[str, int] = {}
     for tokens in doc_tokens.values():
         for token in set(tokens):
@@ -204,7 +211,7 @@ def build_context(
         return len({tag.strip().casefold() for tag in entry.tags} & focus_tokens)
 
     def _sort_key(block: KnowledgeBlock):
-        entry = next(e for e in entries if e.id == block.entry_id)
+        entry = by_id[block.entry_id]
         boosted = 0 if block.entry_id in boost_ids else 1
         return (
             boosted,

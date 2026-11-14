@@ -10,6 +10,8 @@ dist/
 .DS_Store
 *.egg-info/
 .pytest_cache/
+pytest-of-*/
+tmp*/
 htmlcov/
 .coverage
 *.log
@@ -64,11 +66,19 @@ backend/logs/
 logs/
 .tmp/
 
+# Build-time scratch that must never be committed: esbuild writes its CSS here
+# (frontend/NUL.css is a Windows NUL-device redirect that lands as a real file)
+# and a stray empty file named "5" comes from a shell redirect typo.
+frontend/NUL.css
+backend/5
+
 # Local user data (scenarios, scraped assets)
 local/
 
 # Desktop shell build artifacts
 desktop/node_modules/
 desktop/web/
+desktop/target/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+desktop/src-tauri/.cargo/

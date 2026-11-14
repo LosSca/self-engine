@@ -1,16 +1,23 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.0
-pydantic==2.8.0
-pydantic-settings==2.3.0
-httpx==0.27.0
-python-dotenv==1.0.1
-litellm>=1.60.0
-anthropic==0.116.0
-instructor==1.4.0
-neo4j==5.22.0
-# graphiti-core 0.5+ requires pydantic>=2.8.2; it is optional (knowledge graph).
-# Enable it after bumping pydantic: pip install "graphiti-core>=0.5.0" "pydantic>=2.8.2"
-# graphiti-core>=0.5.0
-aiofiles==23.2.1
-tiktoken==0.7.0
-python-multipart==0.0.9
+# Runtime dependencies. Versions are the ones the suite actually passes on
+# (see README「测试与质量」); the pins are deliberately loose within a major so
+# a fresh install does not have to fight a resolver that drifted since.
+fastapi>=0.115,<0.163
+uvicorn[standard]>=0.30,<0.55
+pydantic>=2.8.2,<3
+pydantic-settings>=2.3,<3
+httpx>=0.27,<0.29
+python-dotenv>=1.0,<2
+# LiteLLM is the only path to non-Anthropic providers; it pulls openai/tiktoken itself.
+litellm>=1.60,<2
+# The cached-narrator path talks to the Anthropic SDK directly.
+anthropic>=0.116,<3
+instructor>=1.4,<2
+# Neo4j driver: used by the optional graph mirror and /api/health/neo4j.
+neo4j>=5.22,<7
+aiofiles>=23.2,<26
+tiktoken>=0.7,<1
+python-multipart>=0.0.9,<0.1
+
+# Optional: knowledge-graph mirror (Graphiti over Neo4j). Not installed by default.
+# It requires pydantic>=2.8.2, which is why the pin above is not 2.8.0.
+#   pip install "graphiti-core>=0.5.0"

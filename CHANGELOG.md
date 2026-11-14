@@ -4,13 +4,37 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **启动器不再把浏览器指到别人的页面上**：以前只要 5173 端口有人监听，`launch.py` 就判定
+  「前端已在运行」并直接打开 `http://127.0.0.1:5173`，于是另一项目（常驻 5173）的页面被当成了
+  self-engine，表现为“双击 start.bat 只打开个网页、游戏没起来”。现在启动器会先确认该端口上是不是
+  本项目的页面（`#root` + `/src/main.jsx` 或项目标识），不是就自动顺延到 5174、5175…，并在输出里
+  写明实际端口与原因；vite dev 也不再传 `--strictPort`。
+
 ### Added
 
+- **在设置里直接填模型密钥**（设置 → 「模型」→ API 密钥）：DeepSeek / OpenAI / Anthropic 只填 Key，
+  本地或自建兼容接口再填地址（例如 `http://127.0.0.1:11434/v1`）。密钥存进本机 sqlite，写进
+  `os.environ` 供 litellm 使用，接口只回显末四位；「测试连接」会真发一句 completion，失败就把
+  上游的报错原样显示出来，「清除」后回落到 `.env` 里的同名变量。
+- **叙事可调项**（设置 → 「叙事」页）：风格（简洁/均衡/文学/阴郁/武侠/通俗）、人称、篇幅、
+  语气参考、是否点出判定结果、是否允许场外提示，以及 `top_p` / 存在惩罚 / 频率惩罚。
+  这些都只是写给模型的语气提示，规则判定不受影响；空值表示跟随世界自己的设定。
+- **设置全部存到后端**：新增 `user_prefs` 表与 `GET/POST /api/prefs`，主题、模型、采样参数、
+  写作指令等换浏览器也还在（API 访问令牌仍然只留在本机，不上传）。
+- `python launch.py --neo4j [status|start|stop|password]`：检查图谱连通性，并把「连不上 /
+  认证失败 / 没在跑」翻成能直接照做的修复命令；有 Docker 时可以直接起 `neo4j:5`。
 - **Tauri 桌面壳**（`desktop/`）：原生窗口 + 侧车进程，双击即可打开，不再需要浏览器和黑窗口。
   壳以子进程运行 `python launch.py --backend-only --no-window --no-browser`，健康检查通过后
   向页面注入 `window.__LUNAR_API_BASE__`；前端只改了 `frontend/src/api.js` 一行 BASE 取值，
   浏览器打开时的行为完全不变。构建方式见 `desktop/README.md`。
 - 新增 `LICENSE`（MIT，与 README 声明一致）。
+
+### Changed
+
+- **纸白主题不再出现黑块**：实心按钮从纯黑改成中性深灰 `#4a453f`，侧栏与停靠面板改成
+  暖灰 `#efece6`，白底卡片保持纯白；深色主题不受影响。
 
 ### Removed
 

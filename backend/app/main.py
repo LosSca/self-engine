@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 
@@ -24,14 +24,25 @@ from app.api.routes_knowledge import router as knowledge_router
 from app.api.routes_works import router as works_router
 from app.engines.llm_router import POLICY_CHOICES, LLMProvider, custom_route_available
 
+# 用户在设置页填的密钥优先落到 os.environ（litellm 读的就是它），
+# 必须在下面 include_router 之前执行：路由模块导入时会把 key 快照进常量。
+try:
+    from app.db.credential_store import apply_credentials
+
+    apply_credentials()
+except Exception:  # noqa: BLE001 - a broken credential row must not stop boot
+    logging.getLogger(__name__).warning("could not apply stored provider credentials", exc_info=True)
+
 app = FastAPI(title="Project Lunar", version="0.5.0")
 
-# 允许的来源：vite dev（5173）、静态托管（4173），以及桌面壳的 tauri://localhost。
-# 需要额外来源时用 LUNAR_CORS_ORIGINS（逗号分隔）追加，桌面壳就是这样起后端的。
+# 允许的来源：vite dev（5173）与 vite preview（4173），localhost 和 127.0.0.1 两种写法
+# 都算——它们的差异只体现在 Origin 头里，漏一个就会让另一种访问方式被浏览器拦下。
+# 这里只列环回地址：本引擎默认监听本机，任何外网来源都必须显式写进 LUNAR_CORS_ORIGINS。
+# 桌面壳用 tauri://localhost，也是通过它追加进来的。
 _CORS_ORIGINS = [
     "http://localhost:5173",
-    "http://localhost:3000",
     "http://127.0.0.1:5173",
+    "http://localhost:4173",
     "http://127.0.0.1:4173",
 ] + [o.strip() for o in os.environ.get("LUNAR_CORS_ORIGINS", "").split(",") if o.strip()]
 
@@ -57,6 +68,13 @@ async def api_token_guard(request: Request, call_next):
 
     Off unless API_TOKEN is set. The health probe stays public so process
     supervisors and load balancers can check liveness without a secret.
+
+    Known limit: when the gate is off, anything that can open a TCP connection
+    to this port drives the engine - read every campaign, switch models, spend
+    provider credit. CORS does not help: it only constrains browsers, and only
+    when the request carries an Origin. That is why the documented bind is
+    127.0.0.1; binding 0.0.0.0 without also setting API_TOKEN publishes all of
+    it to the network.
     """
     token = os.environ.get("API_TOKEN", "").strip()
     if request.method == "OPTIONS":
@@ -76,6 +94,30 @@ async def api_token_guard(request: Request, call_next):
         if not hmac.compare_digest(supplied, token):
             return JSONResponse(status_code=401, content={"detail": "unauthorized"})
     return await call_next(request)
+
+# ---------------------------------------------------------------------------
+# Single-process contract
+#
+# The engine is designed to run as ONE backend process. That is a deliberate
+# architectural choice, not a deployment accident, and nothing enforces it at
+# the socket level - so it is recorded here:
+#
+#   * game_session `_sessions` is a module-level dict: the live session of a
+#     campaign exists only in the memory of the process that created it;
+#   * the long-term recap and the narration records are appended after the
+#     commit by the same request that narrated them;
+#   * the SQLite store guards writes with an in-process lock plus a version
+#     compare-and-set, which serialises writers inside one process. SQLite
+#     still serialises across processes, but two backends would each hold their
+#     own session dict and their own provider client pool and would fight over
+#     ``events.db`` and the legacy mirror.
+#
+# Running with ``uvicorn --workers N`` (or behind multiple replicas) therefore
+# produces split-brain sessions: a player can be in a different process on
+# every request. launch.py starts exactly one worker; the note exists so nobody
+# turns on multi-worker mode to "scale" without building shared session state
+# first.
+# ---------------------------------------------------------------------------
 
 # Windows registry often lacks these; StaticFiles would fall back to text/plain.
 mimetypes.add_type("image/webp", ".webp")
@@ -117,6 +159,15 @@ class SettingsUpdateRequest(BaseModel):
     content_policy: str | None = None
     nsfw_model: str | None = None
     local_fallback_on_refusal: bool | None = None
+    # Browser-side preferences that used to live only in localStorage. They are
+    # stored as-is so another browser (or the desktop WebView) sees the same
+    # settings; nothing here is secret.
+    theme: str | None = None
+    nsfw_mode: bool | None = None
+    combat_enabled: bool | None = None
+    custom_model: str | None = None
+    #: User-authored narration/style directive applied to every world.
+    default_narrator_prompt: str | None = None
 
 
 def _normalise_policy(value: str | None) -> str | None:
@@ -148,12 +199,52 @@ def update_settings(req: SettingsUpdateRequest):
         _llm.config.local_fallback_on_refusal = bool(req.local_fallback_on_refusal)
     apply_model_policy(provider, req.model)
     model = _llm.config.orchestrator_model or _llm.config.primary_model
+    stored = _save_prefs(
+        {
+            "provider": provider.value,
+            "model": model,
+            "temperature": req.temperature,
+            "max_tokens": req.max_tokens,
+            "content_policy": policy or _llm.config.content_policy,
+            "nsfw_mode": req.nsfw_mode,
+            "local_fallback_on_refusal": req.local_fallback_on_refusal,
+            "combat_enabled": req.combat_enabled,
+            "theme": req.theme,
+            "custom_model": req.custom_model,
+            "default_narrator_prompt": req.default_narrator_prompt,
+        }
+    )
     return {
         "status": "ok",
         "provider": provider.value,
         "model": model,
         "content_policy": policy or _llm.config.content_policy,
+        "prefs": stored,
     }
+
+
+def _save_prefs(values: dict) -> dict:
+    """Persist the browser-side preferences, ignoring unchecked/absent fields."""
+    from app.db.prefs_store import get_prefs_store
+
+    cleaned = {k: v for k, v in values.items() if v is not None}
+    if not cleaned:
+        return {}
+    store = get_prefs_store()
+    try:
+        return store.put(cleaned)
+    finally:
+        store.close()
+
+
+def _load_prefs() -> dict:
+    from app.db.prefs_store import get_prefs_store
+
+    store = get_prefs_store()
+    try:
+        return store.all()
+    finally:
+        store.close()
 
 
 def _custom_route_model() -> str | None:
@@ -165,9 +256,36 @@ def _custom_route_model() -> str | None:
     return custom_default_model()
 
 
+class PrefsUpdateRequest(BaseModel):
+    """Partial write: only the keys the client sends are stored."""
+
+    model_config = {"extra": "allow"}
+
+
+@app.get("/api/prefs")
+def get_prefs():
+    return {"prefs": _load_prefs()}
+
+
+@app.post("/api/prefs")
+def update_prefs(req: PrefsUpdateRequest):
+    from app.db.prefs_store import ALLOWED_KEYS
+
+    # extra="allow" 的字段落在 __pydantic_extra__ 里，model_dump() 不会带出来，
+    # 所以要和声明字段合并后再按白名单过滤。
+    sent = {**req.model_dump(), **(req.__pydantic_extra__ or {})}
+    payload = {k: v for k, v in sent.items() if k in ALLOWED_KEYS}
+    if not payload:
+        raise HTTPException(status_code=400, detail="no known preference keys")
+    return {"status": "ok", "prefs": _save_prefs(payload)}
+
+
 @app.get("/api/settings")
 def get_settings():
+    prefs = _load_prefs()
     return {
+        "prefs": prefs,
+        "default_narrator_prompt": prefs.get("default_narrator_prompt", ""),
         "provider": _llm.config.primary_provider.value,
         "model": _llm.config.orchestrator_model or _llm.config.primary_model,
         "auxiliary_model": _llm.config.primary_model,
@@ -188,3 +306,93 @@ def get_settings():
         "custom_route_available": custom_route_available(),
         "custom_model": _custom_route_model(),
     }
+
+
+class ProviderCredentialRequest(BaseModel):
+    """A key, an endpoint, or both. Omitted fields keep their stored value."""
+
+    api_key: str | None = Field(default=None, max_length=400)
+    base_url: str | None = Field(default=None, max_length=400)
+    model: str | None = Field(default=None, max_length=200)
+
+
+@app.get("/api/providers")
+def list_providers():
+    """Which providers can actually be reached, and why."""
+    from app.db.credential_store import status
+
+    return {"providers": status()}
+
+
+@app.post("/api/providers/{provider}")
+def save_provider(provider: str, req: ProviderCredentialRequest):
+    """Store a provider credential. The key is never returned."""
+    from app.db.credential_store import PROVIDERS, CredentialStore, apply_credentials, status
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    if req.base_url is not None and req.base_url.strip() and not req.base_url.strip().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="base_url 必须以 http:// 或 https:// 开头")
+    store = CredentialStore()
+    try:
+        store.put(
+            provider,
+            api_key=None if req.api_key is None else req.api_key.strip(),
+            base_url=None if req.base_url is None else req.base_url.strip(),
+            model=None if req.model is None else req.model.strip(),
+        )
+    finally:
+        store.close()
+    apply_credentials()
+    return {"status": "ok", "providers": status()}
+
+
+@app.delete("/api/providers/{provider}")
+def forget_provider(provider: str):
+    """Drop a stored credential; the shell environment (if any) takes over again."""
+    from app.db.credential_store import CredentialStore, PROVIDERS, apply_credentials, status
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    store = CredentialStore()
+    try:
+        store.delete(provider)
+    finally:
+        store.close()
+    # Put back whatever .env / the shell supplied before the UI wrote anything.
+    # Skipping this left the just-deleted key sitting in os.environ.
+    apply_credentials()
+    return {"status": "ok", "providers": status()}
+
+
+class ProviderTestRequest(BaseModel):
+    """Optional model override for the probe."""
+
+    model: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/api/providers/{provider}/test")
+async def test_provider(provider: str, req: ProviderTestRequest | None = None):
+    """Send one tiny prompt so the user learns whether the key actually works."""
+    from app.db.credential_store import PROVIDERS
+
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    try:
+        from app.engines.llm_router import LLMConfig, LLMRouter, LLMProvider
+
+        model = (req.model or "").strip() if req else ""
+        config = LLMConfig(
+            primary_provider=LLMProvider(provider),
+            primary_model=model or _llm.config.primary_model,
+            temperature=0.0,
+            max_tokens=16,
+        )
+        router = LLMRouter(config)
+        reply = await router.complete(
+            [{"role": "user", "content": "Reply with the single word: ok"}],
+            max_tokens=16,
+        )
+        return {"status": "ok", "reply": (reply or "").strip()[:120]}
+    except Exception as exc:  # noqa: BLE001 - the message is the whole point
+        return {"status": "error", "error": str(exc)[:400]}

@@ -105,6 +105,16 @@ def test_get_memory_crystals_empty(client):
     assert r.json() == []
 
 
+class _JournalSpy:
+    """Stands in for a session journal and records evaluate_and_log calls."""
+
+    def __init__(self, awaitable):
+        self._awaitable = awaitable
+
+    async def evaluate_and_log(self, *args, **kwargs):
+        return await self._awaitable(*args, **kwargs)
+
+
 def test_timeskip_logs_world_changes_in_journal(client, monkeypatch):
     from app.api import routes_game
 
@@ -115,7 +125,9 @@ def test_timeskip_logs_world_changes_in_journal(client, monkeypatch):
 
     journal_spy = AsyncMock(return_value=None)
     monkeypatch.setattr(routes_game._world_reactor, "process_tick", fake_process_tick)
-    monkeypatch.setattr(routes_game._journal, "evaluate_and_log", journal_spy)
+    monkeypatch.setattr(
+        routes_game, "_journal_for", lambda campaign_id: _JournalSpy(journal_spy)
+    )
 
     r = client.post("/api/game/camp-timeskip/timeskip", json={"seconds": 86400})
     assert r.status_code == 200

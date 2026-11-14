@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.scenario_store import ScenarioStore, StoryCardType
 from app.db.event_store import EventStore
@@ -22,6 +22,7 @@ from app.engines.opening_generator import (
     generate_opening,
     synthesize_sample_answers,
 )
+from app.services.draft_generator import DRAFT_KINDS, expand_draft, generate_draft
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,18 @@ class CreateScenarioRequest(BaseModel):
     ai_opening_directive: str = Field(default="", max_length=4000)
     world_type: str = Field(default="", max_length=40)
 
+    @model_validator(mode="after")
+    def _opening_required(self) -> "CreateScenarioRequest":
+        """Every world needs an opening scene.
+
+        A world with no opening leaves the player staring at an empty screen
+        with no premise, so either a written opening or an AI directive to
+        generate one is mandatory.
+        """
+        if not self.opening_narrative.strip() and not self.ai_opening_directive.strip():
+            raise ValueError("每个世界都需要开场白：请写下开场，或让 AI 按指令生成")
+        return self
+
 
 class PreviewOpeningRequest(BaseModel):
     language: str = Field(default="en", max_length=10)
@@ -75,6 +88,34 @@ class PreviewOpeningRequest(BaseModel):
     directive: str = Field(default="", max_length=4000)
     setup_questions: list[SetupQuestion] = []
     sample_answers: dict = Field(default_factory=dict)
+
+
+class DraftRequest(BaseModel):
+    """One "write me a first draft" call from the authoring UIs."""
+
+    kind: str = Field(..., max_length=20)
+    topic: str = Field(default="", max_length=200)
+    context: str = Field(default="", max_length=8000)
+    language: str = Field(default="zh", max_length=10)
+    #: Ground the draft in a web lookup of the topic (real people, myths, worlds).
+    search: bool = False
+
+
+class ExpandRequest(BaseModel):
+    """Continue what the author already wrote instead of replacing it."""
+
+    kind: str = Field(..., max_length=20)
+    text: str = Field(..., max_length=8000)
+    topic: str = Field(default="", max_length=200)
+    language: str = Field(default="zh", max_length=10)
+    search: bool = False
+
+
+class SearchRequest(BaseModel):
+    """Preview the web hits a grounded draft would use."""
+
+    query: str = Field(..., max_length=200)
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class AddStoryCardRequest(BaseModel):
@@ -166,6 +207,54 @@ def create_scenario(req: CreateScenarioRequest):
     return scenario.__dict__
 
 
+@router.post("/draft")
+async def draft_text(req: DraftRequest):
+    """Draft one field for the character library or the scenario builder.
+
+    Lives under /scenarios because both authoring screens need it and neither
+    should carry its own prompt. With no model configured this still answers
+    with a template draft, so the button is never dead.
+    """
+    if req.kind not in DRAFT_KINDS:
+        raise HTTPException(status_code=400, detail=f"unsupported kind: {req.kind}")
+    text, provider = await generate_draft(
+        req.kind,
+        topic=req.topic,
+        context=req.context,
+        language=req.language,
+        search=req.search,
+    )
+    return {"text": text, "provider": provider}
+
+
+@router.post("/draft/expand")
+async def expand_text(req: ExpandRequest):
+    """Continue an existing draft; the UI appends the answer to the field."""
+    if req.kind not in DRAFT_KINDS:
+        raise HTTPException(status_code=400, detail=f"unsupported kind: {req.kind}")
+    text, provider = await expand_draft(
+        req.kind,
+        text=req.text,
+        topic=req.topic,
+        language=req.language,
+        search=req.search,
+    )
+    return {"text": text, "provider": provider}
+
+
+@router.post("/draft/search")
+async def draft_search(req: SearchRequest):
+    """The web hits a grounded draft would be built from.
+
+    Separate from /draft so the UI can show what the model is about to read and
+    let the author keep or drop the lookup before spending a generation.
+    """
+    from app.services.web_search import web_search
+
+    hits = await web_search(req.query, limit=req.limit)
+    return {"results": hits, "count": len(hits)}
+
+
 @router.post("/preview-opening")
 async def preview_opening(req: PreviewOpeningRequest):
     """Render a sample AI opening for the scenario builder.
@@ -197,6 +286,12 @@ def list_scenarios():
 
 @router.post("/import", status_code=201)
 def import_scenario(req: ImportScenarioRequest):
+    # 导入同样要开场白：老导出文件里可能没有，给出可执行的提示而不是静默建出空世界。
+    if not req.scenario.opening_narrative.strip() and not req.scenario.ai_opening_directive.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="这个世界没有开场白：请先在导入文件里补 opening_narrative 或 ai_opening_directive",
+        )
     _validate_unique_var_names(req.scenario.setup_questions)
     with _get_store() as store:
         scenario = store.create_scenario(

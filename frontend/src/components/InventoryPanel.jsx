@@ -61,7 +61,7 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory, s
   const expiredItems = inventory.filter((i) => i.status !== 'carried')
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#fbfaf8]/90 backdrop-blur-sm">
       <div className="bg-white/[0.03] border border-white/10 rounded-2xl shadow-[0_0_40px_rgba(255,255,255,0.15)] w-full max-w-lg mx-2 sm:mx-4 max-h-[85vh] sm:max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <h2 className="text-white font-bold text-base tracking-wide">背包</h2>

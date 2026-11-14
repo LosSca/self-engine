@@ -92,6 +92,83 @@ def test_commit_without_expected_version_still_works(store, world):
     assert store.get_state("camp-conc").version == 1
 
 
+def test_omitting_expected_version_is_not_a_last_write_wins_backdoor(store, world):
+    """A stale state cannot be stored just because the caller named no base.
+
+    Regression: ``expected_version=None`` used to take an unconditional UPDATE,
+    so passing nothing was a way to silently overwrite a turn that landed in
+    between. The base version is now derived from the new state instead.
+    """
+    state = _bind(store, world)
+    _commit(store, state, "req-a", version=1, flag_value="first")
+
+    stale = state.model_copy(deep=True)
+    stale.version = 1            # what the caller read, now one version behind
+    stale.flags["marker"] = "second"
+
+    with pytest.raises(StateConflictError) as excinfo:
+        store.commit_action(
+            campaign_id=state.campaign_id,
+            request_id="req-b",
+            request_payload={},
+            status="applied",
+            result_payload={"request_id": "req-b"},
+            state=stale,
+            events=[],
+        )
+
+    assert excinfo.value.expected_version == -1   # derived: state.version - 1
+    assert store.get_state("camp-conc").version == 1
+    assert store.get_state("camp-conc").flags.get("marker") == "first"
+
+
+def test_stale_rollback_is_rejected(store, world):
+    """回滚也要做 compare-and-set：两条回滚并发时不能互相覆盖。
+
+    回归：commit_rollback 曾经完全没有 expected_version，读到的 current 与真正
+    写入之间只要有别的回合落地，就会被无声覆盖。
+    """
+    state = _bind(store, world)
+    _commit(store, state, "req-a", version=1, flag_value="first")
+
+    stale = state.model_copy(deep=True)   # 调用方当初读到的是 version 0
+    restored = state.model_copy(deep=True)
+    restored.version = 1
+    restored.flags["marker"] = "rolled-back"
+
+    with pytest.raises(StateConflictError) as excinfo:
+        store.commit_rollback(
+            campaign_id="camp-conc",
+            state=restored,
+            events=[],
+            expected_version=stale.version,
+        )
+
+    assert excinfo.value.actual_version == 1
+    after = store.get_state("camp-conc")
+    assert after.version == 1
+    assert after.flags.get("marker") == "first"
+
+
+def test_rollback_with_matching_version_lands(store, world):
+    state = _bind(store, world)
+    _commit(store, state, "req-a", version=1, flag_value="first")
+
+    restored = state.model_copy(deep=True)
+    restored.version = 2
+    restored.flags["marker"] = "rolled-back"
+    store.commit_rollback(
+        campaign_id="camp-conc",
+        state=restored,
+        events=[],
+        expected_version=1,
+    )
+
+    after = store.get_state("camp-conc")
+    assert after.version == 2
+    assert after.flags.get("marker") == "rolled-back"
+
+
 def test_concurrent_turns_both_commit_without_lost_update(store, world):
     _bind(store, world)
     service = ActionService(store, narrator=TemplateNarrator())

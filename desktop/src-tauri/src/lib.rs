@@ -133,6 +133,17 @@ fn start_backend(root: &PathBuf, port: u16) -> Option<Child> {
     cmd.spawn().ok()
 }
 
+/// 把 Box<dyn Error> 的整条 source 链打到 stderr：WebView2/Windows 的真实原因常在被包的
+/// 内层，只打印最外层会得到一句没有信息量的 "拒绝访问 (os error 5)"。
+fn log_error_chain(what: &str, err: &dyn std::error::Error) {
+    eprintln!("[self-engine] {}: {}", what, err);
+    let mut src = err.source();
+    while let Some(e) = src {
+        eprintln!("[self-engine]   caused by: {}", e);
+        src = e.source();
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -141,6 +152,12 @@ pub fn run() {
             let root = repo_root();
             let port = DEFAULT_PORT;
             let child = start_backend(&root, port);
+            eprintln!(
+                "[self-engine] repo_root={} python={} backend_spawned={}",
+                root.display(),
+                python_exe(&root).display(),
+                child.is_some()
+            );
             *app.state::<Backend>().0.lock().unwrap() = child;
 
             let api_base = format!("http://127.0.0.1:{}", port);

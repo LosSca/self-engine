@@ -8,7 +8,7 @@
 # the machine.
 #
 # Usage:
-#   schtasks /Create /TN LunarDevServer /TR "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File E:\shujia\scripts\start-dev.ps1" /SC ONCE /ST 23:59 /F
+#   schtasks /Create /TN LunarDevServer /TR "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PSScriptRoot\start-dev.ps1"" /SC ONCE /ST 23:59 /F
 #   schtasks /Run    /TN LunarDevServer
 #   schtasks /End    /TN LunarDevServer        # stop both servers
 #

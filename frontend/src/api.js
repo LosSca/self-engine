@@ -83,6 +83,8 @@ export function streamAction({
   scenarioTone,
   language,
   action,
+  targetName = '',
+  targetId = '',
   openingNarrative,
   maxTokens,
   provider = null,
@@ -112,6 +114,10 @@ export function streamAction({
       language,
       action,
       opening_narrative: openingNarrative || '',
+      // Who the turn is aimed at: the narrator uses the name as a directive,
+      // the rule lane uses the id to bind the reaction to one character.
+      target_name: targetName || '',
+      target_id: targetId || '',
       max_tokens: maxTokens || 2000,
       // Do not invent a model here: an empty value lets the server use its
       // configured provider. Hardcoding a model made every turn fall back.
@@ -475,6 +481,52 @@ export async function previewOpening({
   return r.json()
 }
 
+/**
+ * 让后端写一段草稿（角色设定 / 世界背景 / 地点 / 势力 / 物品 / 设定）。
+ * 没有配模型时后端会回退到模板文本，所以按钮永远不会「死」。
+ * `search` 为真时先联网检索主题，再把检索到的要点交给模型，草稿基于事实。
+ * @param {{kind: string, topic?: string, context?: string, language?: string, search?: boolean}} req
+ * @returns {Promise<{text: string, provider: 'llm'|'template'}>}
+ */
+export async function generateDraft({ kind, topic = '', context = '', language = 'zh', search = false }) {
+  const r = await fetch(`${BASE}/scenarios/draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, topic, context, language, search }),
+  })
+  if (!r.ok) throw new Error('生成失败')
+  return r.json()
+}
+
+/**
+ * 在作者已写的文字后面续写（不覆盖原文）。
+ * @param {{kind: string, text: string, topic?: string, language?: string, search?: boolean}} req
+ * @returns {Promise<{text: string, provider: 'llm'|'template'}>}
+ */
+export async function expandDraft({ kind, text, topic = '', language = 'zh', search = false }) {
+  const r = await fetch(`${BASE}/scenarios/draft/expand`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, text, topic, language, search }),
+  })
+  if (!r.ok) throw new Error('续写失败')
+  return r.json()
+}
+
+/**
+ * 预览一次联网检索的命中结果，界面上让作者先看清再决定要不要用。
+ * @returns {Promise<{results: {title: string, url: string, snippet: string}[], count: number}>}
+ */
+export async function searchWeb({ query, limit = 5 }) {
+  const r = await fetch(`${BASE}/scenarios/draft/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, limit }),
+  })
+  if (!r.ok) throw new Error('检索失败')
+  return r.json()
+}
+
 export async function regenerateOpening(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/regenerate-opening`, {
     method: 'POST',
@@ -738,6 +790,15 @@ export async function previewAction(campaignId, { action, targetId = null, param
   return jsonOrThrow(r, '预演行动失败')
 }
 
+// Three options for the state the campaign is in right now — no turn needed.
+// The opening screen uses this so the first thing a player sees is never an
+// empty input box.
+export async function fetchCampaignSuggestions(campaignId) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/suggestions`)
+  const data = await jsonOrThrow(r, '读取可选行动失败')
+  return Array.isArray(data?.suggestions) ? data.suggestions : []
+}
+
 export async function fetchCampaignStory(campaignId) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/story`)
   return jsonOrThrow(r, '读取故事线进度失败')
@@ -799,7 +860,10 @@ export async function fetchEngineState(campaignId) {
  * effects / events / narrative). A non-2xx response is not swallowed: the
  * caller needs to distinguish "rejected by rules" from "request failed".
  */
-export async function submitTextAction(campaignId, text, { requestId, narrate = true } = {}) {
+export async function submitTextAction(campaignId, text, options) {
+  // 调用方常把「目标」直接当第三个参数传进来（可能是 null / {id,name}），
+  // 直接解构会在 null 上抛 "Cannot destructure ... as it is null"，所以这里兜一次。
+  const { requestId, narrate = true } = options && typeof options === 'object' ? options : {}
   const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/text-actions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -814,7 +878,13 @@ export async function submitTextAction(campaignId, text, { requestId, narrate = 
     throw new Error(`${r.status} ${detail.slice(0, 300)}`)
   }
   const response = await r.json()
-  return response.result
+  const result = response.result
+  // The turn itself comes from the rules lane; the three options ride along at
+  // the envelope level (the SSE lane sends them as a [SUGGESTIONS] tag).
+  if (result && !Array.isArray(result.suggestions) && Array.isArray(response.suggestions)) {
+    result.suggestions = response.suggestions
+  }
+  return result
 }
 
 /** Structured action (used by UI affordances that already know the target). */
@@ -1148,6 +1218,63 @@ export async function updateContentPolicy({ nsfwMode, refusalFallback }) {
 export async function fetchContentPolicy() {
   const r = await fetch(`${BASE}/settings`)
   return jsonOrThrow(r, '读取内容策略失败')
+}
+
+/**
+ * 用户设置的后端副本：让换浏览器、换设备（含桌面壳的独立 WebView 配置）
+ * 之后仍读到同一套服务商、温度、主题与写作指令。
+ */
+export async function fetchPrefs() {
+  const r = await fetch(`${BASE}/prefs`)
+  return jsonOrThrow(r, '读取设置失败')
+}
+
+// ------------------------------------------------------------ 模型服务商密钥
+// Keys are written to the backend and never read back: the list only says
+// whether one exists and where it came from (settings vs .env).
+export async function fetchProviders() {
+  const r = await fetch(`${BASE}/providers`)
+  const data = await jsonOrThrow(r, '读取模型服务商失败')
+  return Array.isArray(data?.providers) ? data.providers : []
+}
+
+export async function saveProvider(provider, { apiKey, baseUrl, model } = {}) {
+  const body = {}
+  if (apiKey !== undefined) body.api_key = apiKey
+  if (baseUrl !== undefined) body.base_url = baseUrl
+  if (model !== undefined) body.model = model
+  const r = await fetch(`${BASE}/providers/${encodeURIComponent(provider)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await jsonOrThrow(r, '保存密钥失败')
+  return Array.isArray(data?.providers) ? data.providers : []
+}
+
+export async function forgetProvider(provider) {
+  const r = await fetch(`${BASE}/providers/${encodeURIComponent(provider)}`, { method: 'DELETE' })
+  const data = await jsonOrThrow(r, '清除密钥失败')
+  return Array.isArray(data?.providers) ? data.providers : []
+}
+
+export async function testProvider(provider, model = '') {
+  const r = await fetch(`${BASE}/providers/${encodeURIComponent(provider)}/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: model || null }),
+  })
+  const data = await jsonOrThrow(r, '连接测试失败')
+  return data
+}
+
+export async function savePrefs(values) {
+  const r = await fetch(`${BASE}/prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values || {}),
+  })
+  return jsonOrThrow(r, '保存设置失败')
 }
 
 /** Which model answers each agent role (keys are never sent by the API). */

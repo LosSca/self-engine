@@ -92,7 +92,7 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#fbfaf8]/90 backdrop-blur-sm p-4">
       <div className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-3xl border border-white/10 bg-neutral-950/95 shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
           <div>
@@ -155,7 +155,7 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
                         const match = looks.find((l) => l.outfit === e.target.value)
                         if (match) setLookId(match.id)
                       }}
-                      className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-white/30"
+                      className="w-full bg-[#fffdf9] border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-white/30"
                     >
                       {outfits.map((outfit) => (
                         <option key={outfit} value={outfit} className="bg-neutral-900">
@@ -171,7 +171,7 @@ export default function CharacterProfilePanel({ open, onClose, campaignId }) {
                     <select
                       value={selectedLook?.id || ''}
                       onChange={(e) => setLookId(e.target.value)}
-                      className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-white/30"
+                      className="w-full bg-[#fffdf9] border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-white/30"
                     >
                       {looks
                         .filter((l) => !selectedLook || l.outfit === selectedLook.outfit)

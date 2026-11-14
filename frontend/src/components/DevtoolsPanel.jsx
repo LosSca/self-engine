@@ -83,7 +83,7 @@ function CallCard({ entry }) {
           输出
         </button>
         {openOutput && (
-          <pre className="text-[11px] leading-relaxed text-[#d1d1d1] font-mono whitespace-pre-wrap break-words bg-black/40 rounded-lg p-3 max-h-64 overflow-auto custom-scrollbar">
+          <pre className="text-[11px] leading-relaxed text-[#d1d1d1] font-mono whitespace-pre-wrap break-words bg-[#fffdf9] rounded-lg p-3 max-h-64 overflow-auto custom-scrollbar">
             {typeof entry.output === 'string' ? entry.output : JSON.stringify(entry.output, null, 2)}
           </pre>
         )}
@@ -102,7 +102,7 @@ function CallCard({ entry }) {
                 <div className="text-[10px] uppercase tracking-widest font-bold text-white/40 mb-1">
                   {s.title}{s.truncated ? ' · 已截断' : ''}
                 </div>
-                <pre className="text-[11px] leading-relaxed text-white/70 font-mono whitespace-pre-wrap break-words bg-black/40 rounded-lg p-3 max-h-72 overflow-auto custom-scrollbar">
+                <pre className="text-[11px] leading-relaxed text-white/70 font-mono whitespace-pre-wrap break-words bg-[#fffdf9] rounded-lg p-3 max-h-72 overflow-auto custom-scrollbar">
                   {s.body}
                 </pre>
               </div>
@@ -205,7 +205,7 @@ function NarrationCard({ row }) {
               {openBlocks && (
                 <div className="space-y-2 pt-1">
                   {(diag.blocks || []).map((b, i) => (
-                    <div key={`${b.id || i}`} className="rounded-lg bg-black/40 p-3">
+                    <div key={`${b.id || i}`} className="rounded-lg bg-[#fffdf9] p-3">
                       <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold text-white/40 mb-1">
                         <span>{layerLabel(b.layer)}</span>
                         <span className="text-white/60 normal-case tracking-normal">{b.title || b.id}</span>
@@ -312,7 +312,7 @@ function ActionLogTab({ rows, loading, onRefresh, onOpen, selected, detail }) {
       {selected && detail && (
         <div className="rounded-xl bg-white/[0.03] border border-white/5 p-4 space-y-2">
           <div className="text-[10px] uppercase tracking-widest font-bold text-white/40">请求</div>
-          <pre className="text-[11px] leading-relaxed text-white/70 font-mono whitespace-pre-wrap break-words bg-black/40 rounded-lg p-3 max-h-48 overflow-auto custom-scrollbar">
+          <pre className="text-[11px] leading-relaxed text-white/70 font-mono whitespace-pre-wrap break-words bg-[#fffdf9] rounded-lg p-3 max-h-48 overflow-auto custom-scrollbar">
             {JSON.stringify(detail.request || {}, null, 2)}
           </pre>
           <div className="text-[10px] uppercase tracking-widest font-bold text-white/40">结果</div>
@@ -323,7 +323,7 @@ function ActionLogTab({ rows, loading, onRefresh, onOpen, selected, detail }) {
             {result.state_version != null && <span>v{result.state_version}</span>}
           </div>
           {(result.effects_applied || []).length > 0 && (
-            <pre className="text-[11px] leading-relaxed text-white/60 font-mono whitespace-pre-wrap break-words bg-black/40 rounded-lg p-3 max-h-48 overflow-auto custom-scrollbar">
+            <pre className="text-[11px] leading-relaxed text-white/60 font-mono whitespace-pre-wrap break-words bg-[#fffdf9] rounded-lg p-3 max-h-48 overflow-auto custom-scrollbar">
               {JSON.stringify(result.effects_applied, null, 2)}
             </pre>
           )}
@@ -447,7 +447,7 @@ export default function DevtoolsPanel({
   const currentEntries = current?.entries || []
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#fbfaf8]/90 backdrop-blur-sm">
       <div className="bg-white/[0.03] backdrop-blur-xl border border-white/5 rounded-[2rem] w-full max-w-5xl mx-4 overflow-hidden max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 flex-none">

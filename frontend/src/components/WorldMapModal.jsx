@@ -65,7 +65,12 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
     setLoading(true)
     try {
       const data = await fetchWorldGraph(campaignId)
-      setGraphData(data)
+      // 后端在没有图服务时会返回 {"nodes": [], "links": []}，但部分部署会给出 null，
+      // 这里统一成数组，避免下游 .map / .length 抛 "Cannot read properties of null"。
+      setGraphData({
+        nodes: Array.isArray(data?.nodes) ? data.nodes : [],
+        links: Array.isArray(data?.links) ? data.links : [],
+      })
     } catch {
       setGraphData({ nodes: [], links: [] })
     } finally {
@@ -360,7 +365,7 @@ export default function WorldMapModal({ open, onClose, campaignId, engineState, 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#fbfaf8]/90 backdrop-blur-sm">
       <div
         ref={containerRef}
         className="bg-white/[0.03] backdrop-blur-xl border border-white/5 rounded-2xl sm:rounded-[2rem] w-full max-w-4xl mx-2 sm:mx-4 overflow-hidden flex flex-col"

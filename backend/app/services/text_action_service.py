@@ -25,6 +25,7 @@ import logging
 import sqlite3
 
 from app.services import intent_advisor, starter_worlds, world_service
+from app.services.rejection import rejection_message
 from app.services.action_service import ActionService
 
 logger = logging.getLogger(__name__)
@@ -314,6 +315,28 @@ class TextActionParser:
             seen.add(candidate.id)
             candidates.append(candidate)
         return candidates
+
+    @staticmethod
+    def _free_form_look(text: str) -> Optional[ParsedAction]:
+        """把一句规则表外的自然语言降级成「看清这地方」。
+
+        只对 DO（或无信封的自由输入）生效：SAY/META/CONTINUE 是玩家在聊天或
+        跳过，硬掰成动作反而是替玩家做主。理由写在 execute() 调用处。
+        """
+        raw = (text or "").strip()
+        envelope = _ENVELOPE.match(raw)
+        mode = envelope[1].upper() if envelope else "DO"
+        if mode != "DO":
+            return None
+        body = _norm(raw)
+        if len(body) < 2:
+            return None
+        return ParsedAction(
+            action="look",
+            confidence="verb_only",
+            note="",
+            params={"free_form": body[:400]},
+        )
 
     def _guess_without_verb(
         self, text: str, world: WorldDefinition, state: GameState
@@ -781,6 +804,10 @@ class TextActionService:
             advised = await self._advise(text, world, state, campaign_id)
             if advised is not None:
                 parsed = advised
+        # 解析不出来就拒：文本链路的契约是「没听懂就不动状态」，并把
+        # 现场能做什么写在 message 里（见 _reject_parse）。曾经试过把自由
+        # 描述降级成 look，但那会让「写对了动词、只是目标不存在」的输入
+        # 也变成成功，破坏「明确动作不许被猜」的不变量，已回退。
         if parsed is None or not parsed.action or parsed.confidence in _PARSE_FAILURES:
             return await self._reject_parse(campaign_id, request_id, text, state, parsed)
         request = ActionRequest(
@@ -921,9 +948,14 @@ class TextActionService:
     ) -> Dict[str, Any]:
         from app.models.game import NarrativeResult
 
-        message = (
-            "无法理解这条行动：" + text[:80]
-            + "。可以尝试「看」「前往 <地点>」「拿 <物品>」「打开 <门>」「用 <物品>」「说 <人物>」「攻击 <敌人>」「防御」「逃跑」。"
+        # 没有叙事不等于没有反馈：玩家要么知道下一步能做什么，要么就会觉得
+        # 「对话无响应」。提示必须用这个世界真实的出口/人物/物品来说话。
+        world = self._world_for_state(state, campaign_id)
+        message = rejection_message(
+            world, state,
+            text=text,
+            note=parsed.note if parsed else "",
+            code=(parsed.confidence if parsed else "unparsed_action"),
         )
         result = ActionResult(
             request_id=request_id,
@@ -932,10 +964,10 @@ class TextActionService:
             action=parsed.action if parsed else "unknown",
             ok=False,
             code=parsed.confidence if parsed else "unparsed_action",
-            message=parsed.note if parsed else message,
+            message=message,
             state_version=state.version,
             state=state,
-            narrative=NarrativeResult(status="skipped"),
+            narrative=NarrativeResult(status="skipped", error=message),
         )
         request_payload = {
             "campaign_id": campaign_id,

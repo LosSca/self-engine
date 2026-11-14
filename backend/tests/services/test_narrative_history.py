@@ -233,12 +233,25 @@ async def test_engine_recap_uses_committed_requests_not_legacy_mirrors(store, mo
     monkeypatch.setenv("EVENT_DB_PATH", store.db_path + ".legacy")
     narrator = RecordingNarrator()
     service = ActionService(store, narrator=narrator, history_provider=routes_engine._history_provider())
+    # The recap shown to the narrator must cover only *earlier* turns: the prose
+    # for "current" is written after that turn commits, so it cannot be part of
+    # its own prompt.
     await service.execute(_request("past", "look"))
     await service.execute(_request("refused", "open", "warehouse_door"))
+    blocks_before = len(narrator.seen)
     await service.execute(_request("current", "look"))
+    assert len(narrator.seen) == blocks_before + 1
     blocks = narrator.seen[-1]
     history = next(block for block in blocks if block.get("title") == "recent turns")["content"]
-    assert history.splitlines() == ["player: look", "narrator: ok", "player: open warehouse_door", "narrator: ok"]
+    # Every committed turn is in the thread, with the prose that was actually
+    # recorded for it. "current" itself is not: its prose is written after the
+    # request commits, so it cannot be part of the prompt that produced it.
+    lines = history.splitlines()
+    assert lines[:4] == [
+        "player: look", "narrator: ok", "player: open warehouse_door", "narrator: ok",
+    ]
+    assert lines[4] == "player: look"
+    assert lines[5].startswith("narrator: ")
     assert store.get_state("camp-1").version == 2
 
 

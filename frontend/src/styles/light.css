@@ -10,10 +10,15 @@ html[data-theme="light"] {
 html[data-theme="light"] body { background-color: var(--paper); color: #2b2b2b; }
 html[data-theme="light"] ::selection { background: rgba(28, 28, 28, 0.14); color: #111111; }
 
-/* 主按钮：深色下的「白底黑字」在浅色下变成「墨底白字」 */
-html[data-theme="light"] .bg-white.text-black,
-html[data-theme="light"] .bg-white.text-black:hover { color: #ffffff; }
-html[data-theme="light"] .bg-white.text-black:hover { background-color: #333333; }
+/* 正文排版：深色模板的 prose-invert 会把段落刷成白字，纸白上必须改回墨色 */
+html[data-theme="light"] .prose.prose-invert { color: #2b2b27; }
+html[data-theme="light"] .prose.prose-invert :is(p, li, strong, em, blockquote, span) { color: #2b2b27; }
+html[data-theme="light"] .prose.prose-invert :is(h1, h2, h3, h4) { color: #1a1a1a; }
+html[data-theme="light"] .prose.prose-invert a { color: #0e5a66; }
+html[data-theme="light"] .prose.prose-invert code { color: #4a3b2a; background: rgba(58, 54, 48, 0.08); }
+/* 主按钮：纸白主题里「白底黑字」保持纸白底 + 墨字，不再翻成黑块 */
+html[data-theme="light"] .bg-white.text-black { background-color: #fffdf9; color: #1a1a1a; }
+html[data-theme="light"] .bg-white.text-black:hover { background-color: #efede8; color: #1a1a1a; }
 html[data-theme="light"] .disabled\:bg-white\/30:disabled { color: rgba(26, 26, 26, 0.45); }
 
 /* 弹窗遮罩：半透明墨色，而不是把整个屏幕刷白 */
@@ -72,6 +77,8 @@ html[data-theme="light"] .bg-white\/20 { background-color: rgba(26, 26, 26, 0.10
 html[data-theme="light"] .text-white { color: #1a1a1a; }
 html[data-theme="light"] .text-gray-400 { color: #5c554e; }
 html[data-theme="light"] .text-white\/30 { color: rgba(26, 26, 26, 0.51); }
+/* /35 is used by ActionPreviewPanel、DevtoolsPanel、StoryProgressPanel；缺映射时浅色主题保持近白，读不出来 */
+html[data-theme="light"] .text-white\/35 { color: rgba(26, 26, 26, 0.55); }
 html[data-theme="light"] .border-white\/10 { border-color: rgba(26, 26, 26, 0.13); }
 html[data-theme="light"] .text-white\/60 { color: rgba(26, 26, 26, 0.72); }
 html[data-theme="light"] .text-white\/40 { color: rgba(26, 26, 26, 0.58); }
@@ -116,6 +123,11 @@ html[data-theme="light"] .bg-black\/40 { background-color: rgba(26, 26, 26, 0.05
 html[data-theme="light"] .focus\:border-white\/30:focus { border-color: rgba(26, 26, 26, 0.23); }
 html[data-theme="light"] .text-emerald-300 { color: #065f46; }
 html[data-theme="light"] .text-white\/50 { color: rgba(26, 26, 26, 0.65); }
+/* 边栏与说明文字用到的中间档：之前没映射，白字直接落在浅底上（对比度 1.18，等于看不见） */
+html[data-theme="light"] .text-white\/55 { color: rgba(26, 26, 26, 0.70); }
+html[data-theme="light"] .text-white\/65 { color: rgba(26, 26, 26, 0.78); }
+html[data-theme="light"] .text-white\/75 { color: rgba(26, 26, 26, 0.86); }
+html[data-theme="light"] .hover\:text-white\/75:hover { color: rgba(26, 26, 26, 0.86); }
 html[data-theme="light"] .border-rose-500\/40 { border-color: rgba(225, 29, 72, 0.4); }
 html[data-theme="light"] .bg-rose-400 { background-color: #e11d48; }
 html[data-theme="light"] .text-emerald-400 { color: #047857; }
@@ -172,6 +184,16 @@ html[data-theme="light"] .bg-black\/30 { background-color: rgba(26, 26, 26, 0.04
 html[data-theme="light"] .text-emerald-300\/80 { color: rgba(6, 95, 70, 0.8); }
 html[data-theme="light"] .accent-white { accent-color: #1c1c1c; }
 html[data-theme="light"] .text-white\/90 { color: rgba(26, 26, 26, 0.93); }
+html[data-theme="light"] .text-amber-300\/80 { color: #8a5a12; }
+html[data-theme="light"] .text-amber-200\/90 { color: #8a5a12; }
+html[data-theme="light"] .text-amber-300 { color: #8a5a12; }
+html[data-theme="light"] .text-cyan-300\/70 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-300\/80 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-300\/90 { color: #0b4d57; }
+html[data-theme="light"] .text-cyan-400\/80 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-200\/70 { color: #0e5a66; }
+html[data-theme="light"] .text-white\/95 { color: rgba(26, 26, 26, 0.92); }
+html[data-theme="light"] .text-white\/85 { color: rgba(26, 26, 26, 0.86); }
 html[data-theme="light"] .bg-white\/\[0\.08\] { background-color: rgba(26, 26, 26, 0.06); }
 html[data-theme="light"] .border-white { border-color: rgba(26, 26, 26, 0.32); }
 html[data-theme="light"] .hover\:text-white\/70:hover { color: rgba(26, 26, 26, 0.79); }
@@ -194,4 +216,67 @@ html[data-theme="light"] .bg-emerald-500\/10 { background-color: rgba(5, 150, 10
 html[data-theme="light"] .border-emerald-500\/30 { border-color: rgba(5, 150, 105, 0.3); }
 html[data-theme="light"] .border-amber-500\/40 { border-color: rgba(180, 83, 9, 0.4); }
 html[data-theme="light"] .border-rose-500\/30 { border-color: rgba(225, 29, 72, 0.3); }
-html[data-theme="light"] .bg-white.hover\:bg-gray-200:hover { background-color: #333333; color: #ffffff; }
+html[data-theme="light"] .bg-white.hover\:bg-gray-200:hover { background-color: #5c564e; color: #ffffff; }
+
+/* ---- 纸白主题里不再出现纯黑块（用户反馈：黑色看不清） ----
+   深色主题下「黑底白字」的实心按钮，在纸面上换成中性灰底；
+   侧栏/停靠区/工作室这些硬编码的深色底改成纸灰，靠边框与阴影分层。 */
+html[data-theme="light"] .bg-\[\#0b0d10\] { background-color: #efece6; }
+html[data-theme="light"] .bg-\[\#0b0b0b\],
+html[data-theme="light"] .bg-\[\#080b0d\],
+html[data-theme="light"] .bg-\[\#071014\] {
+  background-color: #fbfaf8;
+  box-shadow: 0 30px 80px -40px rgba(24, 20, 16, 0.35);
+}
+
+/* 新手引导里的青色提示条 / 主按钮：深色下是「浅青字 + 亮青底黑字」，
+   纸面上必须换成墨字与更深的青，否则对比度只有 1 左右。 */
+html[data-theme="light"] .text-cyan-100 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-200 { color: #0e5a66; }
+html[data-theme="light"] .text-cyan-300 { color: #0b4d57; }
+html[data-theme="light"] .text-cyan-200\/80 { color: #0e5a66; }
+/* 引导卡片里的深色提示条：纸面上换成极浅青，避免深底压住墨字 */
+html[data-theme="light"] .bg-black\/30 { background-color: rgba(14, 124, 140, 0.10); }
+html[data-theme="light"] .bg-cyan-400\/90 { background-color: #0e7c8c; }
+html[data-theme="light"] .hover\:bg-cyan-300:hover { background-color: #0b6b79; }
+html[data-theme="light"] .bg-cyan-400\/\[0\.07\] { background-color: rgba(14, 124, 140, 0.08); }
+html[data-theme="light"] .border-cyan-400\/25 { border-color: rgba(14, 124, 140, 0.30); }
+html[data-theme="light"] .border-cyan-400\/40 { border-color: rgba(14, 124, 140, 0.45); }
+
+/* 卡片：白底卡片在纸面上就是白色，别被上面「深色底 → 浅底」的旧规则弄成深灰。 */
+html[data-theme="light"] .bg-white.rounded-3xl,
+html[data-theme="light"] .bg-white.rounded-2xl,
+html[data-theme="light"] .bg-white.rounded-xl,
+html[data-theme="light"] .bg-white.p-5,
+html[data-theme="light"] .bg-white.border-\[\#dcd8d0\],
+html[data-theme="light"] .bg-white.border-\[\#d8d4cc\] {
+  background-color: #ffffff !important;
+}
+
+/* 实心按钮：纸面上用最深一档墨色，配纯白字，保证对比度（约 12:1） */
+html[data-theme="light"] .bg-\[\#1a1a1a\] { background-color: #262421; }
+html[data-theme="light"] .bg-\[\#1a1a1a\] .text-white { color: #ffffff; }
+html[data-theme="light"] .bg-\[\#3f3a34\].text-white,
+html[data-theme="light"] .bg-\[\#262421\].text-white,
+html[data-theme="light"] .bg-\[\#1a1a1a\].text-white { color: #ffffff; }
+/* 最淡的说明文字：纸面上提高到可读的深灰（原先接近对比度 2） */
+html[data-theme="light"] .text-\[\#a8a29a\] { color: #6f6a62; }
+
+/* 设置面板里白色选项 / 实心按钮上的白字必须压过面板根的墨色文字 */
+html[data-theme="light"] [data-testid="settings-panel"] .text-white,
+html[data-theme="light"] [data-testid="settings-panel"] .bg-\[\#1a1a1a\].text-white,
+html[data-theme="light"] .bg-\[\#262421\] { color: #ffffff; }
+html[data-theme="light"] .bg-\[\#1a1a1a\].text-white { color: #ffffff; }
+html[data-theme="light"] .bg-\[\#1a1a1a\].hover\:bg-\[\#333\]:hover { color: #ffffff; }
+html[data-theme="light"] .hover\:bg-\[\#333\]:hover { background-color: #3a3733; }
+html[data-theme="light"] .border-\[\#1a1a1a\] { border-color: #262421; }
+html[data-theme="light"] .accent-\[\#1a1a1a\] { accent-color: #262421; }
+/* 停靠面板里不少组件仍按深色模态写（bg-neutral-950/95 + text-white/*）。
+   纸白主题下卡片已被 .tool-dock-host 抬成浅色，深底必须一起改亮，否则白字落在白底上。 */
+html[data-theme="light"] .bg-neutral-950\/95,
+html[data-theme="light"] .bg-neutral-950\/90,
+html[data-theme="light"] .bg-neutral-950,
+html[data-theme="light"] .bg-neutral-900\/95,
+html[data-theme="light"] .bg-neutral-900 { background-color: #fbfaf8; }
+html[data-theme="light"] .border-white\/10 { border-color: #e2ded6; }
+html[data-theme="light"] .shadow-2xl { box-shadow: 0 18px 40px -28px rgba(24, 20, 16, 0.35); }

@@ -4,12 +4,30 @@
 // "jsxRuntimeExports.Fragment is not a function" the moment a view renders an
 // inline fragment. Neither esbuild options nor a noop esbuild loader stop it, so
 // the bundle is corrected after the build instead: drop the bogus `children`
-// wrapper and expand the children into the argument list of the original call.
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-const ASSETS = process.env.FRAGMENT_ASSETS || (process.argv[2] && process.argv[2] !== "dist/assets" ? process.argv[2] : "E:/shujia/frontend/dist/assets");
+// Resolve the asset directory from this file's own location, never from a constant:
+// the repo used to live at E:/shujia, and a hard-coded path there made every
+// `npm run build` end in ENOENT even though vite itself had succeeded.
+const here = fileURLToPath(new URL(".", import.meta.url));
+const DEFAULT_ASSETS = resolve(here, "..", "frontend", "dist", "assets");
+
+// `npm run build` passes "dist/assets" from the frontend directory; resolve it
+// against the caller's cwd. A bare "dist/assets" that does not exist is never
+// swapped for the default silently - that is how a hard-coded path here used to
+// make the patch step look successful while touching nothing.
+const requested = process.env.FRAGMENT_ASSETS || process.argv[2];
+const ASSETS = requested ? resolve(process.cwd(), requested) : DEFAULT_ASSETS;
+
+if (!existsSync(ASSETS)) {
+  // Nothing to patch is not a build failure: this step post-processes `vite build`
+  // output, so a build without an assets directory simply has no fragments.
+  console.log("fragment-calls: no assets directory at " + ASSETS + " - nothing to do");
+  process.exit(0);
+}
 
 const MARKER = "jsxRuntimeExports.Fragment(";
 
@@ -129,6 +147,8 @@ for (const name of readdirSync(ASSETS)) {
   const { code, fixed } = rewrite(before);
   if (fixed > 0) writeFileSync(path, code, "utf8");
   total += fixed;
+  // Verify every asset that still contains the marker, patched or not: a bundle
+  // left unparsable by the rewrite must fail here, not in the browser.
   if (!syntaxOk(path)) broken.push(name);
   console.log("fragment-calls: " + name + " -> " + fixed);
 }

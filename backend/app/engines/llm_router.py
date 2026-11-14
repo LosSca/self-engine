@@ -345,7 +345,18 @@ POLICY_NSFW = "nsfw"
 POLICY_CHOICES = (POLICY_STANDARD, POLICY_NSFW)
 
 
-def _reasoning_kwargs(provider: LLMProvider, reasoning: bool) -> dict:
+def _is_spark_model(model: str) -> bool:
+    """True for iFlytek Spark / 星辰 MaaS model ids (e.g. "spark-x2.6").
+
+    Spark exposes its own thinking switch and ignores reasoning_effort entirely
+    (its MaaS docs say reasoning_effort applies only to OpenAI OSS models). It is
+    only reachable through the custom OpenAI-compatible route, where the model
+    string has already been flattened to the bare id by then.
+    """
+    return "spark" in (model or "").split("/")[-1].lower()
+
+
+def _reasoning_kwargs(provider: LLMProvider, reasoning: bool, model: str = "") -> dict:
     """Turn reasoning off per provider.
 
     Every current provider bills reasoning against max_tokens and leaves it on when
@@ -367,6 +378,12 @@ def _reasoning_kwargs(provider: LLMProvider, reasoning: bool) -> dict:
         # killed every narrative call that asked for reasoning=False. Reasoning is
         # already off by default there, so the parameter is simply not sent.
         return {}
+    if _is_spark_model(model):
+        # Spark's thinking defaults to enabled and is billed against
+        # max_completion_tokens; reasoning_effort is silently ignored there, so
+        # sending it left every narrator call paying for reasoning it never used.
+        # thinking.type is the vendor's own switch (enabled / disabled / auto).
+        return {"thinking": {"type": "disabled"}}
     return {"reasoning_effort": "none"}
 
 
@@ -400,6 +417,10 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "anthropic/claude-opus-4-0": 200_000,
     # OpenAI GPT-5.6 Sol
     "openai/gpt-5.6-sol": 372_000,
+    # iFlytek Spark X2.6 (星辰 MaaS): context expanded from 256K to 1M.
+    # Reachable through the custom OpenAI-compatible route, where the router
+    # keys on the bare model id -> "openai/spark-x2.6".
+    "openai/spark-x2.6": 1_000_000,
 }
 _DEFAULT_CONTEXT_WINDOW = 200_000  # reasonable fallback
 
@@ -459,6 +480,11 @@ def _looks_like_refusal(text: str) -> bool:
 def _accepts_temperature(model: str) -> bool:
     """False for models that reject sampling params. Handles the 'provider/model' form."""
     bare = model.split("/")[-1]
+    if _is_spark_model(model):
+        # Spark's MaaS docs pin temperature at 1 (and top_p at 0.95): the field is
+        # accepted but ignored, so sending the config default only pretends to
+        # have an effect. Leave it out.
+        return False
     return not any(bare.startswith(p) for p in _NO_SAMPLING_MODELS)
 
 
@@ -649,9 +675,26 @@ _OPENAI_PROXY_KEY = _settings.openai_proxy_key or os.environ.get("OPENAI_PROXY_K
 
 # Local OpenAI-compatible inference server (NInfer). Pydantic settings win over
 # the shell environment, matching the proxy constants above so editing .env works.
+# These are resolved per call (not at import): tests and hot-reloaded servers set
+# LOCAL_LLM_* after this module is loaded, and an import-time snapshot would keep
+# the local route permanently invisible.
+# Import-time values stay as the fallback so callers (and tests) may still pin
+# them on the module, but the environment is consulted first at call time.
 _LOCAL_LLM_URL = _settings.local_llm_base_url or os.environ.get("LOCAL_LLM_BASE_URL", "")
 _LOCAL_LLM_KEY = _settings.local_llm_api_key or os.environ.get("LOCAL_LLM_API_KEY", "")
 _LOCAL_LLM_MODEL = _settings.local_llm_model or os.environ.get("LOCAL_LLM_MODEL", "")
+
+
+def _local_llm_url() -> str:
+    return _settings.local_llm_base_url or os.environ.get("LOCAL_LLM_BASE_URL", "") or _LOCAL_LLM_URL
+
+
+def _local_llm_key() -> str:
+    return _settings.local_llm_api_key or os.environ.get("LOCAL_LLM_API_KEY", "") or _LOCAL_LLM_KEY
+
+
+def _local_llm_model() -> str:
+    return _settings.local_llm_model or os.environ.get("LOCAL_LLM_MODEL", "") or _LOCAL_LLM_MODEL
 # One custom OpenAI-compatible vendor (see app/config.py). It reuses the OPENAI
 # transport - litellm only needs the model string and api_base - so nothing else
 # in the router has to learn a new provider.
@@ -700,7 +743,7 @@ class LLMRouter:
         if provider == LLMProvider.OPENAI and _OPENAI_PROXY_URL:
             return _OPENAI_PROXY_URL
         if provider == LLMProvider.LOCAL:
-            return _LOCAL_LLM_URL or None
+            return _local_llm_url() or None
         if provider == LLMProvider.OPENAI and not _OPENAI_PROXY_URL and custom_route_available():
             return _CUSTOM_LLM_URL
         return None
@@ -713,12 +756,12 @@ class LLMRouter:
         if provider == LLMProvider.OPENAI and not _OPENAI_PROXY_URL and custom_route_available():
             return _CUSTOM_LLM_KEY
         if provider == LLMProvider.LOCAL:
-            if not _LOCAL_LLM_KEY:
+            if not _local_llm_key():
                 raise RuntimeError(
                     "LOCAL_LLM_API_KEY is not configured; copy the key from the "
                     "NInfer api-key.txt into .env (see .env.example)."
                 )
-            return _LOCAL_LLM_KEY
+            return _local_llm_key()
         return None
 
     def refusal_signal(self, text: str) -> str | None:
@@ -738,7 +781,7 @@ class LLMRouter:
     def local_route_available(self) -> bool:
         """True when a local OpenAI-compatible server is configured and answers."""
         try:
-            if not _LOCAL_LLM_URL or not _LOCAL_LLM_KEY:
+            if not _local_llm_url() or not _local_llm_key():
                 return False
             from app.services import narrator_factory
 
@@ -770,7 +813,7 @@ class LLMRouter:
 
     @staticmethod
     def _local_default_model() -> str:
-        return _LOCAL_LLM_MODEL or "local"
+        return _local_llm_model() or "local"
 
     @staticmethod
     def _sanitize_messages_for_anthropic(messages: list[dict]) -> list[dict]:
@@ -889,7 +932,7 @@ class LLMRouter:
         # (top_k on OpenAI, repetition_penalty, ...). Let litellm drop the
         # unsupported ones instead of failing the whole narrated turn.
         call_kwargs.setdefault("drop_params", True)
-        call_kwargs.update(_reasoning_kwargs(provider, reasoning))
+        call_kwargs.update(_reasoning_kwargs(provider, reasoning, model))
         if provider == LLMProvider.ANTHROPIC:
             messages = self._sanitize_messages_for_anthropic(messages)
         messages = self._prepare_cached_messages(messages, call_kwargs)
@@ -1023,7 +1066,7 @@ class LLMRouter:
         api_base = routed._get_api_base(provider)
         call_kwargs = {**kwargs}
         call_kwargs.setdefault("drop_params", True)
-        call_kwargs.update(_reasoning_kwargs(provider, reasoning))
+        call_kwargs.update(_reasoning_kwargs(provider, reasoning, model))
         if provider == LLMProvider.ANTHROPIC:
             messages = self._sanitize_messages_for_anthropic(messages)
         messages = self._prepare_cached_messages(messages, call_kwargs)

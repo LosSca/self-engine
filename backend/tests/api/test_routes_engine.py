@@ -2,6 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import DEFAULT_OPENING as OPENING
 from tests.support import village_world_data
 
 API = "/api/v1"
@@ -200,7 +201,7 @@ def test_story_endpoint_reports_free_mode_by_default(client):
 
 
 def test_story_endpoint_exposes_line_metadata_without_mutating_progress(client):
-    created = client.post("/api/scenarios/", json={"title": "Story lines", "language": "zh"})
+    created = client.post("/api/scenarios/", json={"title": "Story lines", "language": "zh", "opening_narrative": OPENING})
     assert created.status_code == 201, created.text
     scenario_id = created.json()["id"]
     lines = [
@@ -362,7 +363,10 @@ def test_diagnostics_sees_a_broken_narrator(client, monkeypatch):
     assert "TimeoutError" in body["narration"]["last_failure"]["payload"]["error"]
 
 
-def test_snapshot_listing_reports_bytes(client):
+def test_snapshot_listing_reports_bytes(client, monkeypatch):
+    # 裁剪受 debug 开关管（它删数据）；这条用例验证的是列快照与裁剪返回体，
+    # 所以显式打开开关，而不是依赖开发者本机 .env。
+    monkeypatch.setenv("ENGINE_DEBUG_TOOLS", "1")
     _create_world(client)
     client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
     client.post(
@@ -373,8 +377,28 @@ def test_snapshot_listing_reports_bytes(client):
     assert rows and all(row["bytes"] > 0 for row in rows)
     latest = rows[0]
     assert latest["stored_bytes"] >= latest["bytes"]
-    pruned = client.get(f"{API}/campaigns/camp-1/snapshots/prune").json()
+    pruned = client.delete(f"{API}/campaigns/camp-1/snapshots/prune").json()
     assert pruned["bytes"] > 0
+
+
+def test_snapshot_prune_needs_debug_tools_and_is_not_a_get(client, monkeypatch):
+    """裁剪快照会删数据：必须走 DELETE，并且和 rollback/repair 一样受 debug 开关管。
+
+    回归：这个端点曾经是裸的 GET，任何预取/爬虫/历史记录都能触发删数据。
+    """
+    _create_world(client)
+    client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
+
+    monkeypatch.setenv("ENGINE_DEBUG_TOOLS", "0")
+    assert client.delete(f"{API}/campaigns/camp-1/snapshots/prune").status_code == 403
+    # GET 不再有这条路由：请求会被 /snapshots/{version} 接住并因版本号非法而 422，
+    # 无论哪种解析都不会删数据、也不会返回 200。
+    blocked = client.get(f"{API}/campaigns/camp-1/snapshots/prune")
+    assert blocked.status_code in (405, 422), blocked.status_code
+    assert blocked.status_code != 200
+
+    monkeypatch.setenv("ENGINE_DEBUG_TOOLS", "1")
+    assert client.delete(f"{API}/campaigns/camp-1/snapshots/prune").status_code == 200
 
 
 def test_committed_narration_is_recorded_in_the_event_log(client):
@@ -494,7 +518,7 @@ def test_ai_world_generation_without_model_is_503(client, monkeypatch):
 
 
 def test_story_endpoint_reports_armed_and_fired_packs(client):
-    created = client.post("/api/scenarios/", json={"title": "Packs", "language": "zh"})
+    created = client.post("/api/scenarios/", json={"title": "Packs", "language": "zh", "opening_narrative": OPENING})
     assert created.status_code == 201, created.text
     scenario_id = created.json()["id"]
     payload = village_world_data()
@@ -551,3 +575,62 @@ def test_story_endpoint_reports_armed_and_fired_packs(client):
     after = client.get(f"{API}/campaigns/camp-1/story").json()
     assert after["armed_packs"] == ["pack_edge"]
     assert after["fired_packs"] == []
+
+
+def test_repair_cannot_silently_overwrite_a_concurrent_turn(client, monkeypatch):
+    """修复的读-改-写必须带 compare-and-set 守卫。
+
+    回归：/repair 调用 commit_rollback 时曾经漏传 expected_version。commit_rollback
+    那时也没有 WHERE version 条件，于是修复会在一个已提交回合之上静默加一版，
+    玩家的那一手连同它的状态一起消失，而且没有任何报错。现在换成这个竞争时，
+    应该以 409 失败。
+    """
+    monkeypatch.setenv("ENGINE_DEBUG_TOOLS", "1")
+    _create_world(client)
+    client.post(f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"})
+
+    from app.services import state_diagnostics
+
+    original_repair = state_diagnostics.repair_state
+    raced = {"done": False}
+
+    def forcing_repair(world, state, issues=None, storyline=None):
+        # Pretend there is always something to fix, so the write path runs even
+        # though the demo world is already consistent. The turn lands between
+        # the route reading the state and this write.
+        if not raced["done"]:
+            raced["done"] = True
+            import os
+
+            from app.db.game_state_store import GameStateStore
+
+            with GameStateStore(os.environ["GAME_STATE_DB_PATH"]) as store:
+                newer = state.model_copy(deep=True)
+                newer.version = state.version + 1
+                store.commit_action(
+                    campaign_id=state.campaign_id,
+                    request_id="racing-turn",
+                    request_payload={"action": "look"},
+                    status="applied",
+                    result_payload={},
+                    state=newer,
+                    events=[],
+                    expected_version=state.version,
+                )
+        repaired = state.model_copy(deep=True)
+        repaired.flags["repaired"] = True
+        return original_repair(world, state, issues=[], storyline=storyline).__class__(
+            state=repaired, applied=["flags.repaired"]
+        )
+
+    monkeypatch.setattr(state_diagnostics, "repair_state", forcing_repair)
+    response = client.post(
+        f"{API}/campaigns/camp-1/repair", json={"dry_run": False}
+    )
+
+    # The raced turn survives: repair fails loudly instead of overwriting it.
+    assert response.status_code == 409, response.text
+    assert "expected 0" in response.json()["detail"]
+    state = client.get(f"{API}/campaigns/camp-1/state").json()
+    assert state["version"] == 1
+    assert "repaired" not in state["flags"]

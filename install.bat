@@ -50,6 +50,7 @@ IF %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 "backend\.venv\Scripts\python.exe" -m pip install -r backend\requirements.txt
+"backend\.venv\Scripts\python.exe" -m pip install -r backend\requirements-dev.txt
 IF %ERRORLEVEL% NEQ 0 (
     echo ERROR: failed to install backend dependencies.
     pause

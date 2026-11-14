@@ -1,5 +1,7 @@
 import io
 
+from tests.conftest import DEFAULT_OPENING as OPENING
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,7 +19,7 @@ def client(tmp_path, monkeypatch):
 def scenario_id(client):
     res = client.post(
         "/api/scenarios/",
-        json={"title": "雾港", "language": "zh"},
+        json={"title": "雾港", "language": "zh", "opening_narrative": OPENING},
     )
     assert res.status_code == 201, res.text
     return res.json()["id"]
@@ -112,7 +114,7 @@ def test_campaign_accepts_a_character_from_another_scenario(client, scenario_id)
     This used to be a 409 ("Character belongs to another scenario"); the lock
     was removed when characters moved out of the scenario.
     """
-    other = client.post("/api/scenarios/", json={"title": "别的世界"}).json()
+    other = client.post("/api/scenarios/", json={"title": "别的世界", "opening_narrative": OPENING}).json()
     foreign = client.post(
         f"/api/scenarios/{other['id']}/characters", json={"name": "外来者"}
     ).json()
@@ -143,7 +145,7 @@ def test_library_characters_are_created_outside_any_scenario(client):
     assert [c["id"] for c in listed] == [body["id"]]
 
     # ...and it is offered by every scenario without being copied into it.
-    scenario = client.post("/api/scenarios/", json={"title": "某个世界"}).json()
+    scenario = client.post("/api/scenarios/", json={"title": "某个世界", "opening_narrative": OPENING}).json()
     offered = client.get(f"/api/scenarios/{scenario['id']}/characters").json()
     assert body["id"] in [c["id"] for c in offered]
 
@@ -207,6 +209,7 @@ def test_import_scenario_creates_world_type_and_character_pack(client):
         "scenario": {
             "title": "北境石门",
             "language": "zh",
+            "opening_narrative": OPENING,
             "world_type": "fantasy",
             "setup_questions": [
                 {
@@ -278,7 +281,12 @@ def test_campaign_character_falls_back_to_same_outfit(client, scenario_id):
 def test_scenario_view_carries_world_type_and_characters(client):
     payload = {
         "version": "1.0",
-        "scenario": {"title": "雾港旧事", "language": "zh", "world_type": "mystery"},
+        "scenario": {
+            "title": "雾港旧事",
+            "language": "zh",
+            "world_type": "mystery",
+            "opening_narrative": OPENING,
+        },
         "story_cards": [],
         "campaigns": [],
         "characters": [

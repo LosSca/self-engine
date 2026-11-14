@@ -5,25 +5,29 @@ Order of operations for one request:
   2. idempotency: a known request_id is replayed, never re-applied
   3. load the authoritative state and its world
   4. rules decide the outcome (deterministic, no LLM, no mutation)
-  5. rejected -> persist the request row only, state untouched
+  5. rejected -> explain the refusal, persist the request row, state untouched
   6. accepted -> apply effects, fire events, advance quests on a copy
-  7. narrate from that settled result (prose only; cannot change state)
-  8. commit state + request row + domain events in ONE transaction, guarded by
+  7. commit state + request row + domain events in ONE transaction, guarded by
      a compare-and-set on the version the turn was decided from
+  8. narrate the turn that is now durable (prose only; cannot change state)
 
-The narrator runs before the commit but has no write access: it receives the
-settled state and cannot mutate it. If it raises, times out, or invents a reward
-the rules did not award, the prose is replaced by a deterministic description of
-what actually happened (NarrativeResult.model == "fallback") and the reason is
-kept in .error. The turn therefore always commits, the failure is recorded as a
-narrative.failed domain event next to the change it failed to describe, and a
-crash can never leave prose describing a change that was not stored.
+Narration deliberately runs after the commit. It is the expensive part of a turn,
+and a turn that loses the compare-and-set race is decided again before any prose
+exists, so a lost race costs no model call and no prose describing a version the
+database rejected. The narrator receives the committed state and has no write
+access. If it raises, times out, or invents a reward the rules did not award, the
+prose is replaced by a deterministic description of what actually happened
+(NarrativeResult.model == "fallback") and the reason is kept in .error. The turn
+stays committed either way, and the outcome - prose written, or prose failed - is
+recorded as a narrator.response / narrative.failed domain event next to the change
+it describes.
 """
 from __future__ import annotations
 
 import inspect
 import logging
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -61,6 +65,84 @@ from app.services.summary_service import SUMMARY_EVERY_TURNS, summarize
 
 
 logger = logging.getLogger(__name__)
+
+
+def default_narrator_prompt() -> str:
+    """用户写在设置里的全局写作/文风指令（没有时为空串）。
+
+    读的是同一个 sqlite 设置表，失败不影响叙事：设置只是风格偏好，
+    绝不能让一局游戏因为读设置出错而中断。
+    """
+    try:
+        from app.db.prefs_store import get_prefs_store
+
+        store = get_prefs_store()
+        try:
+            value = store.get("default_narrator_prompt", "")
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - style preferences are advisory
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+_STYLE_LABELS = {
+    "concise": "用短句、信息密度高，少形容词，节奏快。",
+    "balanced": "叙事自然，描写与推进各半。",
+    "literary": "用文学化的长句与意象，允许细腻的环境与心理描写。",
+    "gothic": "阴郁、潮湿、压抑的氛围，感官细节偏冷。",
+    "wuxia": "武侠笔法：动作干脆、场面有江湖气，少解释多呈现。",
+    "pulp": "通俗冒险小说节奏：悬念密集、每段都推进冲突。",
+}
+
+_PERSPECTIVE_LABELS = {
+    "second": "第二人称（你），主角由玩家扮演。",
+    "third": "第三人称，叙述主角的行动。",
+    "first": "第一人称，以主角口吻叙述。",
+}
+
+_LENGTH_LABELS = {
+    "short": "每次叙事控制在 2 段以内。",
+    "medium": "每次叙事 3-5 段。",
+    "long": "每次叙事可以更长，允许分场景铺陈。",
+}
+
+
+def _prefs() -> Dict[str, Any]:
+    """一次性读出叙事相关的偏好（缺失时返回空字典）。"""
+    try:
+        from app.db.prefs_store import get_prefs_store
+
+        store = get_prefs_store()
+        try:
+            return store.all() or {}
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - style preferences are advisory
+        return {}
+
+
+def narrator_style_notes(prefs: Optional[Dict[str, Any]] = None) -> List[str]:
+    """把设置里的风格开关翻译成几行提示词（不改变任何规则判定）。"""
+    values = _prefs() if prefs is None else prefs
+    notes: List[str] = []
+    style = values.get("narrator_style")
+    if style in _STYLE_LABELS:
+        notes.append(_STYLE_LABELS[style])
+    perspective = values.get("narrator_perspective")
+    if perspective in _PERSPECTIVE_LABELS:
+        notes.append(_PERSPECTIVE_LABELS[perspective])
+    length = values.get("narrator_length")
+    if length in _LENGTH_LABELS:
+        notes.append(_LENGTH_LABELS[length])
+    if values.get("narrator_show_rules"):
+        notes.append("可以在叙事里简短点出判定结果（例如「察觉检定失败」），但不要输出数值表。")
+    if values.get("narrator_allow_ooc"):
+        notes.append("允许用 [] 包裹的场外提示与玩家交流。")
+    hint = values.get("narrator_language_hint")
+    if isinstance(hint, str) and hint.strip():
+        notes.append(f"语气参考：{hint.strip()[:200]}")
+    return notes
 
 
 def _now() -> str:
@@ -144,6 +226,117 @@ def _settled_event_rows(
             }
         )
     return rows
+
+
+@dataclass
+class _NarrationInput:
+    """Everything narration needs that is settled while the turn is decided.
+
+    These values are computed inside ``_apply`` (the storyline advance is part of
+    deciding the turn, not of presenting it) but consumed only after the commit.
+    Passing them along keeps narration on the durable side of the write without
+    evaluating the storyline twice.
+    """
+
+    play: Optional[ScenarioPlayContext] = None
+    active_node: Optional[str] = None
+    armed_packs: List[str] = field(default_factory=list)
+    quest_updates: List[Any] = field(default_factory=list)
+    summary: str = ""
+
+def _committed_outcome(result: ActionResult) -> RuleOutcome:
+    """The rule outcome a committed turn actually produced.
+
+    Narration runs after the commit now, so the ``RuleOutcome`` that decided the
+    turn is no longer in scope. The committed result carries everything the
+    narrator may legitimately claim: the engine code, the message and the
+    effects that were applied. Rebuilding it here keeps a failed model call
+    degrading to a deterministic description (``_degrade_story`` keys off
+    ``outcome.ok``) instead of silently dropping the prose.
+    """
+    return RuleOutcome(
+        ok=True,
+        code=result.code or "applied",
+        message=result.message or "",
+        effects=list(result.effects_applied or []),
+    )
+
+def _recap_line(state: GameState, narrative: NarrativeResult) -> str:
+    """The one-line recap a narrated turn contributes to the long-term summary."""
+    text = (narrative.text or "").strip() if narrative is not None else ""
+    if not text:
+        return ""
+    return f"[T{state.turn}] {text[:200]}"
+
+
+def _diagnostics_payload(narrative: NarrativeResult) -> Dict[str, Any]:
+    """Serialise the capture a narrator attached to its answer.
+
+    The diagnostics are kept next to the prose - or next to the failure - so the
+    debug panel can show the route, the sampling and the blocks a turn was
+    actually given, long after the narrator object is gone.
+    """
+    capture = getattr(narrative, "diagnostics", None)
+    if capture is None:
+        return {}
+    try:
+        return capture.model_dump(mode="json")
+    except AttributeError:
+        return dict(capture) if isinstance(capture, dict) else {}
+
+def _narration_events(
+    request: ActionRequest,
+    state: GameState,
+    result: ActionResult,
+    narrative: NarrativeResult,
+) -> List[Dict[str, Any]]:
+    """The domain events a narration leaves behind, appended after the commit.
+
+    ``narrator.response`` marks prose that was actually written;
+    ``narrative.failed`` records that the narrator did not deliver, next to the
+    change it failed to describe. A skipped narration records nothing, because
+    "the caller asked for no prose" is not an event.
+    """
+    status = getattr(narrative, "status", "") or ""
+    if status == "skipped":
+        return []
+    if status == "ok":
+        # ``text`` is the prose itself, not a summary of it: the recap channel
+        # reads this event back as what the narrator said, and it is the only
+        # place that prose is stored once the narrator object is gone.
+        return [
+            {
+                "event_type": "narrator.response",
+                "state_version": state.version,
+                "payload": {
+                    "request_id": request.request_id,
+                    "action": request.action,
+                    "model": getattr(narrative, "model", ""),
+                    "text": narrative.text or "",
+                    "chars": len(narrative.text or ""),
+                    "diagnostics": _diagnostics_payload(narrative),
+                    "state_version": state.version,
+                },
+            }
+        ]
+    return [
+        {
+            "event_type": "narrative.failed",
+            "state_version": state.version,
+            "payload": {
+                "request_id": request.request_id,
+                "action": request.action,
+                "status": status,
+                "model": getattr(narrative, "model", ""),
+                "error": getattr(narrative, "error", ""),
+                # The capture travels with the failure: it is what tells a
+                # reviewer which route and what prompt produced it.
+                "diagnostics": _diagnostics_payload(narrative),
+                "message": result.message,
+                "state_version": state.version,
+            },
+        }
+    ]
 
 
 class ActionService:
@@ -289,16 +482,32 @@ class ActionService:
         focus: Optional[List[str]] = None,
         query: str = "",
         armed_packs: Optional[List[str]] = None,
+        summary: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], Optional[Dict[str, Any]]]:
+        """Assemble the blocks the narrator may read.
+
+        "summary" overrides the long-term recap carried by "state".
+        That matters after a commit: "state" is then the committed snapshot and
+        the recap for the turn being narrated is appended afterwards.
+
+        Timing does not change what is returned: only the recap and the record
+        channels can depend on it, and the recap is supplied explicitly. Authored
+        canon is a property of the world, not of the version being written.
+        """
         provider = self.history_provider
         blocks: List[Dict[str, Any]] = []
-        if state is not None and state.summary:
+        recap = (
+            summary
+            if summary is not None
+            else (state.summary if state is not None else "")
+        )
+        if state is not None and recap:
             blocks.append(
                 {
                     "id": f"longterm:{state.campaign_id}",
                     "layer": "history",
                     "title": "长期摘要",
-                    "content": state.summary,
+                    "content": recap,
                     "kind": "history",
                 }
             )
@@ -347,6 +556,12 @@ class ActionService:
             except Exception:  # noqa: BLE001 - a broken log must not fail a turn
                 history = []
             for block in history:
+                # Code-written records (the request log, the committed recap)
+                # arrive here; they are a record of what happened, never
+                # authored canon, so the kind stays "history" no matter what
+                # the provider labelled them. Tagging by the channel - not by
+                # block identity - is what keeps a provider-supplied block out
+                # of the canon list.
                 blocks.append(dict(block, kind="history"))
         options: Optional[Dict[str, Any]] = None
         if play is not None and play.preset is not None:
@@ -361,10 +576,30 @@ class ActionService:
         prompt_parts = []
         if play is not None and play.preset is not None and play.preset.system_prompt:
             prompt_parts.append(play.preset.system_prompt)
-        if play is not None and play.config.narrator_prompt:
-            prompt_parts.append(play.config.narrator_prompt)
+        directive = play.config.narrator_prompt if play is not None else ""
+        if not directive:
+            # A world without its own directive inherits the global one the user
+            # writes in settings, so their voice follows them across worlds.
+            directive = default_narrator_prompt()
+        if directive:
+            prompt_parts.append(directive)
+        # 设置面板里的风格开关（体裁/人称/长度/OOC）同样是 advisory：
+        # 拼在用户指令之后，一起作为 system prompt 的补充。
+        style_notes = narrator_style_notes()
+        if style_notes:
+            prompt_parts.append("\n".join(style_notes))
         if prompt_parts:
             options = {**(options or {}), "system_prompt": "\n\n".join(prompt_parts)}
+        # 采样参数：设置里填了才覆盖 preset，留空就用世界/预设自带的值。
+        prefs_for_sampling = _prefs() if style_notes else {}
+        for key in ("top_p", "presence_penalty", "frequency_penalty"):
+            value = prefs_for_sampling.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                options = {**(options or {}), key: float(value)}
+            except (TypeError, ValueError):
+                continue
         if not blocks:
             # Sampling settings are authored too: they apply even when the
             # scenario has no knowledge entries to hand over.
@@ -442,7 +677,7 @@ class ActionService:
         if not outcome.ok:
             return await self._reject(request, payload, state, world, outcome)
 
-        result, new_state, events = await self._apply(
+        result, new_state, events, context_entries, narration_input = await self._apply(
             request, payload, state, world, outcome
         )
         if result.status != "applied":
@@ -473,13 +708,130 @@ class ActionService:
             if retried is not None:
                 return retried
             return self._conflict(request, payload, exc)
-        # The turn is durable now. Anything mirroring it elsewhere happens
-        # after the fact and is not allowed to affect the answer.
+        # The turn is durable now, so prose can finally be written against the
+        # state everyone will read. A lost race no longer costs a model call.
+        result = await self._narrate_committed(
+            request,
+            result,
+            new_state,
+            narration_input,
+            context_entries=context_entries,
+        )
+        # Anything mirroring the turn elsewhere happens after the fact and is
+        # not allowed to affect the answer.
         self._notify_settled(
             request.campaign_id, new_state, getattr(result, "narrative", None)
         )
         return result
 
+    async def _narrate_committed(
+        self,
+        request: ActionRequest,
+        result: ActionResult,
+        new_state: GameState,
+        narration_input: "_NarrationInput",
+        context_entries: Optional[List[str]] = None,
+    ) -> ActionResult:
+        """Write the prose for a turn that is already durable.
+
+        Called only from ``execute()`` once ``commit_action`` returned, so the
+        narrator reads the state the next reader will load. The expensive part of
+        a turn therefore sits on the durable side of the write: a turn that loses
+        the compare-and-set race is retried before this runs, so it never pays for
+        a model call and its prose can never describe a version the database
+        rejected.
+
+        Narration still cannot fail the turn. A timeout, a refusal or a bad payload
+        degrades to a deterministic description of the committed facts.
+        """
+        world = self.store.get_world(new_state.world_id)
+        executions = list(result.events_fired)
+        outcome = _committed_outcome(result)
+        narrative = NarrativeResult()
+        try:
+            narrative, _ = await self._narrate_applied(
+                request,
+                outcome,
+                new_state,
+                world,
+                executions,
+                narration_input.quest_updates,
+                narration_input.play,
+                narration_input.active_node,
+                narration_input.armed_packs,
+                # The recap written by this very turn must not be handed back
+                # to the narrator as if it were earlier history.
+                summary=narration_input.summary,
+            )
+            narrative = self._degrade_story(narrative, outcome, new_state, world, executions)
+        except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
+            narrative = self._degrade_story(
+                NarrativeResult(status="failed", error=f"{type(exc).__name__}: {exc}"),
+                outcome,
+                new_state,
+                world,
+                executions,
+            )
+        # Both remaining facts are about presentation: the recap quoting this
+        # prose, and whether the narrator managed to write it at all. They are
+        # appended to the committed row, because a failure to describe a turn
+        # must be visible in the domain log next to the change.
+        recap = self._record_narrated_turn(
+            new_state,
+            {
+                "campaign_id": request.campaign_id,
+                "request_id": request.request_id,
+                "recap": _recap_line(new_state, narrative),
+                "events": _narration_events(request, new_state, result, narrative),
+            },
+        )
+        # ``new_state`` is the object that was serialised into the row, so the
+        # recap has to be copied onto the answer as well: a caller reading
+        # ``result.state.summary`` expects the same text the next load returns.
+        answered_state = (
+            new_state.model_copy(update={"summary": recap}) if recap else new_state
+        )
+        return result.model_copy(
+            update={
+                "narrative": narrative,
+                "context_entries": list(context_entries or []),
+                "state": answered_state,
+                "state_version": answered_state.version,
+            }
+        )
+    def _record_narrated_turn(
+        self,
+        state: GameState,
+        campaign: Dict[str, Any],
+    ) -> Optional[str]:
+        """Store the recap and the narration outcome of a turn that is durable.
+
+        This runs after the commit, which is the first moment both facts exist:
+        the prose that the recap quotes, and whether the narrator managed to
+        write it. Neither may change the version - the rules already decided the
+        turn - so they are appended to the committed row instead of re-committed.
+
+        A failure here costs only the recap and the debug trace: the turn itself
+        stays applied and the caller keeps its answer.
+        """
+        recap = campaign.get("recap") or ""
+        try:
+            self.store.record_turn_outcome(
+                campaign_id=campaign["campaign_id"],
+                request_id=campaign["request_id"],
+                events=list(campaign["events"]),
+                recap=recap,
+            )
+        except Exception:  # noqa: BLE001 - presentation is not worth a 500
+            logger.debug(
+                "turn outcome record failed for %s", campaign["campaign_id"], exc_info=True
+            )
+            return None
+        if not recap:
+            return None
+        # The caller holds the pre-append state, so hand back the recap it now
+        # has in the database instead of making it re-read the row.
+        return "\n".join(p for p in ((state.summary or ""), recap) if p)
     def _notify_settled(
         self, campaign_id: str, state: GameState, narrative: NarrativeResult
     ) -> None:
@@ -511,9 +863,8 @@ class ActionService:
             )
             if not outcome.ok:
                 return None
-            quiet = request.model_copy(update={"narrate": False})
-            result, new_state, events = await self._apply(
-                quiet, payload, state, world, outcome, record_rejection=False
+            result, new_state, events, _, _ = await self._apply(
+                request, payload, state, world, outcome, record_rejection=False
             )
             if result.status != "applied":
                 return None
@@ -532,9 +883,10 @@ class ActionService:
                 continue
             except sqlite3.IntegrityError:
                 return self._replay(request, payload)
-            # The retried turn answers with the committed result and no prose:
-            # narration is presentation only, and a second model call is not
-            # worth blocking a database write on.
+            # The retried turn answers with the committed result and no prose.
+            # _apply never calls the narrator, so a retry costs nothing; the
+            # prose for the turn that actually landed is written by whoever
+            # won the race.
             result.message = (result.message + " (re-resolved after a concurrent change)").strip()
             return result
         return None
@@ -720,22 +1072,6 @@ class ActionService:
     async def _call_narrator(self, *args, **kwargs):
         return await self.narrator.narrate(*args, **kwargs)
 
-    def _append_summary(
-        self,
-        state: GameState,
-        request: ActionRequest,
-        outcome: RuleOutcome,
-        narrative: NarrativeResult,
-    ) -> None:
-        """Keep a bounded, deterministic recap of committed turns."""
-        text = (narrative.text or "").strip() or (outcome.message or "").strip()
-        if not text:
-            return
-        line = f"[T{state.turn}] {text[:200]}"
-        lines = [item for item in (state.summary or "").split("\n") if item]
-        lines.append(line)
-        state.summary = "\n".join(lines[-12:])[-2000:]
-
     async def _maybe_llm_summary(self, state: GameState, play) -> None:
         if play is None or play.summary_preset is None:
             return
@@ -766,6 +1102,7 @@ class ActionService:
         play: Optional[ScenarioPlayContext],
         active_node: Optional[str],
         armed_packs: Optional[List[str]] = None,
+        summary: Optional[str] = None,
     ) -> tuple[NarrativeResult, List[str]]:
         """Describe a settled turn, never decide it.
 
@@ -773,6 +1110,12 @@ class ActionService:
         of the narrator is reported in the returned NarrativeResult instead of
         propagating, so a flaky model cannot undo a rules-decided turn.
         """
+        if outcome is None:
+            # Narration now runs after the commit, where the RuleOutcome that
+            # decided the turn is gone. _degrade_story only reads this to know
+            # whether the turn was applied at all, and only an applied turn ever
+            # reaches this path.
+            outcome = RuleOutcome(ok=True, code="applied", message="", effects=[])
         if not request.narrate:
             # Record that the caller asked for no prose, so the debug panel can
             # tell "narrate=false" apart from "the narrator was configured",
@@ -795,6 +1138,7 @@ class ActionService:
                 focus=self._focus_tokens(world, new_state, request),
                 query=str(request.params.get("text") or ""),
                 armed_packs=armed_packs or [],
+                summary=summary,
             )
         except Exception as exc:  # noqa: BLE001 - context is advisory only
             return (
@@ -988,15 +1332,16 @@ class ActionService:
                         refused = await self._reject(
                             request, payload, state, world, segment
                         )
-                        return refused, state, []
+                        return refused, state, [], [], _NarrationInput()
                     stopped = segment.message
                     break
                 segment_applied = apply_effects(new_state, world, segment.effects)
                 failed = [item for item in segment_applied if not item.ok]
                 if failed:
-                    return self._reject_effects(
+                    rejected = self._reject_effects(
                         request, payload, state, failed, record_rejection
                     )
+                    return (*rejected[:3], [], _NarrationInput())
                 applied.extend(segment_applied)
                 step_facts = [
                     fact for item in segment_applied for fact in item.facts
@@ -1016,7 +1361,7 @@ class ActionService:
                     break
             if not applied:  # pragma: no cover - the full path was validated above
                 refused = await self._reject(request, payload, state, world, outcome)
-                return refused, state, []
+                return refused, state, [], [], _NarrationInput()
             if stopped:
                 here = next(
                     (loc for loc in world.locations if loc.id == new_state.location_id),
@@ -1043,9 +1388,10 @@ class ActionService:
             applied = apply_effects(new_state, world, outcome.effects)
             failed = [item for item in applied if not item.ok]
             if failed:
-                return self._reject_effects(
+                rejected = self._reject_effects(
                     request, payload, state, failed, record_rejection
                 )
+                return (*rejected[:3], [], _NarrationInput())
             facts = [fact for item in applied for fact in item.facts]
             new_state, executions, quest_updates = self._settle_facts(
                 world, new_state, request, facts,
@@ -1082,32 +1428,32 @@ class ActionService:
             minutes_spent = 0
         clock = advance_state(new_state, minutes_spent, paused=clock_paused)
 
-        # Narration is presentation only: it reads the settled state but can
-        # never fail, roll back or rewrite it. A model timeout or a bad payload
-        # degrades to status="failed" and the turn still commits.
+        # Narration is NOT produced here. It is presentation only, but it is
+        # also the expensive part of a turn, and this state has not been
+        # committed yet: if another writer wins the race, a model call made now
+        # is paid for and thrown away, and the prose describes a version of the
+        # world that never existed.
+        #
+        # The knowledge assembly, on the other hand, belongs here. It reads what
+        # the turn did not touch - authored canon and the committed record - so
+        # it is valid either way, and computing it before the write keeps the
+        # compare-and-set window as short as it was: the write never waits on a
+        # knowledge query. `execute()` narrates from these blocks once the commit
+        # has landed (`_narrate_committed`).
         try:
-            narrative, context_entries = await self._narrate_applied(
-                request,
-                outcome,
-                new_state,
-                world,
-                executions,
-                quest_updates,
+            _, context_entries, _ = self._knowledge(
                 play,
                 active_node,
-                list(story_status.armed_packs) if story_status is not None else [],
-            )
-            narrative = self._degrade_story(narrative, outcome, new_state, world, executions)
-        except Exception as exc:  # noqa: BLE001 - prose must never undo a turn
-            narrative = self._degrade_story(
-                NarrativeResult(status="failed", error=f"{type(exc).__name__}: {exc}"),
-                outcome,
                 new_state,
-                world,
-                executions,
+                story_nodes=[n for n in (new_state.story_nodes or []) if n],
+                focus=self._focus_tokens(world, new_state, request),
+                query=str(request.params.get("text") or ""),
+                armed_packs=(
+                    list(story_status.armed_packs) if story_status is not None else []
+                ),
             )
+        except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
             context_entries = []
-        self._append_summary(new_state, request, outcome, narrative)
         await self._maybe_llm_summary(new_state, play)
 
         result = ActionResult(
@@ -1123,7 +1469,8 @@ class ActionService:
             story_nodes_entered=story_entered,
             context_entries=context_entries,
             combat_round=combat_round,
-            narrative=narrative,
+            # Filled in by execute() after a successful commit.
+            narrative=NarrativeResult(),
             minutes_spent=minutes_spent,
             clock=clock.label,
             state=new_state,
@@ -1166,38 +1513,19 @@ class ActionService:
                     "state_version": new_state.version,
                 }
             )
-        if narrative.error:
-            # A degraded turn keeps its prose (a deterministic description of
-            # the committed change) but never hides why the model was skipped:
-            # the reason is the only thing a debugger can act on.
-            events.append(
-                {
-                    "event_type": "narrative.failed",
-                    "payload": {
-                        "error": narrative.error,
-                        "degraded": narrative.status == "ok",
-                        "model": narrative.model,
-                        # A failed turn is where the capture matters most: it
-                        # holds the route, the sampling and the context the
-                        # model was given before it let the turn down.
-                        "diagnostics": _diagnostics_payload(narrative),
-                    },
-                    "state_version": new_state.version,
-                }
-            )
-        if narrative.status == "ok" and narrative.text:
-            events.append(
-                {
-                    "event_type": "narrator.response",
-                    "payload": {
-                        "text": narrative.text,
-                        "model": getattr(narrative, "model", ""),
-                        "diagnostics": _diagnostics_payload(narrative),
-                    },
-                    "state_version": new_state.version,
-                }
-            )
-        return result, new_state, events
+        # Narration input travels with the decision but is not used until the
+        # commit lands. Handing it back keeps the expensive part of the turn on
+        # the durable side of the write without re-deriving the storyline.
+        narration_input = _NarrationInput(
+            play=play,
+            active_node=active_node,
+            armed_packs=(
+                list(story_status.armed_packs) if story_status is not None else []
+            ),
+            quest_updates=list(quest_updates),
+            summary=new_state.summary or "",
+        )
+        return result, new_state, events, context_entries, narration_input
 
 
     async def record_quest_progress(

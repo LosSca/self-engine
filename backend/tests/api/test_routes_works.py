@@ -1,4 +1,6 @@
 import pytest
+
+from tests.conftest import DEFAULT_OPENING as OPENING
 from fastapi.testclient import TestClient
 
 
@@ -90,7 +92,7 @@ def test_enter_work_rejects_an_unknown_character(client):
 
 
 def test_enter_work_records_the_pick_on_the_campaign(client):
-    scenario = client.post("/api/scenarios/", json={"title": "穿越", "language": "zh"})
+    scenario = client.post("/api/scenarios/", json={"title": "穿越", "language": "zh", "opening_narrative": OPENING})
     assert scenario.status_code == 201, scenario.text
     scenario_id = scenario.json()["id"]
     campaign = client.post(

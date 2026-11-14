@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.db.game_state_store import GameStateStore
+from app.db.game_state_store import GameStateStore, StateConflictError
 from app.db.scenario_store import ScenarioStore
 from app.engines.action_registry import all_actions, get_action
 from app.engines.event_engine import diff_states, simulate_event, validate_event
@@ -39,6 +39,7 @@ from app.models.game import (
     WorldDefinition,
 )
 from app.services import authoring_session, interaction_planner, starter_worlds, world_service
+from app.api.routes_game import _game_state_db_path
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
 from app.services.knowledge_service import build_context
@@ -48,6 +49,7 @@ from app.models.knowledge import ScenarioPlayContext
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services import narrator_factory
 from app.services.text_action_service import TextActionService
+from app.services.suggestions import hints_from_state, suggestions_for_result
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +109,9 @@ class TextActionResponse(BaseModel):
     # still carries the raw text in `result` so the player sees what happened.
     parsed: Optional[Dict[str, Any]] = None
     result: ActionResult
+    # Three advisory next steps (same shape as the SSE [SUGGESTIONS] tag).
+    # Optional: a campaign without a world still returns a turn.
+    suggestions: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 
@@ -212,7 +217,15 @@ def _history_provider():
         try:
             with _get_store() as store:
                 bound = store.get_state(campaign_id) is not None
-                events = store.narrative_history(campaign_id, limit=HISTORY_TURNS) if bound else []
+                # One committed request is projected as two records (the action
+                # and the prose), so a request limit of HISTORY_TURNS keeps only
+                # HISTORY_TURNS // 2 turns of thread. Ask for twice as many rows
+                # to end up with the turn count the renderer will keep.
+                events = (
+                    store.narrative_history(campaign_id, limit=HISTORY_TURNS * 2)
+                    if bound
+                    else []
+                )
             if not bound:
                 db_path = os.environ.get("EVENT_DB_PATH", os.path.join(_BACKEND_DIR, "events.db"))
                 legacy = EventStore(db_path)
@@ -220,7 +233,7 @@ def _history_provider():
                     events = legacy.get_recent(campaign_id, limit=HISTORY_TURNS * 2)
                 finally:
                     legacy.close()
-            note = render_history_note(events, limit=HISTORY_TURNS)
+            note = render_history_note(events, limit=HISTORY_TURNS * 2)
         except Exception as exc:  # noqa: BLE001 - recap is optional
             logger.warning("history recap unavailable for %s: %s", campaign_id, exc)
             return []
@@ -377,6 +390,16 @@ class GenerateWorldRequest(BaseModel):
     preset_id: str = ""
     language: str = "中文"
 
+
+def _state_conflict(exc: StateConflictError) -> HTTPException:
+    """Report a lost compare-and-set as 409 instead of letting it become a 500.
+
+    Both debug write paths (/rollback, /repair) read the state, mutate it in
+    memory, then write it back with the version they started from. When a turn
+    commits in between, the write is refused — and the caller must be told the
+    state moved on, not handed an internal error.
+    """
+    return HTTPException(status_code=409, detail=str(exc))
 
 def _debug_tools_enabled() -> bool:
     """Whether state-mutating debug endpoints (rollback, repair) may run.
@@ -1636,9 +1659,15 @@ def campaign_snapshots(campaign_id: str, limit: int = Query(100, ge=1, le=500)):
         store.close()
 
 
-@router.get("/campaigns/{campaign_id}/snapshots/prune", response_model=SnapshotPruneResponse)
+@router.delete("/campaigns/{campaign_id}/snapshots/prune", response_model=SnapshotPruneResponse)
 def campaign_snapshots_prune(campaign_id: str):
-    """Drop old snapshots by hand (same policy the commit path applies)."""
+    """Drop old snapshots by hand (same policy the commit path applies).
+
+    DELETE, not GET: this destroys rows, and a GET is fired by link prefetching,
+    crawlers and browser history. Guarded like rollback/repair — it used to be
+    the only state-mutating endpoint without _require_debug_tools().
+    """
+    _require_debug_tools()
     store = _get_store()
     try:
         dropped = store.prune_snapshots(campaign_id)
@@ -1734,7 +1763,17 @@ def campaign_rollback(campaign_id: str, body: RollbackRequest):
             },
             "state_version": restored.version,
         }
-        game_store.commit_rollback(campaign_id=campaign_id, state=restored, events=[event])
+        # Pass the version we based this rollback on: a concurrent turn that lands
+        # between get_state() above and this write must not be silently overwritten.
+        try:
+            game_store.commit_rollback(
+                campaign_id=campaign_id,
+                state=restored,
+                events=[event],
+                expected_version=current.version,
+            )
+        except StateConflictError as exc:
+            raise _state_conflict(exc) from exc
         return {
             "status": "rolled_back",
             "restored_version": body.version,
@@ -1775,9 +1814,18 @@ def campaign_repair(campaign_id: str, body: RepairRequest):
             "payload": {"from_version": state.version, "applied": applied},
             "state_version": repaired.version,
         }
-        game_store.commit_rollback(
-            campaign_id=campaign_id, state=repaired, events=[event]
-        )
+        # Same compare-and-set as rollback: repair reads the state, mutates it in
+        # memory and writes it back, so a turn that commits meanwhile must make
+        # this fail loudly instead of being overwritten.
+        try:
+            game_store.commit_rollback(
+                campaign_id=campaign_id,
+                state=repaired,
+                events=[event],
+                expected_version=state.version,
+            )
+        except StateConflictError as exc:
+            raise _state_conflict(exc) from exc
         remaining = state_diagnostics.check_state(world, repaired, storyline, mode)
         return {
             "status": "repaired",
@@ -1913,6 +1961,112 @@ async def run_action(campaign_id: str, request: ActionRequest):
         service.scenario_store.close()
 
 
+
+def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, str]]:
+    """(name, entity id) for characters the player could address right now."""
+    people: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        name = value if isinstance(value, str) else getattr(value, "name", None)
+        text = (name or "").strip() if isinstance(name, str) else ""
+        if not text or text.casefold() in seen:
+            return
+        seen.add(text.casefold())
+        entity_id = getattr(value, "entity_id", None) or getattr(value, "id", None) or ""
+        people.append((text, entity_id if isinstance(entity_id, str) else ""))
+
+    try:
+        with _get_scenario_store() as store:
+            campaign = store.get_campaign(campaign_id)
+            cast = store.list_characters(campaign.scenario_id) if campaign else []
+        for character in cast:
+            add(character)
+    except Exception:
+        logger.debug("campaign cast unavailable for %s", campaign_id, exc_info=True)
+    return people[:limit]
+
+
+def _campaign_language(campaign_id: str) -> str:
+    """Language the campaign was written in (suggestions are localized)."""
+    try:
+        with _get_scenario_store() as store:
+            campaign = store.get_campaign(campaign_id)
+            scenario = store.get_scenario(campaign.scenario_id) if campaign else None
+        return getattr(scenario, "language", "") or "zh"
+    except Exception:
+        return "zh"
+
+
+def _load_world_for_campaign(campaign_id: str):
+    """The rules world a campaign is bound to (worlds live in the game store)."""
+    try:
+        with GameStateStore(_game_state_db_path()) as game_store:
+            state = game_store.get_state(campaign_id)
+            if state is None or not getattr(state, "world_id", ""):
+                return None
+            return game_store.get_world(state.world_id)
+    except Exception:
+        logger.debug("campaign world unavailable for %s", campaign_id, exc_info=True)
+        return None
+
+def _scenario_bound_world(campaign_id: str, game_store: GameStateStore):
+    """A world already authored for this campaign's scenario, if any."""
+    try:
+        with _get_scenario_store() as store:
+            campaign = store.get_campaign(campaign_id)
+        if campaign is None:
+            return None
+        for summary in game_store.list_worlds():
+            if summary.get("scenario_id") != campaign.scenario_id:
+                continue
+            return game_store.get_world(summary["world_id"])
+    except Exception:  # noqa: BLE001 - hints are advisory
+        logger.debug("scenario world unavailable for %s", campaign_id, exc_info=True)
+    return None
+
+
+def _current_hints(campaign_id: str) -> list[Dict[str, Any]]:
+    """Three options for the campaign's present state (no turn required).
+
+    suggestions_for_result needs a finished ActionResult, so the very first
+    screen of a campaign had no choices at all: the player had to guess at
+    an empty input box. This reads the state the engine already committed
+    and asks the same builder.
+    """
+    try:
+        with GameStateStore(_game_state_db_path()) as game_store:
+            state = game_store.get_state(campaign_id)
+            world = None
+            if state is None:
+                # Nothing committed yet (the first screen of a campaign). The
+                # rules lane would bind a world on the first turn; here we only
+                # look, so no world is created just to draw three buttons.
+                location_id, inventory = "", []
+                world = _scenario_bound_world(campaign_id, game_store)
+            else:
+                location_id = getattr(state, "location_id", "") or ""
+                inventory = list((getattr(state, "inventory", None) or {}).keys())
+                world_id = getattr(state, "world_id", "") or ""
+                world = game_store.get_world(world_id) if world_id else None
+        return hints_from_state(
+            location_id=location_id,
+            inventory=inventory,
+            characters=_campaign_characters(campaign_id),
+            world=world,
+            language=_campaign_language(campaign_id),
+        )
+    except Exception:  # noqa: BLE001 - hints must never break a screen
+        logger.debug("hints unavailable for %s", campaign_id, exc_info=True)
+        return []
+
+
+@router.get("/campaigns/{campaign_id}/suggestions")
+def campaign_suggestions(campaign_id: str) -> Dict[str, Any]:
+    """What the player could do next, for the state the campaign is in now."""
+    return {"suggestions": _current_hints(campaign_id)}
+
+
 class TextActionBody(BaseModel):
     """A free-text utterance resolved into the structured action lane."""
 
@@ -1936,7 +2090,7 @@ async def run_text_action(campaign_id: str, request: TextActionBody):
         advisor=_build_advisor(),
     )
     try:
-        return await text_service.execute(
+        result = await text_service.execute(
             campaign_id,
             request.text,
             request_id=request.request_id,
@@ -1947,6 +2101,24 @@ async def run_text_action(campaign_id: str, request: TextActionBody):
     finally:
         service.store.close()
         service.scenario_store.close()
+    # The client shows three options after every turn; the SSE lane emits them
+    # as a [SUGGESTIONS] tag, this lane returns them in the response body.
+    try:
+        dump = getattr(result, "model_dump", None)
+        payload = result if isinstance(result, dict) else (dump() if callable(dump) else {})
+        payload = dict(payload)
+        inner = payload.get("result")
+        inner = dict(inner) if isinstance(inner, dict) else {}
+        payload["suggestions"] = suggestions_for_result(
+            inner,
+            characters=_campaign_characters(campaign_id),
+            world_getter=lambda: _load_world_for_campaign(campaign_id),
+            language=_campaign_language(campaign_id),
+        )
+        return payload
+    except Exception:  # noqa: BLE001 - suggestions must never break a turn
+        logger.debug("suggestions unavailable for %s", campaign_id, exc_info=True)
+        return result
 
 
 @router.get("/campaigns/{campaign_id}/events", response_model=List[DomainEventView])

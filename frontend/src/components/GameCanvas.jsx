@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2, RefreshCw, Terminal, UserRound, Globe } from 'lucide-react'
+import { Sparkles, Undo2, RefreshCw, UserRound, PanelRightOpen } from 'lucide-react'
 import { useGameStore } from '../store'
 import {
   streamAction,
@@ -21,9 +21,12 @@ import {
   getAgentCalls,
   deleteTraces,
   fetchCampaignCharacter,
-  fetchCampaignStory,
+  fetchCampaignSuggestions,
+fetchCampaignStory,
 } from '../api'
 import ActionInput from './ActionInput'
+import Sidebar from './Sidebar'
+import ToolDock from './ToolDock'
 import SuggestionList from './SuggestionList'
 import JournalPanel from './JournalPanel'
 import StoryProgressPanel from './StoryProgressPanel'
@@ -34,6 +37,7 @@ import PlotGeneratorPanel from './PlotGeneratorPanel'
 import TimeskipModal from './TimeskipModal'
 import NpcInspector from './NpcInspector'
 import MemoryInspector from './MemoryInspector'
+import MiniMap from './MiniMap'
 // 地图看一眼才用到，ForceGraph2D 连同 d3 有 300KB+，不能让它压在游玩首屏上。
 const WorldMapModal = lazy(() => import('./WorldMapModal'))
 import InventoryPanel from './InventoryPanel'
@@ -105,7 +109,7 @@ function CharacterCard({ image }) {
         className="w-full block"
       />
       {(image.caption || image.name) && (
-        <figcaption className="px-4 py-2 bg-black/40 text-[10px] font-bold uppercase tracking-widest font-mono text-white/50">
+        <figcaption className="px-4 py-2 bg-[#fffdf9] text-[10px] font-bold uppercase tracking-widest font-mono text-white/50">
           {image.caption ? `${image.caption} · ${image.name}` : image.name}
         </figcaption>
       )}
@@ -188,7 +192,6 @@ export default function GameCanvas() {
     addInventoryItem,
     updateInventoryItem: updateInventoryStore,
     restoreSession,
-    clearSession,
     maxTokens,
     llmProvider,
     llmModel,
@@ -205,17 +208,10 @@ export default function GameCanvas() {
     setTraces,
   } = useGameStore()
   const bottomRef = useRef(null)
-  const [journalOpen, setJournalOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [plotGenOpen, setPlotGenOpen] = useState(false)
-  const [timeskipOpen, setTimeskipOpen] = useState(false)
-  const [npcOpen, setNpcOpen] = useState(false)
-  const [memoryOpen, setMemoryOpen] = useState(false)
-  const [mapOpen, setMapOpen] = useState(false)
-  const [inventoryOpen, setInventoryOpen] = useState(false)
-  const [devtoolsOpen, setDevtoolsOpen] = useState(false)
-  const [characterOpen, setCharacterOpen] = useState(false)
-  const [worldStudioOpen, setWorldStudioOpen] = useState(false)
+  // 所有工具面板共用右侧停靠区的同一个槽位：null 表示收起。
+  // 'character' | 'inventory' | 'map' | 'journal' | 'story' | 'plotgen'
+  // 'timeskip' | 'npc' | 'memory' | 'worldstudio' | 'devtools' | 'settings'
+  const [activeTool, setActiveTool] = useState(null)
   const [playerCharacter, setPlayerCharacter] = useState(null)
   const [rewinding, setRewinding] = useState(false)
   const [scenarioView, setScenarioView] = useState(null)
@@ -228,8 +224,7 @@ export default function GameCanvas() {
   // Storyline progress for the bound campaign: entered nodes, armed event
   // packs. Read-only; the engine advances it, the UI only reports it.
   const [campaignStory, setCampaignStory] = useState(null)
-  const [storyOpen, setStoryOpen] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
+
 
   // Restore session on mount if state is missing
   useEffect(() => {
@@ -320,6 +315,25 @@ export default function GameCanvas() {
     loadTraces()
   }, [activeCampaignId])
 
+  // Choices for the state we are in right now. The turn response carries the
+  // next three, but the first screen of a campaign has no turn yet, and a
+  // refusal leaves none either — so ask the engine for the current ones.
+  useEffect(() => {
+    if (!activeCampaignId) return undefined
+    let alive = true
+    fetchCampaignSuggestions(activeCampaignId)
+      .then((list) => {
+        if (!alive) return
+        setSuggestions((current) => (current.length ? current : list))
+      })
+      .catch(() => {
+        /* hints are advisory: a missing list just means no buttons */
+      })
+    return () => {
+      alive = false
+    }
+  }, [activeCampaignId])
+
   const resolvedOpening = scenarioView?.opening_narrative ?? activeScenario?.opening_narrative ?? ''
   const resolvedTone = scenarioView?.tone_instructions ?? activeScenario?.tone_instructions ?? ''
   const canRerollOpening =
@@ -401,7 +415,16 @@ export default function GameCanvas() {
     }
   }, [messages])
 
-  const openJournal = async () => {
+  const refreshStory = async () => {
+    if (!activeCampaignId) return
+    try {
+      setCampaignStory(await fetchCampaignStory(activeCampaignId))
+    } catch {
+      /* 剧情进度是可选数据 */
+    }
+  }
+
+  const loadJournal = async () => {
     if (activeCampaignId) {
       try {
         const entries = await fetchJournal(activeCampaignId)
@@ -410,7 +433,18 @@ export default function GameCanvas() {
         /* journal is optional */
       }
     }
-    setJournalOpen(true)
+  }
+
+  // 打开工具前先把数据取回来（日志、调试台依赖每次实时的后端数据），
+  // 然后再把面板切到停靠区。
+  const openTool = async (id) => {
+    if (!id) { setActiveTool(null); return }
+    if (id === 'journal') loadJournal()
+    if (id === 'story') refreshStory()
+    if (id === 'devtools') loadTraces()
+    if (id === 'character') loadPlayerCharacter()
+    if (id === 'worldstudio') setActiveTool(id)
+    setActiveTool(id)
   }
 
   const refreshJournal = async () => {
@@ -465,7 +499,9 @@ export default function GameCanvas() {
         parts.push('（叙事模型不可用，以上为规则结果的机器描述，状态已提交。）')
       }
     } else if (result?.status === 'rejected') {
-      parts.push(`（${result.message || result.code || '行动被规则拒绝'}）`)
+      // 被拒绝时 message 已经写成「没听懂 + 现在能做什么」，直接给玩家看，
+      // 不要再套一层括号当成错误日志。
+      parts.push(result.message || `（${result.code || '行动被规则拒绝'}）`)
     } else if (result?.status === 'conflict') {
       parts.push(`（${result.message || '状态已变化，请重试'}）`)
     } else if (result?.status === 'duplicate') {
@@ -516,13 +552,26 @@ export default function GameCanvas() {
     }
   }
 
-  const handleEngineAction = async (action) => {
+  const handleEngineAction = async (action, target) => {
     setSuggestions([])
     appendMessage({ role: 'user', content: action })
     setStreaming(true)
     try {
-      const result = await submitTextAction(activeCampaignId, action)
+      // 规则链路也认 @目标：把「对谁说话」写进行动文本，解析器才能绑定人物。
+      const spoken = target?.name && !String(action).includes(`@${target.name}`)
+        ? `${action} @${target.name}`
+        : action
+      const result = await submitTextAction(activeCampaignId, spoken)
       applyEngineResult(result)
+      // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
+      // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
+      if (Array.isArray(result?.suggestions) && result.suggestions.length) {
+        setSuggestions(result.suggestions)
+      } else {
+        // 被拒或这一轮没给建议时，别把玩家丢在空输入框前：按当前状态再取一次。
+        const fallback = await fetchCampaignSuggestions(activeCampaignId).catch(() => [])
+        if (fallback.length) setSuggestions(fallback)
+      }
     } catch (err) {
       appendMessage({
         role: 'assistant',
@@ -533,9 +582,9 @@ export default function GameCanvas() {
     }
   }
 
-  const handleAction = (action) => {
+  const handleAction = (action, target) => {
     if (engineLane.checked && engineLane.bound) {
-      return handleEngineAction(action)
+      return handleEngineAction(action, target)
     }
     setSuggestions([])
     appendMessage({ role: 'user', content: action })
@@ -545,6 +594,8 @@ export default function GameCanvas() {
       scenarioTone: resolvedTone,
       language: scenarioView?.language ?? activeScenario?.language ?? 'zh',
       action,
+      targetName: target?.name || '',
+      targetId: target?.id || '',
       openingNarrative: resolvedOpening,
       maxTokens: maxTokens || 2000,
       provider: llmProvider,
@@ -605,8 +656,9 @@ export default function GameCanvas() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-black bg-cover bg-center bg-fixed">
-      <div className="flex flex-col h-full bg-black/80 backdrop-blur-md">
+    <div className="flex h-screen bg-[#f6f5f1] bg-cover bg-center bg-fixed overflow-hidden">
+      <Sidebar variant="play" activeTool={activeTool} onTool={openTool} traces={traces.length} />
+      <div className="flex-1 min-w-0 flex flex-col h-full bg-[#fbfaf8]/90 backdrop-blur-md">
 
         {/* Combat Overlay */}
         <CombatOverlay
@@ -615,11 +667,14 @@ export default function GameCanvas() {
           onResolved={applyEngineResult}
         />
 
+        {/* 常驻小地图：固定在右上角，点击展开完整地图。 */}
+        <MiniMap campaignId={activeCampaignId} onOpen={() => setActiveTool('map')} />
+
         {/* Header */}
-        <header className="flex-none flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-black/80 backdrop-blur-xl border-b border-white/5 z-10 shadow-lg gap-2">
+        <header className="flex-none flex items-center justify-between px-3 sm:px-6 py-3 sm:py-4 bg-[#fbfaf8]/90 backdrop-blur-xl border-b border-white/5 z-10 shadow-lg gap-2">
           <div className="flex items-center gap-4">
             <button
-              onClick={() => setCharacterOpen(true)}
+              onClick={() => setActiveTool(activeTool === 'character' ? null : 'character')}
               title="角色档案"
               aria-label="打开角色档案"
               className="w-9 h-9 rounded-full overflow-hidden border border-white/15 bg-white/5 hover:border-white/40 transition-all shrink-0"
@@ -657,7 +712,7 @@ export default function GameCanvas() {
                 )}
                 {engineLane.bound && campaignStory && campaignStory.mode === 'storyline' && (
                   <button
-                    onClick={() => setStoryOpen(true)}
+                    onClick={() => setActiveTool('story')}
                     data-testid="story-badge"
                     className="normal-case border-l border-white/10 pl-2 text-cyan-300/70 hover:text-cyan-200 cursor-pointer"
                     title={storyTitle(campaignStory)}
@@ -670,7 +725,7 @@ export default function GameCanvas() {
                 )}
                 {engineLane.bound && (
                   <button
-                    onClick={() => setPreviewOpen(true)}
+                    onClick={() => setActiveTool('preview')}
                     className="normal-case border-l border-white/10 pl-2 text-white/40 hover:text-cyan-300"
                     title="预演一次行动：规则判定，不提交存档"
                   >
@@ -692,104 +747,25 @@ export default function GameCanvas() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
-            {/* Tool buttons */}
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <button
-              onClick={() => setInventoryOpen(true)}
-              title="背包"
-              aria-label="打开背包"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-orange-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+              type="button"
+              onClick={() => setActiveTool(activeTool === 'character' ? null : 'character')}
+              title="角色档案"
+              aria-label="打开角色档案"
+              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/5 text-white/50 hover:text-white hover:border-white/25 transition-all text-[10px] font-bold tracking-[0.15em] uppercase"
             >
-              <Backpack size={14} />
+              角色档案
             </button>
             <button
-              onClick={() => setMapOpen(true)}
-              title="世界地图"
-              aria-label="打开世界地图"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-emerald-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+              type="button"
+              onClick={() => setActiveTool(activeTool ? null : 'settings')}
+              title={activeTool ? '收起工具面板' : '展开工具面板'}
+              aria-label={activeTool ? '收起工具面板' : '展开工具面板'}
+              data-testid="tool-dock-toggle"
+              className="p-2 rounded-xl bg-white/5 border border-white/5 text-white/50 hover:text-white hover:border-white/25 transition-all"
             >
-              <Map size={14} />
-            </button>
-            <button
-              onClick={() => setPlotGenOpen(true)}
-              title="剧情生成器"
-              aria-label="打开剧情生成器"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-amber-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Sparkles size={14} />
-            </button>
-            <button
-              onClick={() => setTimeskipOpen(true)}
-              title="时间流逝"
-              aria-label="打开时间流逝"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Clock size={14} />
-            </button>
-            <button
-              onClick={() => setNpcOpen(true)}
-              title="NPC 心智"
-              aria-label="打开 NPC 心智"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Brain size={14} />
-            </button>
-            <button
-              onClick={() => setMemoryOpen(true)}
-              title="记忆结晶"
-              aria-label="打开记忆结晶"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Gem size={14} />
-            </button>
-            <button
-              onClick={openJournal}
-              title="任务日志"
-              aria-label="打开任务日志"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-yellow-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <BookOpen size={14} />
-            </button>
-            <button
-              onClick={() => {
-                setDevtoolsOpen(true)
-                loadTraces()
-              }}
-              title="LLM 调试台 — 查看每次调用的输入与输出"
-              aria-label="打开 LLM 调试台"
-              className="relative p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-cyan-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Terminal size={14} />
-              {traces.length > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-cyan-500 text-black text-[9px] font-bold flex items-center justify-center">
-                  {traces.length}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={() => setWorldStudioOpen(true)}
-              title="世界工坊 — 编辑地图、地点、物品、门、实体、事件、任务与调试"
-              aria-label="打开世界工坊"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-violet-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Globe size={14} />
-            </button>
-            <button
-              onClick={() => setSettingsOpen(true)}
-              title="设置"
-              aria-label="打开设置"
-              className="p-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
-            >
-              <Settings size={14} />
-            </button>
-
-            <div className="w-px h-6 bg-white/10 mx-1" />
-
-            <button
-              onClick={() => { clearSession(); window.location.href = '/' }}
-              className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white text-white/80 hover:text-black rounded-2xl border border-white/5 text-xs font-semibold uppercase tracking-wider transition-colors"
-            >
-              断开连接
+              <PanelRightOpen size={14} />
             </button>
           </div>
         </header>
@@ -888,7 +864,7 @@ export default function GameCanvas() {
         </div>
 
         {/* Input Area */}
-        <div className="flex-none bg-black/80 backdrop-blur-2xl border-t border-white/5 relative z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+        <div className="flex-none bg-[#fbfaf8]/90 backdrop-blur-2xl border-t border-white/5 relative z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
           {engineLane.bound && engineLane.state?.pending_choice && (
             <div className="max-w-4xl mx-auto w-full px-4 md:px-6 pt-3">
               <div className="rounded-2xl border border-amber-400/30 bg-amber-400/[0.06] p-4 flex flex-col gap-3">
@@ -919,8 +895,11 @@ export default function GameCanvas() {
             <SuggestionList
               suggestions={suggestions}
               disabled={isStreaming}
-              onSend={(input) => { setSuggestions([]); handleAction(input) }}
-              onEdit={(input) => { setSuggestions([]); setDraft({ text: input, at: Date.now() }) }}
+              onSend={(input, picked) => { setSuggestions([]); handleAction(input, picked) }}
+              onEdit={(input, picked) => {
+                setSuggestions([])
+                setDraft({ text: input, target: picked, at: Date.now() })
+              }}
             />
           </div>
           <div className="flex items-end max-w-4xl mx-auto w-full">
@@ -942,56 +921,31 @@ export default function GameCanvas() {
         </div>
       </div>
 
-      {/* Modals */}
-      {settingsOpen && <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
-      <CharacterProfilePanel
-        open={characterOpen}
-        onClose={() => { setCharacterOpen(false); loadPlayerCharacter() }}
+      <ToolDock
+        tool={activeTool}
+        onClose={() => setActiveTool(null)}
         campaignId={activeCampaignId}
-      />
-      <PlotGeneratorPanel open={plotGenOpen} onClose={() => setPlotGenOpen(false)} campaignId={activeCampaignId} language={activeScenario?.language ?? 'zh'} />
-      <TimeskipModal open={timeskipOpen} onClose={() => setTimeskipOpen(false)} campaignId={activeCampaignId} onTimeskip={handleTimeskip} />
-      <NpcInspector open={npcOpen} onClose={() => setNpcOpen(false)} campaignId={activeCampaignId} />
-      <MemoryInspector open={memoryOpen} onClose={() => setMemoryOpen(false)} campaignId={activeCampaignId} />
-      {mapOpen && (
-        <Suspense fallback={null}>
-          <WorldMapModal open onClose={() => setMapOpen(false)} campaignId={activeCampaignId} engineState={engineLane.state} onEngineAction={handleStructuredAction} busy={isStreaming} />
-        </Suspense>
-      )}
-      <InventoryPanel open={inventoryOpen} onClose={() => setInventoryOpen(false)} campaignId={activeCampaignId} inventory={inventory} setInventory={setInventory} engineBound={engineLane.bound} onEngineAction={handleStructuredAction} busy={isStreaming} />
-      <JournalPanel open={journalOpen} onClose={() => setJournalOpen(false)} entries={journal} onRefresh={refreshJournal} />
-      <ActionPreviewPanel
-        open={previewOpen}
-        onClose={() => setPreviewOpen(false)}
-        campaignId={activeCampaignId}
-      />
-      <StoryProgressPanel
-        open={storyOpen}
-        onClose={() => setStoryOpen(false)}
-        story={campaignStory}
-        engineBound={engineLane.bound}
-        onRefresh={refreshStory}
-      />
-      <WorldStudio
-        open={worldStudioOpen}
-        scenarioId={activeScenario?.id}
-        campaignId={activeCampaignId}
-        onClose={() => setWorldStudioOpen(false)}
-      />
-
-      <DevtoolsPanel
-        open={devtoolsOpen}
-        onClose={() => setDevtoolsOpen(false)}
-        traces={traces}
-        campaignId={activeCampaignId}
-        fetchDomainEvents={fetchDomainEvents}
-        fetchRequests={fetchCampaignRequests}
-        fetchRequestDetail={fetchActionRecord}
-        fetchAgents={getAgents}
-        fetchAgentCalls={getAgentCalls}
-        onClear={async () => {
-          await deleteTraces(activeCampaignId)
-          clearTraces()
+        context={{
+          inventory,
+          setInventory,
+          engineBound: engineLane.bound,
+          engineState: engineLane.state,
+          onEngineAction: handleStructuredAction,
+          busy: isStreaming,
+          journal,
+          refreshJournal,
+          campaignStory,
+          refreshStory,
+          language: activeScenario?.language ?? 'zh',
+          scenarioId: activeScenario?.id,
+          onTimeskip: handleTimeskip,
+          traces,
+          fetchDomainEvents,
+          fetchRequests: fetchCampaignRequests,
+          fetchRequestDetail: fetchActionRecord,
+          fetchAgents: getAgents,
+          fetchAgentCalls: getAgentCalls,
+          clearTraces: async () => { await deleteTraces(activeCampaignId); clearTraces() },
         }}
       />
     </div>

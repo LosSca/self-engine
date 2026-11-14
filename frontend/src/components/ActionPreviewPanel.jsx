@@ -53,7 +53,7 @@ export default function ActionPreviewPanel({ open, onClose, campaignId }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#fbfaf8]/90 backdrop-blur-sm">
       <div className="bg-white/[0.03] border border-white/10 rounded-2xl shadow-[0_0_40px_rgba(255,255,255,0.15)] w-full max-w-lg mx-2 sm:mx-4 max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
           <div>
@@ -69,7 +69,7 @@ export default function ActionPreviewPanel({ open, onClose, campaignId }) {
             <select
               value={action}
               onChange={(event) => { setAction(event.target.value); setResult(null) }}
-              className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm text-white"
+              className="bg-[#fffdf9] border border-white/10 rounded-xl px-3 py-2 text-sm text-white"
             >
               {catalogue.map((row) => (
                 <option key={row.name} value={row.name}>
@@ -91,7 +91,7 @@ export default function ActionPreviewPanel({ open, onClose, campaignId }) {
               value={targetId}
               onChange={(event) => setTargetId(event.target.value)}
               placeholder="例如 iron_key / warehouse_door / forest_edge"
-              className="bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-white/20"
+              className="bg-[#fffdf9] border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-white/20"
             />
           </label>
 

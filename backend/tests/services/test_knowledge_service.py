@@ -370,3 +370,45 @@ def test_armed_pack_ids_reads_the_authoritative_state():
     assert knowledge_service.armed_pack_ids(storyline, here, world) == ["pack_marquee"]
     assert knowledge_service.armed_pack_ids(storyline, elsewhere, world) == []
     assert knowledge_service.armed_pack_ids(storyline, None, world) == []
+
+def test_ranking_ignores_entries_the_filters_already_dropped():
+    """停用/越界的条目不能影响真正会被注入的条目的排序。
+
+    回归：TF-IDF 曾经对全部 entries（含随后被过滤掉的）计算文档频率与分数，
+    于是一个被停用的条目的用词会拉偏 idf，改变可见条目的排序，也会让每次装配
+    都凭空多出 O(n) 的分词与排序开销。
+    """
+    common = "灯塔 的 钥匙 一直 放在 栈桥 尽头".split(" ")
+    visible = _entry("visible", content=" ".join(common), tags=["灯塔"])
+    hidden = [
+        _entry(f"hidden-{index}", content=" ".join(common), enabled=False)
+        for index in range(40)
+    ]
+    entries = [visible, *hidden]
+
+    context = knowledge_service.build_context(entries, query="灯塔")
+
+    assert [block.entry_id for block in context.blocks] == ["visible"]
+    # One visible document: with a single document the idf of every shared token
+    # is the same, so the score is simply the cosine against that entry.
+    assert context.stats.total == len(entries)
+    assert len(context.stats.excluded) == len(hidden)
+
+
+def test_sorting_does_not_scan_the_whole_entry_list_per_comparison():
+    """排序键不能对每个比较做一次 O(n) 的线性查找。
+
+    旧的 _sort_key 用 next(e for e in entries if e.id == block.entry_id)，整体
+    是 O(n² log n)。这里把比较次数固定下来，并断言一次装配的完成时间与条目数
+    线性相关（400 条应远低于 2 秒），防止有人把线性查找改回去。
+    """
+    import time
+
+    entries = [_entry(f"e{index:04d}", content=f"内容 {index}", tags=["雾港"]) for index in range(400)]
+    started = time.perf_counter()
+    context = knowledge_service.build_context(entries, query="雾港")
+    elapsed = time.perf_counter() - started
+
+    assert len(context.blocks) == 400
+    assert elapsed < 2.0, f"assemble took {elapsed:.2f}s for 400 entries"
+

@@ -197,7 +197,7 @@ def put_play_config(scenario_id: str, body: PlayConfigUpdate):
         current = store.get_play_config(scenario_id)
         config = PlayConfig(
             scenario_id=scenario_id,
-            mode=body.mode,
+            mode=body.mode if body.mode is not None else current.mode,
             storyline=body.storyline if body.storyline is not None else current.storyline,
             max_depth=body.max_depth if body.max_depth is not None else current.max_depth,
             context_budget_chars=(
