@@ -915,6 +915,163 @@ class RulesEngine:
             effects=door_effects,
         )
 
+
+    def _dismantle(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        if not target_id:
+            return RuleOutcome(
+                ok=False,
+                code="missing_target",
+                message="dismantle requires a target_id (the item id).",
+            )
+        items = self._items(world)
+        item = items.get(target_id)
+        if item is None:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_item",
+                message=f"There is no item '{target_id}' in this world.",
+            )
+        if state.inventory.get(target_id, 0) <= 0:
+            return RuleOutcome(
+                ok=False,
+                code="item_not_carried",
+                message=f"You are not carrying the {item.name}.",
+            )
+        # An affordance is permission to try: the world says what this breaks
+        # into, and says nothing (or nothing usable) when it cannot be broken.
+        parts = [part for part in item.dismantles_to if part]
+        if not parts:
+            return RuleOutcome(
+                ok=False,
+                code="cannot_dismantle",
+                message=f"The {item.name} cannot be taken apart.",
+            )
+        unknown = [part for part in parts if part not in items]
+        if unknown:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_part",
+                message=(
+                    f"The {item.name} is defined to contain {', '.join(unknown)}, "
+                    "which this world does not define."
+                ),
+            )
+        effects: List[Effect] = [Effect(kind="remove_item", target=target_id, amount=1)]
+        effects.extend(Effect(kind="give_item", target=part, amount=1) for part in parts)
+        names = ", ".join(items[part].name for part in parts)
+        return RuleOutcome(
+            ok=True,
+            code="dismantled",
+            message=f"You take the {item.name} apart and keep: {names}.",
+            effects=effects,
+        )
+
+    def _combine(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        if not target_id:
+            return RuleOutcome(
+                ok=False,
+                code="missing_target",
+                message="combine requires a target_id (the item to build).",
+            )
+        items = self._items(world)
+        product = items.get(target_id)
+        if product is None:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_item",
+                message=f"There is no item '{target_id}' in this world.",
+            )
+        # params.parts lets a caller try an authored recipe variant; otherwise
+        # the item's own made_from list is the only recipe there is.
+        requested = params.get("parts") if isinstance(params, dict) else None
+        parts = [str(part) for part in requested] if isinstance(requested, list) else []
+        if not parts:
+            parts = [part for part in product.made_from if part]
+        if not product.craftable or not parts:
+            return RuleOutcome(
+                ok=False,
+                code="not_craftable",
+                message=f"The {product.name} cannot be built.",
+            )
+        unknown = [part for part in parts if part not in items]
+        if unknown:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_part",
+                message=(
+                    f"Building the {product.name} needs {', '.join(unknown)}, "
+                    "which this world does not define."
+                ),
+            )
+        missing = [
+            part
+            for part in dict.fromkeys(parts)
+            if state.inventory.get(part, 0) < parts.count(part)
+        ]
+        if missing:
+            names = ", ".join(items[part].name for part in missing)
+            return RuleOutcome(
+                ok=False,
+                code="missing_parts",
+                message=f"You still need: {names}.",
+            )
+        effects: List[Effect] = [
+            Effect(kind="remove_item", target=part, amount=parts.count(part))
+            for part in dict.fromkeys(parts)
+        ]
+        effects.append(Effect(kind="give_item", target=target_id, amount=1))
+        return RuleOutcome(
+            ok=True,
+            code="combined",
+            message=f"You put the parts together and make a {product.name}.",
+            effects=effects,
+        )
+
+    def _wait(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        """Time passes and nothing else happens.
+
+        Movement of the clock is not this rule's job: the action catalogue
+        declares how many minutes a verb costs and the commit applies it. This
+        rule only answers "may the player do nothing here", which is always yes,
+        and names the new time in its message so the narration can use it.
+        """
+        params = params or {}
+        minutes = params.get("minutes")
+        if minutes is None:
+            spec = get_action("wait")
+            minutes = spec.minutes if spec and spec.minutes is not None else 60
+        try:
+            minutes = max(1, int(minutes))
+        except (TypeError, ValueError):
+            return RuleOutcome(
+                ok=False,
+                code="invalid_duration",
+                message="Waiting needs a whole number of minutes.",
+            )
+        return RuleOutcome(
+            ok=True,
+            code="waited",
+            message=f"You wait for about {minutes} minutes.",
+        )
+
     # -- combat -------------------------------------------------------------
 
     @staticmethod

@@ -145,6 +145,51 @@ register_action(
 )
 register_action(
     ActionSpec(
+        name="dismantle",
+        label="拆解",
+        handler="_dismantle",
+        target="required",
+        description=(
+            "Take a carried item apart into the materials it is authored to break "
+            "down into (item.dismantles_to)."
+        ),
+        minutes=5,
+        verbs=("拆解", "拆开", "拆掉", "拆卸", "分解", "dismantle", "take apart", "break down"),
+        verb_priority=70,
+    )
+)
+register_action(
+    ActionSpec(
+        name="combine",
+        label="合成",
+        handler="_combine",
+        target="required",
+        description=(
+            "Build a craftable item from the materials it declares in made_from. "
+            "The target is the item to build; params.parts may override the list."
+        ),
+        minutes=10,
+        verbs=("合成", "制作", "打造", "组装", "拼装", "craft", "combine", "assemble", "build"),
+        verb_priority=75,
+    )
+)
+register_action(
+    ActionSpec(
+        name="wait",
+        label="等待",
+        handler="_wait",
+        target="optional",
+        description="Let world time pass without doing anything else.",
+        minutes=None,
+        verbs=(
+            "等待", "等一下", "等一下", "等一会", "等一会儿", "等一下再走",
+            "等着", "歇一会", "休息一会", "稍等", "wait", "rest",
+        ),
+        verb_priority=95,
+    )
+)
+register_action(
+    ActionSpec(
         name="use",
         label="使用",
         handler="_use",

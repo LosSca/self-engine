@@ -113,6 +113,17 @@ class ItemDef(_ConfigModel):
     bonus: Dict[str, int] = Field(default_factory=dict)
     #: Authored trade value (custom actions/events decide when it is paid).
     price: int = Field(0, ge=0)
+    #: What this thing can be made from / taken apart into. Both are authored
+    #: material *facts*, not new mechanics: `dismantle` and `combine` read them
+    #: and the rules engine still decides whether the attempt is allowed.
+    #: An item with no `dismantles_to` simply cannot be taken apart - an
+    #: affordance is permission to *try*, never a promise that it works.
+    dismantles_to: List[str] = Field(default_factory=list)
+    #: Materials this item is made of (consumed by `combine`).
+    made_from: List[str] = Field(default_factory=list)
+    #: Set when the item is produced by combining `made_from`; empty means it
+    #: cannot be crafted at all. Formula items are ordinary items otherwise.
+    craftable: bool = False
 
 
 class EntityDef(_ConfigModel):
@@ -1056,8 +1067,19 @@ class GameState(BaseModel):
 
 
 class ActionRequest(BaseModel):
+    """One action submitted to the authoritative pipeline.
+
+    `actor_type` says *who* acts, not *what* may be done: the rules decide the
+    latter and never branch on the former. It exists so an NPC or the world
+    itself can submit through exactly the same path as the player instead of
+    growing a second writer (see docs/hybrid-world-simulation.md).
+    """
+
     campaign_id: str = Field(..., min_length=1, max_length=64)
     request_id: str = Field(..., min_length=1, max_length=128)
+    #: Who is acting. "player" is the default so every existing caller keeps
+    #: its behaviour; "system" covers engine-driven housekeeping.
+    actor_type: Literal["player", "npc", "environment", "system"] = "player"
     action: Literal[
         "move",
         "look",
@@ -1074,6 +1096,9 @@ class ActionRequest(BaseModel):
         "attack",
         "defend",
         "flee",
+        "dismantle",
+        "combine",
+        "wait",
         "custom",
     ]
     actor_id: str = "player"
@@ -1157,6 +1182,9 @@ class ActionResult(BaseModel):
     status: Literal["applied", "rejected", "duplicate", "conflict"]
     action: str
     actor_id: str = "player"
+    #: Mirrors ActionRequest.actor_type so a reader can tell an NPC's turn from
+    #: the player's without joining against the request row.
+    actor_type: str = "player"
     target_id: Optional[str] = None
     ok: bool = False
     code: str = ""

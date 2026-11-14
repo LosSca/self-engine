@@ -26,6 +26,14 @@
 
 ### Added
 
+- **混合式世界模拟 · Phase 1（统一行动模型与动作原语）**：`ActionRequest.actor_type`
+  （`player` / `npc` / `environment` / `system`，默认 `player`）让玩家与 NPC 走**同一套**规则判定
+  和同一条 `ActionService` 写入路径——NPC 没有独立执行链路，也不能直写权威状态。新增
+  `dismantle` / `combine` / `wait` 三个动作原语（共 19 个），失败一定有 `code` 和原因
+  （`cannot_dismantle` / `not_craftable` / `missing_parts` / `invalid_duration`）。
+  物品的 `dismantles_to` / `made_from` / `craftable` 是**配置数据**，不是新系统；
+  作者声明"这张桌子能拆成两块木板"，规则决定这次拆不拆得成。中文自然语言入口同步认识
+  这三个动词（"我拆掉木桌"、"合成木盾"、"等半小时"）。
 - **检索分四层**：`backend/app/services/retrieval/` 把知识/记忆/图谱召回拆成确定性过滤 → BM25 →
   向量 → 图谱，再用 RRF 融合、跨层重排。中英用同一套分词器（中文切二元组），修掉了
   `memory_engine` 旧关键词正则只认拉丁字母、中文查询得到空集的 bug；图谱召回改为按实体查询，

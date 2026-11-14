@@ -392,6 +392,8 @@ class ActionService:
                 campaign_id=row["campaign_id"],
                 status=row["status"],
                 action=str(row.get("request", {}).get("action", "")),
+                actor_id=str(row.get("request", {}).get("actor_id", "player")),
+                actor_type=str(row.get("request", {}).get("actor_type", "player")),
                 state_version=row.get("state_version", 0),
             )
 
@@ -401,6 +403,7 @@ class ActionService:
             campaign_id=request.campaign_id,
             action=request.action,
             actor_id=request.actor_id,
+            actor_type=request.actor_type,
             target_id=request.target_id,
         )
 

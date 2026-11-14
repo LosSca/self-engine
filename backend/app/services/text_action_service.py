@@ -56,6 +56,26 @@ ACTIONS = action_names()
 #: Verb table. Longest phrases first so "打开" wins over "打".
 _VERBS: Sequence[Tuple[str, Tuple[str, ...]]] = verb_table()
 
+#: Spoken durations for `wait`, longest phrase first. The rule receives the
+#: number as a param; the parser is the only place that reads prose for it.
+_WAIT_DURATIONS: Sequence[Tuple[str, int]] = (
+    ("an hour", 60),
+    ("one hour", 60),
+    ("an hour", 60),
+    ("half an hour", 30),
+    ("a few minutes", 5),
+    ("a minute", 1),
+    ("半小时", 30),
+    ("半个时辰", 60),
+    ("一个时辰", 120),
+    ("一小时", 60),
+    ("一刻钟", 15),
+    ("一会", 10),
+    ("一会儿", 10),
+    ("片刻", 5),
+    ("几分钟", 5),
+)
+
 #: The canonical verb per action, used when an advisor has named an action but
 #: the utterance itself never contained a word the parser recognises.
 _VERBS_PRIMARY: Dict[str, str] = {
@@ -63,7 +83,12 @@ _VERBS_PRIMARY: Dict[str, str] = {
 }
 
 _TRAILING = ("", "。", "！", "?", "？", ".", "吧", "啊", "呢")
-_LEADING_PARTICLES = ("请", "我想", "我要", "帮我", "试着", "试图", "麻烦")
+#: Leading filler stripped before verb matching, longest phrase first so "我想"
+#: wins over "我". `我` alone matters for Chinese utterances like "我拆掉木桌"
+#: that would otherwise never reach the verb table.
+_LEADING_PARTICLES = (
+    "我想", "我要", "我打算", "我准备", "让我", "帮我", "麻烦", "试着", "试图", "请", "我",
+)
 _ENVELOPE = re.compile(r"^\[([A-Z]+)\]\s*", re.IGNORECASE)
 _PARSE_FAILURES = {"missing_target", "ambiguous", "no_target"}
 
@@ -446,6 +471,44 @@ class TextActionParser:
             )
         if action == "talk" and not fragment:
             return ParsedAction(action="talk", confidence="verb_only")
+        if action == "wait":
+            # Waiting has no target: the duration lives in params so the rule
+            # never has to parse prose.
+            params = {}
+            for word, value in _WAIT_DURATIONS:
+                if word in fragment or word in utterance:
+                    params["minutes"] = value
+                    break
+            return ParsedAction(action="wait", confidence="verb_only", params=params)
+        if action in ("dismantle", "combine"):
+            if not fragment:
+                return ParsedAction(
+                    action=action,
+                    confidence="missing_target",
+                    note=f"{action} needs a target.",
+                )
+            # dismantle acts on what you hold; combine names what you want to
+            # build, which by definition you do not hold yet. Both stay inside
+            # the rule engine's authority: the parser only resolves an id.
+            candidates = self._carried_candidates(world, state)
+            if action == "combine":
+                held = {candidate.id for candidate in candidates}
+                candidates = candidates + [
+                    _Candidate(item.id, [item.name, item.id], "item")
+                    for item in world.items
+                    if item.craftable and item.id not in held
+                ]
+            matched = self._best(
+                fragment, candidates, whole=utterance or fragment
+            )
+            if matched is None:
+                return None
+            return ParsedAction(
+                action=action,
+                target_id=matched.id,
+                matched_name=self._display(matched, world, action),
+                confidence="exact",
+            )
         if action == "move":
             rules = ("move", self._move_candidates(world, state))
         elif action in ("take", "use", "equip"):
@@ -573,6 +636,20 @@ class TextActionParser:
             ):
                 items.append(_Candidate(item.id, [item.name, item.id], "item"))
         return items
+
+    @staticmethod
+    def _carried_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
+        """Only what the player is holding: dismantle/combine act on inventory.
+
+        The `take` table also lists items lying on the floor; offering them here
+        would make "拆掉木桌" resolve to a table the player is not holding and
+        then fail in the rule instead of in the parser.
+        """
+        return [
+            _Candidate(item.id, [item.name, item.id], "item")
+            for item in world.items
+            if state.inventory.get(item.id, 0) > 0
+        ]
 
     @staticmethod
     def _shop_candidates(world: WorldDefinition, state: GameState) -> List[_Candidate]:
@@ -835,6 +912,7 @@ class TextActionService:
             row["campaign_id"] != campaign_id
             or payload.get("campaign_id") != campaign_id
             or payload.get("actor_id") != "player"
+            or payload.get("actor_type", "player") != "player"
             or payload.get("params", {}).get("text") != text
         ):
             result = ActionResult(
@@ -962,6 +1040,7 @@ class TextActionService:
             campaign_id=campaign_id,
             status="rejected",
             action=parsed.action if parsed else "unknown",
+            actor_type="player",
             ok=False,
             code=parsed.confidence if parsed else "unparsed_action",
             message=message,
@@ -974,6 +1053,7 @@ class TextActionService:
             "request_id": request_id,
             "action": result.action,
             "actor_id": "player",
+            "actor_type": "player",
             "params": {**(parsed.params if parsed else {}), "text": text},
         }
         payload = json.loads(result.model_dump_json())
