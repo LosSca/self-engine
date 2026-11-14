@@ -1,6 +1,10 @@
 # CLIProxyAPI Subscription Proxy
 
-Routes Anthropic and OpenAI-compatible requests through authenticated subscriptions. Project Lunar uses it for Claude models and `gpt-5.6-sol`.
+Routes Anthropic and OpenAI-compatible requests through authenticated subscriptions. The engine uses it for Claude models and for `gpt-5.6-sol`.
+
+> This directory is a *shell* around the upstream binary: it ships `cliproxyapi/config.yaml` and `cliproxyapi/start-proxy.bat`, nothing else. The Python proxy that used
+> to live here (`server.py` / `run.py` / `auth.py`) was removed in the import commit; the binary below
+> is downloaded separately and is **not** part of this repository.
 
 ## CLIProxyAPI (recommended)
 
@@ -8,16 +12,23 @@ Uses [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), a Go binary th
 
 ### Setup
 
+1. Download the release for your platform from
+   [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and put the
+   executable in `proxy/cliproxyapi/` (the launch script expects `cli-proxy-api.exe`).
+2. Copy `config.example.yaml` to `config.yaml` if you do not have one and set `port:` to
+    `8318` — or keep your own port and match it in `.env` below. The shipped example uses
+    `8317`, so the two files disagree on purpose: the port is yours to pick.
+3. Authenticate providers that are not already configured, then start it:
+
 ```bash
 cd proxy/cliproxyapi
-
-# Authenticate providers that are not already configured
 ./cli-proxy-api.exe -claude-login -config config.yaml
 ./cli-proxy-api.exe -codex-login -config config.yaml
 
-# Start the proxy server (port 8318)
+# Start the proxy server (start-proxy.bat does the same on Windows)
 ./cli-proxy-api.exe -config config.yaml
 ```
+
 
 ### .env config
 
@@ -52,31 +63,5 @@ curl -s -X POST http://127.0.0.1:8318/v1/chat/completions \
 
 - The backend's `LLMRouter` falls back to non-streaming when using the proxy (CLIProxyAPI streaming adds extra fields that confuse litellm's SSE parser). Text arrives as a single chunk instead of token-by-token.
 - Auth credentials are saved in `~/.cli-proxy-api/`. Token auto-refreshes every 15 minutes.
-- The API key (`lunar-proxy-key`) is configured in `config.yaml` and matched in `.env` through the provider-specific proxy key variables.
+- The API key (`lunar-proxy-key` in the examples) is whatever you put in `config.yaml`; it must match `ANTHROPIC_PROXY_KEY` / `OPENAI_PROXY_KEY` in `.env`.
 - An existing CLIProxyAPI instance may use a different local port and key through the untracked `.env`.
-
----
-
-## Legacy OAuth Proxy (Haiku only)
-
-The original Python-based OAuth proxy in `proxy/`. Only supports Haiku due to Anthropic's OAuth scope restrictions.
-
-### Setup
-
-```bash
-pip install -r requirements.txt
-python run.py auth    # authenticate
-python run.py serve   # start on port 8082
-```
-
-### .env config
-
-```
-ANTHROPIC_PROXY_URL=http://127.0.0.1:8082
-ANTHROPIC_PROXY_KEY=proxy
-```
-
-### Limitations
-
-- OAuth `user:inference` scope only allows **Haiku** models. Sonnet/Opus return `invalid_request_error`.
-- Token expires ~8 hours; auto-refreshes via refresh token.

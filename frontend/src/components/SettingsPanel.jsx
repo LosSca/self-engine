@@ -7,6 +7,7 @@ import {
 } from '../api'
 import { Settings, X, PenLine, Save } from 'lucide-react'
 import { THEME_LABELS, applyTheme, currentTheme } from '../lib/theme'
+import { readApiToken, writeApiToken } from '../main.jsx'
 
 const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', models: ['deepseek-v4-flash'] },
@@ -114,9 +115,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
   const [customReady, setCustomReady] = useState(false)
   const [modelError, setModelError] = useState('')
   const [theme, setTheme] = useState(currentTheme())
-  const [apiToken, setApiToken] = useState(
-    () => localStorage.getItem('lunar_api_token') || '',
-  )
+  const [apiToken, setApiToken] = useState(() => readApiToken())
   // 叙事可调项：风格/人称/长度/两个开关/采样参数。空串代表「跟随世界」。
   const [narrStyle, setNarrStyle] = useState('')
   const [narrPerspective, setNarrPerspective] = useState('')
@@ -277,8 +276,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
 
   const handleSave = async () => {
     const token = apiToken.trim()
-    if (token) localStorage.setItem('lunar_api_token', token)
-    else localStorage.removeItem('lunar_api_token')
+    writeApiToken(token)
     setBusy(true)
     setModelError('')
     const prefs = {
@@ -446,7 +444,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   className={C.input}
                 />
                 <p className={C.help}>
-                  仅当后端以 API_TOKEN 启动时填写；令牌只留在本机浏览器，不会被后端保存或回传。
+                  仅当后端以 API_TOKEN 启动时填写；令牌只留在本机这一标签页的会话里（不写 localStorage，关掉标签页即失效），不会被后端保存或回传。
                 </p>
               </div>
 

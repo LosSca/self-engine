@@ -252,6 +252,45 @@ class StateConflictError(RuntimeError):
         )
 
 
+#: Long-term recap carried inside ``GameState.summary``: a bounded rolling log of
+#: the turns that were narrated, one ``[Tn]`` line each.
+RECAP_CHAR_BUDGET = 2000
+
+
+def _expected_version(state: GameState, expected_version: Optional[int]) -> int:
+    """The version a write must find in the row, for its compare-and-set.
+
+    There is no unguarded write: a caller that does not name a base version is
+    saying "I built this state on top of the row as it is now", so the state it
+    hands in must be exactly one version ahead of what it read. Deriving that
+    here keeps the write safe by default - a snapshot that has moved on since the
+    caller read it is a conflict, not a silent overwrite.
+    """
+    if expected_version is not None:
+        return int(expected_version)
+    return max(int(state.version) - 1, 0)
+
+def _append_bounded_recap(existing: str, line: str, budget: int = RECAP_CHAR_BUDGET) -> str:
+    """Append one recap line, dropping the oldest lines to stay inside ``budget``.
+
+    The recap is what the narrator is handed as "long-term memory", so it has to
+    stay small and grow deterministically. Whole lines are dropped from the front;
+    a single line longer than the budget is cut from its start, because the end of
+    a sentence is what a reader needs, not its opening.
+    """
+    entry = (line or "").strip()
+    if not entry:
+        return existing or ""
+    text = "\n".join(p for p in ((existing or "").strip(), entry) if p)
+    if len(text) <= budget:
+        return text
+    lines = text.split("\n")
+    while len(lines) > 1 and len("\n".join(lines)) > budget:
+        lines.pop(0)
+    text = "\n".join(lines)
+    return text[-budget:] if len(text) > budget else text
+
+
 class GameStateStore:
     """Thin, explicit SQLite store. No ORM, no hidden global state."""
 
@@ -486,9 +525,11 @@ class GameStateStore:
         update) rolls back.
 
         ``expected_version`` is the version the caller read before deciding the
-        outcome. When given, the state row is only updated if it still holds
-        that version; otherwise StateConflictError is raised and the whole
-        transaction (request row included) rolls back.
+        outcome. The state row is only updated if it still holds that version;
+        otherwise StateConflictError is raised and the whole transaction (request
+        row included) rolls back. Omitting it does not disable the guard: the
+        base version is then derived from the new state (see
+        ``_expected_version``).
         """
         with self._lock, self._conn:
             self._conn.execute(
@@ -507,27 +548,19 @@ class GameStateStore:
                 ),
             )
             # Compare-and-set: the row is only written when the caller's
-            # expected version still matches, so a slower concurrent request
-            # cannot silently overwrite a faster one (lost update). Callers
-            # that pass no expected version keep the pre-existing behaviour.
-            if expected_version is None:
-                updated = self._conn.execute(
-                    "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
-                    " WHERE campaign_id = ?",
-                    (state.version, state.model_dump_json(), _now(), campaign_id),
-                )
-            else:
-                updated = self._conn.execute(
-                    "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
-                    " WHERE campaign_id = ? AND version = ?",
-                    (
-                        state.version,
-                        state.model_dump_json(),
-                        _now(),
-                        campaign_id,
-                        expected_version,
-                    ),
-                )
+            # base version still matches, so a slower concurrent request cannot
+            # silently overwrite a faster one (lost update).
+            updated = self._conn.execute(
+                "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
+                " WHERE campaign_id = ? AND version = ?",
+                (
+                    state.version,
+                    state.model_dump_json(),
+                    _now(),
+                    campaign_id,
+                    _expected_version(state, expected_version),
+                ),
+            )
             if updated.rowcount == 0:
                 self._raise_missing_or_conflict(campaign_id, expected_version)
             self._insert_snapshot(state, request_id=request_id)
@@ -548,6 +581,81 @@ class GameStateStore:
                         event.get("created_at") or _now(),
                     ),
                 )
+
+    def record_turn_outcome(
+        self,
+        campaign_id: str,
+        request_id: str,
+        events: List[Dict[str, Any]],
+        recap: Optional[str] = None,
+    ) -> bool:
+        """Record what happened after a turn was committed, in one write.
+
+        Two things are only known once the turn is durable: the prose (and so the
+        one-line recap that quotes it) and whether the narrator succeeded. Both are
+        presentation, so neither may bump ``version`` or ``turn``: a turn is
+        whatever the rules decided, and a narrator waking up late does not get to
+        change the count or create one.
+
+        ``events`` are appended against the committed version. They are written at
+        most once per ``(request_id, event_type)`` so a repeated call - after a
+        crash, a retry, or a duplicate request - cannot duplicate the record.
+
+        Returns True when anything was written.
+        """
+        text = (recap or "").strip()
+        if not text and not events:
+            return False
+        written = False
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT version, state_json FROM campaign_state WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            version = int(row["version"])
+            if text:
+                state = GameState.model_validate_json(row["state_json"])
+                state.summary = _append_bounded_recap(
+                    state.summary, text, RECAP_CHAR_BUDGET
+                )
+                updated = self._conn.execute(
+                    "UPDATE campaign_state SET state_json = ?, updated_at = ?"
+                    " WHERE campaign_id = ?",
+                    (state.model_dump_json(), _now(), campaign_id),
+                )
+                written = written or updated.rowcount > 0
+            for event in events:
+                event_type = str(event.get("event_type") or "")
+                if not event_type:
+                    continue
+                seen = self._conn.execute(
+                    "SELECT 1 FROM domain_events WHERE request_id = ? AND event_type = ?",
+                    (request_id, event_type),
+                ).fetchone()
+                if seen is not None:
+                    continue
+                self._conn.execute(
+                    "INSERT INTO domain_events"
+                    " (id, campaign_id, request_id, event_type, payload_json,"
+                    "  state_version, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        event.get("id") or str(uuid.uuid4()),
+                        campaign_id,
+                        request_id,
+                        event_type,
+                        json.dumps(event.get("payload", {}), sort_keys=True),
+                        # A post-commit record belongs to the version it was written at.
+                        # Callers that stamped their own (pre-commit) version would
+                        # hide these rows from a projector filtering the current one.
+                        version,
+                        event.get("created_at") or _now(),
+                    ),
+                )
+                written = True
+        return written
 
     def _raise_missing_or_conflict(self, campaign_id: str, expected: Optional[int]) -> None:
         row = self._conn.execute(
@@ -936,16 +1044,30 @@ class GameStateStore:
         state: GameState,
         events: List[Dict[str, Any]],
         request_id: str = "",
+        expected_version: Optional[int] = None,
     ) -> None:
-        """Write a restored state as a brand-new version (history stays intact)."""
+        """Write a restored state as a brand-new version (history stays intact).
+
+        ``expected_version`` is the version the caller read before building the
+        restored state. The write only lands if the row still holds that version -
+        two rollbacks racing each other used to overwrite one another silently,
+        because this path had no compare-and-set at all. Omitting it derives the
+        base from the restored state, so the guard is always in place.
+        """
         with self._lock, self._conn:
             updated = self._conn.execute(
                 "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
-                " WHERE campaign_id = ?",
-                (state.version, state.model_dump_json(), _now(), campaign_id),
+                " WHERE campaign_id = ? AND version = ?",
+                (
+                    state.version,
+                    state.model_dump_json(),
+                    _now(),
+                    campaign_id,
+                    _expected_version(state, expected_version),
+                ),
             )
             if updated.rowcount == 0:
-                raise ValueError(f"campaign '{campaign_id}' has no bound state")
+                self._raise_missing_or_conflict(campaign_id, expected_version)
             self._insert_snapshot(state, request_id=request_id)
             for event in events:
                 self._conn.execute(
@@ -969,7 +1091,7 @@ class GameStateStore:
     ) -> List[Dict[str, Any]]:
         """Project durable requests and prose once per turn, oldest first.
 
-        `limit` counts recent requests, including rejections, not domain events.
+        ``limit`` counts recent requests, including rejections, not domain events.
         This view never reads legacy mirrors or changes stored records.
         """
         rows = self._conn.execute(

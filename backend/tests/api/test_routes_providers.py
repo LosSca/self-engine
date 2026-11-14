@@ -42,6 +42,40 @@ def test_clearing_a_key_takes_the_environment_over_again(client, monkeypatch):
     assert row["source"] == ""
 
 
+def test_clearing_a_ui_key_restores_the_environment_key(client, monkeypatch):
+    """清除 UI 里填的 key 之后，shell/.env 提供的那把 key 必须原样回来。
+
+    回归：delete() 曾经直接 os.environ.pop(...)，把进程里所有来源的
+    DEEPSEEK_API_KEY 一起抹掉 —— 用户点一次「清除」，整个进程到重启前都用不了
+    DeepSeek，而 .env 里明明还配着。这里先让环境里有一把 key，再存一把 UI 的，
+    再清除，断言回到的是环境里那把，而不是空。
+    """
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-from-shell-1234")
+    # 快照在 import 期采集；把这条模拟值补进去，等价于“启动时 .env 里就有它”。
+    monkeypatch.setitem(credential_store._ENV_AT_STARTUP, "DEEPSEEK_API_KEY", "sk-from-shell-1234")
+
+    client.post("/api/providers/deepseek", json={"api_key": "sk-from-ui-abcd"})
+    assert credential_store.os.environ["DEEPSEEK_API_KEY"] == "sk-from-ui-abcd"
+
+    resp = client.delete("/api/providers/deepseek")
+    assert resp.status_code == 200
+    row = next(r for r in resp.json()["providers"] if r["id"] == "deepseek")
+    assert row["source"] == "env"
+    assert row["configured"] is True
+    assert credential_store.os.environ["DEEPSEEK_API_KEY"] == "sk-from-shell-1234"
+
+
+def test_clearing_a_key_leaves_other_providers_untouched(client, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-env-9999")
+    monkeypatch.setitem(credential_store._ENV_AT_STARTUP, "OPENAI_API_KEY", "sk-openai-env-9999")
+    client.post("/api/providers/deepseek", json={"api_key": "sk-ds-ui-7777"})
+
+    client.delete("/api/providers/deepseek")
+
+    assert credential_store.os.environ["OPENAI_API_KEY"] == "sk-openai-env-9999"
+    assert "DEEPSEEK_API_KEY" not in credential_store.os.environ
+
+
 def test_test_endpoint_reports_an_error_instead_of_raising(client, monkeypatch):
     async def boom(self, messages, **kwargs):
         raise RuntimeError("no key")

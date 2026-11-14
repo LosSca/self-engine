@@ -36,7 +36,7 @@
 - 当前版本：**0.5.0**（`backend/app/main.py` 与 `frontend/package.json` 一致）
 - 运行时：Python + FastAPI 后端、React + Vite 前端、SQLite 存储
 - 语言：界面与内容中文优先；**叙事语言跟随世界文档的 `language` 字段**，未声明时为英文
-- 规模：146 个路由，其中 `/api/v1` 引擎链路 92 个，其余为旧聊天链路（27）、情景、角色与全局设置
+- 规模：123 个路由，其中 `/api/v1` 引擎链路 73 个，其余为旧聊天链路 `/api/game`（24）、情景（12）、角色（6）、供应商（3）、健康检查（2）与全局设置/偏好/存档（各 1）
 - 范围：以规则链路 `/api/v1` 为准；`/api/game` 旧聊天链路仍在维护，用于未绑定世界的冒险
 - 模型：**不配置任何密钥也能完整游玩**——确定性叙事器按世界语言产出文本
 
@@ -61,7 +61,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口，另有文本解析、知识、叙事、世界编辑、AI 生成、作品库 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 四个 SQLite 存储，各自的 `SCHEMA_VERSION` 与迁移 |
-| `backend/tests/` | pytest 1640 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest 1700 passed / 8 skipped，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记与交付审查（`docs/delivery_review.md`） |
 
@@ -397,7 +397,7 @@ AGENTS_NARRATIVE_* / AGENTS_MEMORY_*   # 同样的开关
 
 ```bash
 git clone <本仓库地址>
-cd shujia
+cd self-engine
 
 install.bat      # Windows
 ./install.sh     # macOS / Linux
@@ -546,7 +546,7 @@ npm run build        # 产物在 desktop/src-tauri/target/release/bundle/
 ## 目录结构
 
 ```
-shujia/
+self-engine/
 ├── launch.py                    # 通用启动器（前后端编排、健康检查、浏览器）
 ├── start.bat                    # Windows 入口（纯 ASCII，调用 launch.py）
 ├── scripts/serve-dist.mjs       # --prod 的前端静态托管 + /api 反代
@@ -621,7 +621,7 @@ shujia/
 
 ## API 概览
 
-全部接口挂在 `/api` 下，共 **146 个路由**（`/api/v1` 92 个、旧聊天链路 `/api/game` 27 个、其余 27 个）；设置 `API_TOKEN` 后除健康检查外都要求
+全部接口挂在 `/api` 下，共 **123 个路由**（`/api/v1` 73 个、旧聊天链路 `/api/game` 24 个、其余 26 个）；设置 `API_TOKEN` 后除健康检查外都要求
 `Authorization: Bearer <token>` 或 `X-API-Token`。完整清单与请求/响应结构见 <http://127.0.0.1:8000/docs>，
 `/api/v1` 的每条路由都有类型化响应模型，并由 `backend/tests/api/test_routes_contracts.py` 守住。
 
@@ -760,11 +760,11 @@ shujia/
 
 ```bash
 # 后端全量（pytest，asyncio_mode = auto）
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' \
+TEMP="$PWD/.tmp" TMP="$PWD/.tmp" \
   backend/.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider backend/tests
 
 # 只跑验收走查（1–14 条，不需要任何密钥）
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' \
+TEMP="$PWD/.tmp" TMP="$PWD/.tmp" \
   backend/.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
   backend/tests/api/test_acceptance_story.py
 
@@ -775,7 +775,7 @@ npm --prefix frontend run build
 > `TEMP` / `TMP` 必须设置：pytest 默认临时目录在部分 Windows 环境下不可写；
 > `-p no:cacheprovider` 同理，避免 `.pytest_cache` 写入失败。
 
-- 最近一次全量：**1625 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 130 秒。
+- 最近一次全量：**1700 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 31 秒。
 - 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 项），覆盖 m00001 第九节的 14 条：
   建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/叙事失败不回滚/
   非法事件配置/模拟只读/中文世界读中文。
@@ -814,15 +814,20 @@ npm --prefix frontend run build
 | 世界演化 | 部分 | 提案与采纳已有界面，但只能新增，不能改字段或删除；故事线不在演化链路里 |
 | 角色路由 | 部分 | 三个角色（narrative / system / memory），没有按 NPC 单独分配模型 |
 
-风险登记里的三条 P1：服务默认无鉴权（本机使用，需要共享时设 `API_TOKEN`）、
-SQLite 单写者（高并发回以版本冲突重试）、知识为词法相似度而非语义召回。
+风险登记里的三条 P1：服务默认无鉴权（本机使用，需要共享时设 `API_TOKEN`；
+设置面板里填的令牌只存在当前标签页的 `sessionStorage`，关掉即失效）、
+SQLite 单写者（并发写会以版本冲突重试，不会静默覆盖）、知识为词法相似度而非语义召回。
 此外 `/api/game` 旧聊天链路仍保留独立的流式副作用路径，未绑定世界的冒险行为与绑定世界不同。
 
-### 环境相关的两处坑
+**后端只支持单进程运行。** 每个战役的活动会话保存在进程内存里，叙事与长期摘要也在提交后
+由同一个请求写回，所以 `uvicorn --workers N` 或多副本部署会出现"同一战役落在不同进程"
+的脑裂。`launch.py` 只启动一个 worker；确实要扩到多进程，需要先把会话状态外置。
 
-1. **`backend/requirements.txt` 在本机不可直接求解**：固定的 `litellm==1.43.0` 在 PyPI 上不存在，
-   `graphiti-core>=0.5.0` 又要求 `pydantic>=2.8.2` 而 `requirements.txt` 钉的是 `2.8.0`。
-   上游未动；本地开发时去掉这两个钉版本即可（安装脚本按原文件执行，遇到同样问题需手动处理）。
+### 环境相关的三处坑
+
+1. **`backend/requirements.txt` 用区间约束**（`fastapi>=0.115,<0.163`、`pydantic>=2.8.2,<3`、
+   `litellm>=1.60,<2` 等），对齐当前 `.venv` 实测可用的版本；`graphiti-core` 是可选项，
+   首装不装也能跑，需要知识图谱镜像时再单独装。安装脚本会顺带装 `requirements-dev.txt`。
 2. **pytest 必须设 `TEMP`/`TMP` 并关掉缓存提供者**，见上一节的命令。
 3. **受限环境里 `vite dev` 可能白屏**（浏览器端依赖预打包被拦，裸导入 404）。这不是本项目
    的代码问题，改用 `--prod` 即可；桌面快捷方式已经默认 `--prod`。

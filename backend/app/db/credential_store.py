@@ -57,13 +57,59 @@ MODEL_ENV = {
     "custom": "CUSTOM_LLM_MODEL",
 }
 
+#: What the process environment already held when this module was first imported.
+#: A UI "clear" must fall back to these, not to nothing: without this snapshot the
+#: only way to undo a stored key was to drop the variable entirely, which also
+#: destroyed a key the user had supplied through .env / the shell / Docker.
+_ENV_AT_STARTUP: Dict[str, str] = {
+    name: os.environ[name]
+    for name in (
+        *{spec["env"] for spec in PROVIDERS.values()},
+        *URL_ENV.values(),
+        *MODEL_ENV.values(),
+    )
+    if os.environ.get(name)
+}
+
+
+def _restrict_to_owner(path: str) -> None:
+    """Best effort: make a file readable only by the account that owns it.
+
+    The keys live in plain text in the same SQLite file as the preferences, so the
+    file mode is the only thing standing between a key and another account on a
+    shared machine. Windows ACLs and POSIX modes are set through different calls
+    and both are best effort: a failure here must never stop the engine from
+    starting, because on a single-user desktop the file already sits under that
+    user profile.
+    """
+    try:
+        if os.name == 'nt':
+            import subprocess
+
+            user = os.environ.get('USERNAME', '')
+            if not user:
+                return
+            # Replace inherited permissions with one grant for this account.
+            subprocess.run(
+                ["icacls", path, "/inheritance:r", f"/grant:r", f"{user}:F"],
+                check=False,
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            os.chmod(path, 0o600)
+    except Exception:  # noqa: BLE001 - hardening, not a precondition for starting
+        pass
 
 class CredentialStore:
     """One row per provider on the same sqlite file as the preferences."""
 
     def __init__(self, db_path: str | None = None):
-        self._conn = sqlite3.connect(db_path or default_db_path(), check_same_thread=False)
+        path = db_path or default_db_path()
+        self._conn = sqlite3.connect(path, check_same_thread=False)
         self._lock = Lock()
+        # Keys sit in plain text here, so the file is kept to this account only.
+        _restrict_to_owner(path)
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS provider_credentials ("
             "    provider TEXT PRIMARY KEY,"
@@ -109,16 +155,17 @@ class CredentialStore:
             self._conn.commit()
 
     def delete(self, provider: str) -> None:
+        """Drop the stored row only.
+
+        The process environment is *not* touched here. Restoring it is the job of
+        apply_credentials(), which puts back whatever .env / the shell supplied
+        before the UI ever wrote anything. Popping the variable here used to wipe
+        an environment-provided key for the rest of the process lifetime — see
+        test_clearing_a_ui_key_restores_the_environment_key.
+        """
         with self._lock:
             self._conn.execute("DELETE FROM provider_credentials WHERE provider=?", (provider,))
             self._conn.commit()
-        # 删掉之后 os.environ 里还留着刚才写进去的 key，会让「已清除」变成假象。
-        # 这里直接摘掉：shell/Docker 提供的变量会在下次启动时重新进环境。
-        spec = PROVIDERS.get(provider)
-        if spec:
-            for env_name in (spec["env"], URL_ENV.get(provider), MODEL_ENV.get(provider)):
-                if env_name:
-                    os.environ.pop(env_name, None)
 
 
 def masked(key: str) -> str:
@@ -134,27 +181,34 @@ def masked(key: str) -> str:
 def apply_credentials() -> None:
     """Push stored credentials into os.environ (what litellm reads).
 
-    Called at startup and after every write. An existing environment value
-    wins only when nothing was stored, so a shell/Docker deployment keeps
-    working exactly as before.
+    Called at startup and after every write, including a delete. A stored row
+    wins; when there is no row, the variable is restored to whatever the process
+    started with (.env / shell / Docker), so clearing a UI key falls back instead
+    of permanently disabling the provider.
     """
     store = CredentialStore()
     try:
         rows = store.rows()
     finally:
         store.close()
-    for provider, row in rows.items():
-        spec = PROVIDERS.get(provider)
-        if spec is None:
-            continue
-        if row.get("api_key"):
-            os.environ[spec["env"]] = row["api_key"]
-        url_env = URL_ENV.get(provider)
-        if url_env and row.get("base_url"):
-            os.environ[url_env] = row["base_url"]
-        model_env = MODEL_ENV.get(provider)
-        if model_env and row.get("model"):
-            os.environ[model_env] = row["model"]
+    # Iterate every known provider, not just the stored ones: a provider with no
+    # row still needs its start-up value put back (that is the "clear" case).
+    for provider, spec in PROVIDERS.items():
+        row = rows.get(provider, {})
+        for env_name, column in (
+            (spec["env"], "api_key"),
+            (URL_ENV.get(provider), "base_url"),
+            (MODEL_ENV.get(provider), "model"),
+        ):
+            if not env_name:
+                continue
+            value = row.get(column) or ""
+            if value:
+                os.environ[env_name] = value
+            elif env_name in _ENV_AT_STARTUP:
+                os.environ[env_name] = _ENV_AT_STARTUP[env_name]
+            else:
+                os.environ.pop(env_name, None)
 
 
 def status() -> list[dict[str, Any]]:

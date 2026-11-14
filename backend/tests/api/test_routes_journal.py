@@ -18,11 +18,23 @@ def app(tmp_path, monkeypatch):
     return application
 
 
-@pytest.fixture
-def _journal():
-    from app.api.routes_game import _journal as journal
+#: Campaign each journal test writes into. Declared explicitly: guessing it from
+#: the test name broke as soon as a name had more than two words.
+JOURNAL_CAMPAIGNS = {
+    "test_journal_with_entries": "test-j1",
+    "test_journal_filter_category": "test-j2",
+}
 
-    return journal
+
+@pytest.fixture
+def _journal(request):
+    # Journals live on the session now (no module-level singleton), so the
+    # fixture builds the session for the campaign the test writes into.
+    from app.api import routes_game
+
+    campaign = JOURNAL_CAMPAIGNS.get(request.node.name)
+    assert campaign, f"declare a campaign id for {request.node.name}"
+    return routes_game._journal_for(campaign)
 
 
 @pytest.mark.asyncio
@@ -35,7 +47,7 @@ async def test_get_journal_empty(app):
 
 
 @pytest.mark.asyncio
-async def test_get_journal_with_entries(app, _journal):
+async def test_journal_with_entries(app, _journal):
     _journal._journals["test-j1"] = [
         JournalEntry("test-j1", JournalCategory.DISCOVERY, "Found a cave", datetime.utcnow().isoformat()),
         JournalEntry("test-j1", JournalCategory.COMBAT, "Fought a troll", datetime.utcnow().isoformat()),
@@ -52,7 +64,7 @@ async def test_get_journal_with_entries(app, _journal):
 
 
 @pytest.mark.asyncio
-async def test_get_journal_filter_category(app, _journal):
+async def test_journal_filter_category(app, _journal):
     _journal._journals["test-j2"] = [
         JournalEntry("test-j2", JournalCategory.DISCOVERY, "Found cave", datetime.utcnow().isoformat()),
         JournalEntry("test-j2", JournalCategory.COMBAT, "Fought troll", datetime.utcnow().isoformat()),

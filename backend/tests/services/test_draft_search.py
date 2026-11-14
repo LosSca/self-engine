@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.services import draft_generator as dg
+from app.services import web_search as ws
 
 
 class _DeadRouter:
@@ -35,6 +36,10 @@ async def test_draft_uses_search_notes_when_asked(monkeypatch):
     prompt = router.messages[-1]["content"]
     assert "WEB NOTES" in prompt
     assert "Old English epic." in prompt
+    # Search results are fenced and named as data, not as instructions.
+    assert ws.UNTRUSTED_OPEN in prompt
+    assert ws.UNTRUSTED_CLOSE in prompt
+    assert "untrusted data" in prompt
 
 
 async def test_draft_without_search_leaves_notes_out(monkeypatch):

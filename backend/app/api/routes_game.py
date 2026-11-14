@@ -105,11 +105,8 @@ _narrator = NarratorEngine(llm=_llm)
 # exist yet at import time.
 _memory = MemoryEngine(event_store=_event_store, llm=_llm)
 _world_reactor = WorldReactor(llm=_llm)
-_journal = JournalEngine(llm=_llm, event_store=_event_store)
 _combat = CombatEngine(llm=_llm)
 _plot_generator = PlotGenerator(llm=_llm)
-_npc_minds = NpcMindEngine(llm=_llm)
-_inventory = InventoryEngine(event_store=_event_store)
 
 _sessions: dict[str, GameSession] = {}
 
@@ -308,6 +305,15 @@ def _load_player_character_for_campaign(campaign_id: str) -> dict:
         return {}
 
 
+def _journal_for(campaign_id: str) -> JournalEngine:
+    """The journal that belongs to this campaign's session.
+
+    Journals are per-session now (``JournalEngine`` keys by campaign, but a shared
+    instance was still one mutable object behind every request). Reads stay pure:
+    a rebuild would drop entries logged in this process but not yet persisted.
+    """
+    return _ensure_session(campaign_id)._journal
+
 def _ensure_session(campaign_id: str) -> GameSession:
     """Get or create a GameSession, ensuring all in-memory state is rebuilt.
 
@@ -345,14 +351,21 @@ def _ensure_session(campaign_id: str) -> GameSession:
         narrator=_narrator,
         memory=_memory,
         world_reactor=_world_reactor,
-        journal=_journal,
+        # Per-campaign engines. JournalEngine keys its journals by
+        # campaign_id, NpcMindEngine its minds by campaign_id and
+        # InventoryEngine is a thin event-store view, so sharing one instance
+        # across campaigns was "safe" only because nothing ever keyed them by
+        # anything but the campaign - a shared mutable singleton that is one
+        # forgotten prefix away from mixing two players' state. They cost
+        # nothing to build, so each session gets its own.
+        journal=JournalEngine(llm=_llm, event_store=_event_store),
         event_store=_event_store,
         combat_engine=_combat,
         graph_engine=graph,
-        npc_minds=_npc_minds,
+        npc_minds=NpcMindEngine(llm=_llm),
         graphiti_engine=graphiti,
         plot_generator=_plot_generator,
-        inventory_engine=_inventory,
+        inventory_engine=InventoryEngine(event_store=_event_store),
         opening_narrative=opening,
         story_cards=story_cards,
         setup_answers=setup_answers,
@@ -625,16 +638,19 @@ def _mirror_unified_turn(req, before, result: dict) -> None:
         names = {item.id: item.name for item in world.items}
         before_inv = dict(before.inventory) if before is not None else {}
         after_inv = dict(state.get("inventory") or {})
+        # InventoryEngine is a stateless view over the event store: one instance
+        # per mirror call keeps that explicit.
+        inventory = InventoryEngine(event_store=_event_store)
         for item_id, count in after_inv.items():
             delta = int(count) - int(before_inv.get(item_id, 0))
             name = names.get(item_id, item_id)
             if delta > 0:
-                _inventory.add_item(req.campaign_id, name, "rules", "确定性规则")
+                inventory.add_item(req.campaign_id, name, "rules", "确定性规则")
             elif delta < 0:
-                _inventory.lose_item(req.campaign_id, name)
+                inventory.lose_item(req.campaign_id, name)
         for item_id, count in before_inv.items():
             if item_id not in after_inv and int(count) > 0:
-                _inventory.lose_item(req.campaign_id, names.get(item_id, item_id))
+                inventory.lose_item(req.campaign_id, names.get(item_id, item_id))
     except Exception:  # noqa: BLE001 - the turn is already committed
         logger.warning("Could not mirror unified turn events", exc_info=True)
 
@@ -669,8 +685,11 @@ def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, st
         entity_id = getattr(value, "entity_id", None) or getattr(value, "id", None) or ""
         people.append((text, entity_id if isinstance(entity_id, str) else ""))
 
+    # Minds live on the session (they are rebuilt from events on demand); an
+    # engine built here would be empty by construction.
     try:
-        for mind in _npc_minds.get_all_minds(campaign_id):
+        session = _sessions.get(campaign_id) or _ensure_session(campaign_id)
+        for mind in session._npc_minds.get_all_minds(campaign_id):
             add(mind)
     except Exception:
         logger.debug("NPC minds unavailable for %s", campaign_id, exc_info=True)
@@ -1326,22 +1345,25 @@ async def rewind(campaign_id: str):
 async def get_journal(campaign_id: str, category: str | None = None):
     # Journal reads stay pure: a rebuild would drop entries that were logged
     # in this process but not (yet) persisted — including entries added by an
-    # in-flight session, which the player can already see in the UI.
+    # in-flight session, which the player can already see in the UI. So read the
+    # live session when there is one, and only build one when there is not.
     if category:
         try:
             cat = JournalCategory(category)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid journal category: {category}")
-        entries = _journal.get_by_category(campaign_id, cat)
+        journal = (_sessions.get(campaign_id) or _ensure_session(campaign_id))._journal
+        entries = journal.get_by_category(campaign_id, cat)
     else:
-        entries = _journal.get_journal(campaign_id)
+        journal = (_sessions.get(campaign_id) or _ensure_session(campaign_id))._journal
+        entries = journal.get_journal(campaign_id)
     return [asdict(e) for e in entries]
 
 
 @router.get("/{campaign_id}/npc-minds")
 async def get_npc_minds(campaign_id: str):
     _ensure_session(campaign_id)
-    minds = _npc_minds.get_all_minds(campaign_id)
+    minds = _ensure_session(campaign_id)._npc_minds.get_all_minds(campaign_id)
     return [m.to_dict() for m in minds]
 
 
@@ -1349,7 +1371,7 @@ async def get_npc_minds(campaign_id: str):
 async def delete_npc_mind(campaign_id: str, npc_name: str):
     """Delete an NPC mind from memory and event store."""
     _ensure_session(campaign_id)
-    deleted = _npc_minds.delete_mind(campaign_id, npc_name)
+    deleted = _ensure_session(campaign_id)._npc_minds.delete_mind(campaign_id, npc_name)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' not found")
     _event_store.delete_npc_thoughts(campaign_id, npc_name)
@@ -1362,7 +1384,7 @@ async def update_npc_mind(campaign_id: str, npc_name: str, req: NpcMindUpdateReq
     _ensure_session(campaign_id)
     mind = None
     for key, value in req.thoughts.items():
-        mind = _npc_minds.update_thought(campaign_id, npc_name, key, value)
+        mind = _ensure_session(campaign_id)._npc_minds.update_thought(campaign_id, npc_name, key, value)
     if not mind:
         raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' not found")
     # Persist updated thoughts to event store
@@ -1383,7 +1405,7 @@ async def get_characters(campaign_id: str, q: str = ""):
     seen_names: set[str] = set()
 
     # NPCs from mind engine (primary source — has thoughts and aliases)
-    for mind in _npc_minds.get_all_minds(campaign_id):
+    for mind in _ensure_session(campaign_id)._npc_minds.get_all_minds(campaign_id):
         name_lower = mind.name.lower()
         if name_lower in seen_names:
             continue
@@ -1528,7 +1550,7 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
             entities=[],
         )
         try:
-            await _journal.evaluate_and_log(campaign_id, world_changes)
+            await _journal_for(campaign_id).evaluate_and_log(campaign_id, world_changes)
         except Exception:
             logger.warning("Failed to log timeskip world changes into journal", exc_info=True)
     return {"summary": world_changes or "Time passes quietly."}
@@ -1556,7 +1578,7 @@ async def get_inventory(campaign_id: str):
                 if quantity > 0
             ]
     _ensure_session(campaign_id)
-    items = _inventory.get_inventory(campaign_id)
+    items = _sessions[campaign_id]._inventory.get_inventory(campaign_id)
     return [{"name": i.name, "category": i.category, "source": i.source, "status": i.status} for i in items]
 
 
@@ -1568,10 +1590,12 @@ async def update_inventory(campaign_id: str, req: InventoryActionRequest):
                 status_code=409,
                 detail="Bound campaigns must use the rules action endpoint to change inventory",
             )
+    # Unbound campaigns only: bound ones returned 409 above and go through the
+    # rules engine, so a session's own inventory view is not involved.
     if req.action == "use":
-        _inventory.use_item(campaign_id, req.name)
+        InventoryEngine(event_store=_event_store).use_item(campaign_id, req.name)
     elif req.action == "discard":
-        _inventory.lose_item(campaign_id, req.name)
+        InventoryEngine(event_store=_event_store).lose_item(campaign_id, req.name)
     return {"status": "ok"}
 
 

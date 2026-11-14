@@ -33,6 +33,7 @@ fi
 . backend/.venv/bin/activate
 pip install --upgrade pip
 pip install -r backend/requirements.txt
+pip install -r backend/requirements-dev.txt
 deactivate
 
 echo

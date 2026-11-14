@@ -693,6 +693,11 @@ def main(argv: list[str] | None = None) -> int:
             say("    后端API http://%s:%d/docs" % (addrs[0], BACKEND_PORT))
             say("    手机浏览器打开上面的“前端”地址即可；首次访问若被拦截，")
             say("    请在 Windows 防火墙里允许 python.exe / node.exe 访问“专用网络”。")
+            if not os.environ.get("API_TOKEN", "").strip():
+                say("")
+                say("  [注意] 当前没有设置 API_TOKEN：局域网内任何设备打开上面的后端地址")
+                say("         都能直接读写存档、调用模型。只在你信任的网络上这样用；")
+                say("         否则先设 API_TOKEN=<一段随机字符串> 再启动。")
         else:
             say("    没有找到 192.168./10./172.16-31 网段的 IPv4 地址，可能是没连局域网。")
             say("    可先执行 ipconfig 确认本机地址，再用 --host 0.0.0.0 重试。")

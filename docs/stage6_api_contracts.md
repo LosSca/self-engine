@@ -25,7 +25,7 @@
 | `GET /campaigns/{id}/story` | `CampaignStoryResponse` |
 | `GET /campaigns/{id}/diagnostics` | `CampaignDiagnosticsResponse`（`narration: NarrationHealth`） |
 | `GET /campaigns/{id}/snapshots` | `List[SnapshotView]` |
-| `GET /campaigns/{id}/snapshots/prune` | `SnapshotPruneResponse` |
+| `DELETE /campaigns/{id}/snapshots/prune` | `SnapshotPruneResponse`（会改动状态，只在启用 `ENGINE_DEBUG_TOOLS` 时暴露，未启用返回 403） |
 | `GET /campaigns/{id}/state-diff` | `StateDiffResponse` |
 | `POST /campaigns/{id}/rollback` | `RollbackResponse` |
 | `POST /campaigns/{id}/repair` | `RepairResponse` |

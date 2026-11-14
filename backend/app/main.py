@@ -35,12 +35,14 @@ except Exception:  # noqa: BLE001 - a broken credential row must not stop boot
 
 app = FastAPI(title="Project Lunar", version="0.5.0")
 
-# 允许的来源：vite dev（5173）、静态托管（4173），以及桌面壳的 tauri://localhost。
-# 需要额外来源时用 LUNAR_CORS_ORIGINS（逗号分隔）追加，桌面壳就是这样起后端的。
+# 允许的来源：vite dev（5173）与 vite preview（4173），localhost 和 127.0.0.1 两种写法
+# 都算——它们的差异只体现在 Origin 头里，漏一个就会让另一种访问方式被浏览器拦下。
+# 这里只列环回地址：本引擎默认监听本机，任何外网来源都必须显式写进 LUNAR_CORS_ORIGINS。
+# 桌面壳用 tauri://localhost，也是通过它追加进来的。
 _CORS_ORIGINS = [
     "http://localhost:5173",
-    "http://localhost:3000",
     "http://127.0.0.1:5173",
+    "http://localhost:4173",
     "http://127.0.0.1:4173",
 ] + [o.strip() for o in os.environ.get("LUNAR_CORS_ORIGINS", "").split(",") if o.strip()]
 
@@ -66,6 +68,13 @@ async def api_token_guard(request: Request, call_next):
 
     Off unless API_TOKEN is set. The health probe stays public so process
     supervisors and load balancers can check liveness without a secret.
+
+    Known limit: when the gate is off, anything that can open a TCP connection
+    to this port drives the engine - read every campaign, switch models, spend
+    provider credit. CORS does not help: it only constrains browsers, and only
+    when the request carries an Origin. That is why the documented bind is
+    127.0.0.1; binding 0.0.0.0 without also setting API_TOKEN publishes all of
+    it to the network.
     """
     token = os.environ.get("API_TOKEN", "").strip()
     if request.method == "OPTIONS":
@@ -85,6 +94,30 @@ async def api_token_guard(request: Request, call_next):
         if not hmac.compare_digest(supplied, token):
             return JSONResponse(status_code=401, content={"detail": "unauthorized"})
     return await call_next(request)
+
+# ---------------------------------------------------------------------------
+# Single-process contract
+#
+# The engine is designed to run as ONE backend process. That is a deliberate
+# architectural choice, not a deployment accident, and nothing enforces it at
+# the socket level - so it is recorded here:
+#
+#   * game_session `_sessions` is a module-level dict: the live session of a
+#     campaign exists only in the memory of the process that created it;
+#   * the long-term recap and the narration records are appended after the
+#     commit by the same request that narrated them;
+#   * the SQLite store guards writes with an in-process lock plus a version
+#     compare-and-set, which serialises writers inside one process. SQLite
+#     still serialises across processes, but two backends would each hold their
+#     own session dict and their own provider client pool and would fight over
+#     ``events.db`` and the legacy mirror.
+#
+# Running with ``uvicorn --workers N`` (or behind multiple replicas) therefore
+# produces split-brain sessions: a player can be in a different process on
+# every request. launch.py starts exactly one worker; the note exists so nobody
+# turns on multi-worker mode to "scale" without building shared session state
+# first.
+# ---------------------------------------------------------------------------
 
 # Windows registry often lacks these; StaticFiles would fall back to text/plain.
 mimetypes.add_type("image/webp", ".webp")
@@ -317,7 +350,7 @@ def save_provider(provider: str, req: ProviderCredentialRequest):
 @app.delete("/api/providers/{provider}")
 def forget_provider(provider: str):
     """Drop a stored credential; the shell environment (if any) takes over again."""
-    from app.db.credential_store import CredentialStore, PROVIDERS, status
+    from app.db.credential_store import CredentialStore, PROVIDERS, apply_credentials, status
 
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
@@ -326,6 +359,9 @@ def forget_provider(provider: str):
         store.delete(provider)
     finally:
         store.close()
+    # Put back whatever .env / the shell supplied before the UI wrote anything.
+    # Skipping this left the just-deleted key sitting in os.environ.
+    apply_credentials()
     return {"status": "ok", "providers": status()}
 
 

@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.db.game_state_store import GameStateStore
+from app.db.game_state_store import GameStateStore, StateConflictError
 from app.db.scenario_store import ScenarioStore
 from app.engines.action_registry import all_actions, get_action
 from app.engines.event_engine import diff_states, simulate_event, validate_event
@@ -217,7 +217,15 @@ def _history_provider():
         try:
             with _get_store() as store:
                 bound = store.get_state(campaign_id) is not None
-                events = store.narrative_history(campaign_id, limit=HISTORY_TURNS) if bound else []
+                # One committed request is projected as two records (the action
+                # and the prose), so a request limit of HISTORY_TURNS keeps only
+                # HISTORY_TURNS // 2 turns of thread. Ask for twice as many rows
+                # to end up with the turn count the renderer will keep.
+                events = (
+                    store.narrative_history(campaign_id, limit=HISTORY_TURNS * 2)
+                    if bound
+                    else []
+                )
             if not bound:
                 db_path = os.environ.get("EVENT_DB_PATH", os.path.join(_BACKEND_DIR, "events.db"))
                 legacy = EventStore(db_path)
@@ -225,7 +233,7 @@ def _history_provider():
                     events = legacy.get_recent(campaign_id, limit=HISTORY_TURNS * 2)
                 finally:
                     legacy.close()
-            note = render_history_note(events, limit=HISTORY_TURNS)
+            note = render_history_note(events, limit=HISTORY_TURNS * 2)
         except Exception as exc:  # noqa: BLE001 - recap is optional
             logger.warning("history recap unavailable for %s: %s", campaign_id, exc)
             return []
@@ -382,6 +390,16 @@ class GenerateWorldRequest(BaseModel):
     preset_id: str = ""
     language: str = "中文"
 
+
+def _state_conflict(exc: StateConflictError) -> HTTPException:
+    """Report a lost compare-and-set as 409 instead of letting it become a 500.
+
+    Both debug write paths (/rollback, /repair) read the state, mutate it in
+    memory, then write it back with the version they started from. When a turn
+    commits in between, the write is refused — and the caller must be told the
+    state moved on, not handed an internal error.
+    """
+    return HTTPException(status_code=409, detail=str(exc))
 
 def _debug_tools_enabled() -> bool:
     """Whether state-mutating debug endpoints (rollback, repair) may run.
@@ -1641,9 +1659,15 @@ def campaign_snapshots(campaign_id: str, limit: int = Query(100, ge=1, le=500)):
         store.close()
 
 
-@router.get("/campaigns/{campaign_id}/snapshots/prune", response_model=SnapshotPruneResponse)
+@router.delete("/campaigns/{campaign_id}/snapshots/prune", response_model=SnapshotPruneResponse)
 def campaign_snapshots_prune(campaign_id: str):
-    """Drop old snapshots by hand (same policy the commit path applies)."""
+    """Drop old snapshots by hand (same policy the commit path applies).
+
+    DELETE, not GET: this destroys rows, and a GET is fired by link prefetching,
+    crawlers and browser history. Guarded like rollback/repair — it used to be
+    the only state-mutating endpoint without _require_debug_tools().
+    """
+    _require_debug_tools()
     store = _get_store()
     try:
         dropped = store.prune_snapshots(campaign_id)
@@ -1739,7 +1763,17 @@ def campaign_rollback(campaign_id: str, body: RollbackRequest):
             },
             "state_version": restored.version,
         }
-        game_store.commit_rollback(campaign_id=campaign_id, state=restored, events=[event])
+        # Pass the version we based this rollback on: a concurrent turn that lands
+        # between get_state() above and this write must not be silently overwritten.
+        try:
+            game_store.commit_rollback(
+                campaign_id=campaign_id,
+                state=restored,
+                events=[event],
+                expected_version=current.version,
+            )
+        except StateConflictError as exc:
+            raise _state_conflict(exc) from exc
         return {
             "status": "rolled_back",
             "restored_version": body.version,
@@ -1780,9 +1814,18 @@ def campaign_repair(campaign_id: str, body: RepairRequest):
             "payload": {"from_version": state.version, "applied": applied},
             "state_version": repaired.version,
         }
-        game_store.commit_rollback(
-            campaign_id=campaign_id, state=repaired, events=[event]
-        )
+        # Same compare-and-set as rollback: repair reads the state, mutates it in
+        # memory and writes it back, so a turn that commits meanwhile must make
+        # this fail loudly instead of being overwritten.
+        try:
+            game_store.commit_rollback(
+                campaign_id=campaign_id,
+                state=repaired,
+                events=[event],
+                expected_version=state.version,
+            )
+        except StateConflictError as exc:
+            raise _state_conflict(exc) from exc
         remaining = state_diagnostics.check_state(world, repaired, storyline, mode)
         return {
             "status": "repaired",

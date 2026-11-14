@@ -46,11 +46,17 @@ export const useGameStore = create((set) => ({
   // Actions
   setScenarios: (scenarios) => set({ scenarios }),
   setActiveScenario: (scenario) => {
-    try { localStorage.setItem('lunar_activeScenario', JSON.stringify(scenario)) } catch {}
+    try { localStorage.setItem('lunar_activeScenario', JSON.stringify(scenario)) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
     return set({ activeScenario: scenario })
   },
   setActiveCampaignId: (id) => {
-    try { localStorage.setItem('lunar_activeCampaignId', id) } catch {}
+    try { localStorage.setItem('lunar_activeCampaignId', id) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
     return set({ activeCampaignId: id })
   },
   setStreaming: (isStreaming) => set({ isStreaming }),
@@ -71,7 +77,10 @@ export const useGameStore = create((set) => ({
   appendMessage: (msg) =>
     set((s) => {
       const updated = [...s.messages, msg]
-      try { localStorage.setItem('lunar_messages', JSON.stringify(updated)) } catch {}
+      try { localStorage.setItem('lunar_messages', JSON.stringify(updated)) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
       return { messages: updated }
     }),
 
@@ -84,7 +93,10 @@ export const useGameStore = create((set) => ({
       } else {
         messages.push({ role: 'assistant', content: chunk })
       }
-      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {}
+      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
       return { messages }
     }),
 
@@ -94,7 +106,10 @@ export const useGameStore = create((set) => ({
       for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'assistant') {
           messages[i] = { ...messages[i], image }
-          try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {}
+          try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
           return { messages }
         }
       }
@@ -110,7 +125,10 @@ export const useGameStore = create((set) => ({
           break
         }
       }
-      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {}
+      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
       return { messages }
     }),
 
@@ -125,12 +143,18 @@ export const useGameStore = create((set) => ({
       if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
         messages.pop()
       }
-      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {}
+      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
       return { messages }
     }),
 
   clearMessages: () => {
-    try { localStorage.removeItem('lunar_messages') } catch {}
+    try { localStorage.removeItem('lunar_messages') } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
     return set({ messages: [] })
   },
 
@@ -155,7 +179,10 @@ export const useGameStore = create((set) => ({
       const current = JSON.parse(localStorage.getItem('lunar_settings') || '{}')
       const merged = normalizeSettings({ ...current, ...normalized })
       localStorage.setItem('lunar_settings', JSON.stringify(merged))
-    } catch {}
+    } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
     return set(normalized)
   },
 
@@ -193,7 +220,10 @@ export const useGameStore = create((set) => ({
       localStorage.removeItem('lunar_activeScenario')
       localStorage.removeItem('lunar_activeCampaignId')
       localStorage.removeItem('lunar_messages')
-    } catch {}
+    } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
     set({ activeScenario: null, activeCampaignId: null, messages: [], journal: [], inventory: [], traces: [], lastUsage: null })
   },
 
@@ -214,7 +244,10 @@ export const useGameStore = create((set) => ({
         if (s.refusalFallback != null) restored.refusalFallback = s.refusalFallback
         if (Object.keys(restored).length > 0) set(restored)
       }
-    } catch {}
+    } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
   },
 
   /**
@@ -242,7 +275,10 @@ export const useGameStore = create((set) => ({
       try {
         const current = JSON.parse(localStorage.getItem('lunar_settings') || '{}')
         localStorage.setItem('lunar_settings', JSON.stringify({ ...current, ...restored }))
-      } catch {}
+      } catch {
+      /* localStorage can be full, disabled or blocked in a private window; the
+         in-memory store is the source of truth and keeps working. */
+    }
       return true
     } catch {
       return false

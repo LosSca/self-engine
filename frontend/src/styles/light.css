@@ -77,6 +77,8 @@ html[data-theme="light"] .bg-white\/20 { background-color: rgba(26, 26, 26, 0.10
 html[data-theme="light"] .text-white { color: #1a1a1a; }
 html[data-theme="light"] .text-gray-400 { color: #5c554e; }
 html[data-theme="light"] .text-white\/30 { color: rgba(26, 26, 26, 0.51); }
+/* /35 is used by ActionPreviewPanel、DevtoolsPanel、StoryProgressPanel；缺映射时浅色主题保持近白，读不出来 */
+html[data-theme="light"] .text-white\/35 { color: rgba(26, 26, 26, 0.55); }
 html[data-theme="light"] .border-white\/10 { border-color: rgba(26, 26, 26, 0.13); }
 html[data-theme="light"] .text-white\/60 { color: rgba(26, 26, 26, 0.72); }
 html[data-theme="light"] .text-white\/40 { color: rgba(26, 26, 26, 0.58); }
