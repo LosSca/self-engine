@@ -18,11 +18,14 @@ separate, explicit step, so tests can assert exactly what the model would see.
 """
 from __future__ import annotations
 
-import math
-import re
-from typing import Dict, Iterable, List, Optional, Sequence
+import os
+from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 from app.engines.story_engine import validate_storyline
+from app.services.retrieval.query_builder import build_scene_query
+from app.services.retrieval.reranker import build_signals
+from app.services.retrieval.retrieval_service import RetrievalService
+from app.services.retrieval.tokenizer import tokenize_text
 from app.models.game import GameState, WorldDefinition
 from app.models.knowledge import (
     LAYER_ORDER,
@@ -39,44 +42,42 @@ from app.models.knowledge import (
 
 DEFAULT_MAX_DEPTH = 9
 
-_WORD_RE = re.compile(r"[a-z0-9_]+")
-_CJK_RE = re.compile(r"[一-鿿]")
+#: The lexical channel is a plug: BM25 today, anything else later. Ranking is
+#: no longer done here, so a deployment can swap the retriever without editing
+#: this module, and the evaluation harness can compare two retrievers on the
+#: same corpus.
+_LEXICAL_RETRIEVER = "bm25"
+
+#: Builds a semantic channel for one corpus. Injected rather than imported so
+#: this module stays importing-neither-network-nor-model, and a caller that has
+#: no embedding backend simply passes None.
+VectorRetrieverFactory = Callable[
+    [Sequence[str], Sequence[str]], Optional[object]
+]
+
+
+def default_vector_retriever_factory(
+    documents: Sequence[str], doc_ids: Sequence[str], metadata: Optional[Sequence[Dict[str, object]]] = None
+):
+    """The process-wide semantic channel, or None when embeddings are off.
+
+    Kept lazy: importing an embedding backend at module import time would make
+    every process pay for a feature most of them do not use, and would make the
+    tests depend on an optional package.
+    """
+    if not os.environ.get("ENGINE_EMBEDDING_PROVIDER", "").strip() and not (
+        os.environ.get("OPENAI_API_KEY", "").strip()
+        or os.environ.get("CUSTOM_LLM_API_KEY", "").strip()
+    ):
+        return None
+    from app.services.retrieval_embedding import build_vector_channel
+
+    return build_vector_channel(documents, doc_ids, metadata)
 
 
 def _tokens(text: str) -> List[str]:
-    """Words plus CJK characters and bigrams: a tiny sparse-vector tokenizer."""
-    lowered = (text or "").casefold()
-    words = _WORD_RE.findall(lowered)
-    cjk = _CJK_RE.findall(lowered)
-    bigrams = ["".join(pair) for pair in zip(cjk, cjk[1:])]
-    return words + cjk + bigrams
-
-
-def _cosine(query_tokens: List[str], doc_tokens: List[str], idf: Dict[str, float]) -> float:
-    if not query_tokens or not doc_tokens:
-        return 0.0
-    q: Dict[str, float] = {}
-    d: Dict[str, float] = {}
-    for token in query_tokens:
-        q[token] = q.get(token, 0.0) + 1.0
-    for token in doc_tokens:
-        d[token] = d.get(token, 0.0) + 1.0
-    dot = sum(
-        (count / len(query_tokens)) * (d[token] / len(doc_tokens)) * idf.get(token, 0.0)
-        for token, count in q.items()
-        if token in d
-    )
-    if dot <= 0:
-        return 0.0
-    q_norm = math.sqrt(
-        sum((count / len(query_tokens)) ** 2 * idf.get(token, 0.0) ** 2 for token, count in q.items())
-    )
-    d_norm = math.sqrt(
-        sum((count / len(doc_tokens)) ** 2 * idf.get(token, 0.0) ** 2 for token, count in d.items())
-    )
-    if q_norm == 0 or d_norm == 0:
-        return 0.0
-    return dot / (q_norm * d_norm)
+    """Tokens of one text, using the shared mixed-script tokenizer."""
+    return tokenize_text(text)
 
 
 def _layer_rank(layer: str) -> int:
@@ -98,6 +99,7 @@ def build_context(
     focus: Optional[Sequence[str]] = None,
     budget_chars: int = 0,
     query: str = "",
+    vector_retriever: Optional[VectorRetrieverFactory] = None,
 ) -> KnowledgeContext:
     """Select and order the knowledge entries visible for one turn.
 
@@ -112,8 +114,6 @@ def build_context(
     whole.
     """
     max_depth = max(0, min(9, int(max_depth)))
-    query_text = " ".join([query or "", *(str(item) for item in (focus or []))]).strip()
-    query_tokens = _tokens(query_text)
     focus_tokens = {
         str(item).strip().casefold() for item in (focus or []) if str(item).strip()
     }
@@ -182,48 +182,77 @@ def build_context(
         )
     # Only the entries that survived the filters are ranked: a disabled or
     # out-of-scope entry can neither be injected nor influence the IDF weights
-    # of the ones that can.
+    # of the ones that can. The retriever owns scoring; this function owns the
+    # order the author asked for, which the reranker applies as a tiebreak.
     by_id: Dict[str, KnowledgeEntry] = {entry.id: entry for entry in entries}
     ranked_ids = [block.entry_id for block in blocks]
-    doc_tokens = {
-        entry_id: _tokens(
-            " ".join([by_id[entry_id].title, by_id[entry_id].content, *by_id[entry_id].tags])
-        )
+    documents = [
+        " ".join([by_id[entry_id].title, by_id[entry_id].content, *by_id[entry_id].tags])
         for entry_id in ranked_ids
-    }
-    document_count = max(1, len(doc_tokens))
-    document_frequency: Dict[str, int] = {}
-    for tokens in doc_tokens.values():
-        for token in set(tokens):
-            document_frequency[token] = document_frequency.get(token, 0) + 1
-    idf = {
-        token: math.log((document_count + 1) / (frequency + 1)) + 1.0
-        for token, frequency in document_frequency.items()
-    }
-    scores = {
-        entry_id: _cosine(query_tokens, tokens, idf)
-        for entry_id, tokens in doc_tokens.items()
-    }
-
-    def _focus_hits(entry: KnowledgeEntry) -> int:
-        if not focus_tokens:
-            return 0
-        return len({tag.strip().casefold() for tag in entry.tags} & focus_tokens)
-
-    def _sort_key(block: KnowledgeBlock):
-        entry = by_id[block.entry_id]
-        boosted = 0 if block.entry_id in boost_ids else 1
-        return (
-            boosted,
-            -_focus_hits(entry),
-            -round(scores.get(block.entry_id, 0.0), 6),
-            _layer_rank(block.layer),
-            entry.depth,
-            entry.sort_order,
-            block.title,
+    ]
+    focus_names = [str(item) for item in (focus or [])]
+    scene_query = build_scene_query(
+        player_input=query or "",
+        focus=focus_names,
+    )
+    # The semantic channel is offered, not assumed: `vector_retriever` is None
+    # whenever no embedding backend is configured, and the pipeline then runs
+    # lexically and says so in `stats.retrieval_degraded`.
+    vector_channel = None
+    if vector_retriever is not None and documents:
+        vector_channel = vector_retriever(
+            documents,
+            ranked_ids,
+            metadata=[
+                {"tags": list(by_id[entry_id].tags), "title": by_id[entry_id].title}
+                for entry_id in ranked_ids
+            ],
         )
-
-    blocks.sort(key=_sort_key)
+    fused, trace = RetrievalService().retrieve(
+        documents,
+        ranked_ids,
+        scene_query,
+        signals=build_signals(
+            pinned=[entry_id for entry_id in ranked_ids if entry_id in boost_ids],
+            focus=focus_names,
+            depth={entry_id: by_id[entry_id].depth for entry_id in ranked_ids},
+            layer_rank={block.entry_id: _layer_rank(block.layer) for block in blocks},
+        ),
+        vector=vector_channel,
+        final_limit=max(1, len(ranked_ids)),
+    )
+    retriever = fused
+    # Entries without a retrieval hit still belong in the list (the depth chain,
+    # not the query, decides visibility); they rank below every hit, in the
+    # author's own order. A zero-hit context is a legitimate state - an empty
+    # query, or a world whose entries share no word with the scene.
+    if fused:
+        order = [doc.doc_id for doc in fused]
+        missing = [entry_id for entry_id in ranked_ids if entry_id not in set(order)]
+        missing.sort(key=lambda entry_id: (
+            0 if entry_id in boost_ids else 1,
+            _layer_rank(by_id[entry_id].layer),
+            by_id[entry_id].depth,
+            by_id[entry_id].sort_order,
+            by_id[entry_id].title,
+        ))
+        order = order + missing
+    else:
+        order = sorted(
+            ranked_ids,
+            key=lambda entry_id: (
+                0 if entry_id in boost_ids else 1,
+                _layer_rank(by_id[entry_id].layer),
+                by_id[entry_id].depth,
+                by_id[entry_id].sort_order,
+                by_id[entry_id].title,
+            ),
+        )
+    blocks_by_id = {block.entry_id: block for block in blocks}
+    blocks = [blocks_by_id[entry_id] for entry_id in order]
+    #: Provenance of each block, so a debugger can tell "ranked by BM25" from
+    #: "kept only because the depth chain wanted it".
+    retrieval_provenance = {doc.doc_id: doc.provenance for doc in fused}
 
     if budget_chars and budget_chars > 0:
         kept: List[KnowledgeBlock] = []
@@ -259,6 +288,16 @@ def build_context(
             excluded=excluded,
             layer_counts=counts,
             max_depth=max_depth,
+            retrieval_channels=dict(trace.channels),
+            retrieval_degraded=[
+                *trace.degraded,
+                *([_LEXICAL_RETRIEVER] if ranked_ids and not trace.channels else []),
+                *(
+                    ["vector:not_configured"]
+                    if ranked_ids and vector_retriever is None
+                    else []
+                ),
+            ],
         ),
         story_node=story_node,
         story_nodes=list(candidates),

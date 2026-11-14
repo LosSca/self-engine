@@ -543,17 +543,26 @@ class ActionService:
                 blocks.extend(
                     dict(block, kind="canon") for block in context.prompt_blocks()
                 )
-            except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
-                # Keep the long-term summary already collected above; a broken
-                # authored context must not erase memory from the prompt.
-                pass
+            except (ValueError, TypeError, KeyError, AttributeError, LookupError) as exc:
+                # Knowledge is advisory, never fatal: keep the long-term
+                # summary already collected above. But it is logged now - the
+                # previous bare `pass` hid real bugs behind a silently shorter
+                # prompt, which is indistinguishable from "the author wrote no
+                # entries".
+                logger.warning(
+                    "knowledge context skipped for scenario %s: %s",
+                    getattr(play, "scenario_id", ""),
+                    exc,
+                )
         #: Committed history is a separate channel from authored canon: it is
         #: written by the engine after each turn, never by the player or an editor,
         #: and the narrator is told it is a record rather than an instruction.
         if state is not None and provider is not None:
             try:
                 history = provider(state.campaign_id, state) or []
-            except Exception:  # noqa: BLE001 - a broken log must not fail a turn
+            except (ValueError, TypeError, KeyError, AttributeError, LookupError) as exc:
+                # A broken log must not fail a turn, but it must be visible.
+                logger.warning("history provider failed for %s: %s", state.campaign_id, exc)
                 history = []
             for block in history:
                 # Code-written records (the request log, the committed recap)

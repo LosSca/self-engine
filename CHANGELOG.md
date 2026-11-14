@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `services/game_session.py` 从 3513 行降到 3121 行：历史重建（`_rebuild_*`、`rewind`）拆到
+  `services/session_rebuild.py`，静态 prompt 块拆到 `services/prompt_blocks.py`，仍是同一个
+  命名空间（mixin），测试里对 `session._xxx` 的访问不受影响。
+- 知识/记忆/叙事链路上的 `except Exception: pass` 收窄到具体异常类型并记日志，失败不再是静默的。
+
 ### Fixed
 
 - **启动器不再把浏览器指到别人的页面上**：以前只要 5173 端口有人监听，`launch.py` 就判定
@@ -14,6 +21,16 @@
 
 ### Added
 
+- **检索分四层**：`backend/app/services/retrieval/` 把知识/记忆/图谱召回拆成确定性过滤 → BM25 →
+  向量 → 图谱，再用 RRF 融合、跨层重排。中英用同一套分词器（中文切二元组），修掉了
+  `memory_engine` 旧关键词正则只认拉丁字母、中文查询得到空集的 bug；图谱召回改为按实体查询，
+  不再拿事件流尾部整段文本去匹配。向量召回默认关闭，设 `ENGINE_EMBEDDING_PROVIDER`
+  （`openai` / `custom` / `local`）与 `ENGINE_EMBEDDING_MODEL` 开启，向量缓存在 SQLite，
+  换模型指纹自动重建。某个通道失败只会写进 `ContextStats.retrieval_degraded` 并显示在调试面板。
+- **旧链路开始日落**：`POST /api/game/{id}/action` 只有规则链路一条自动路径，没绑定世界的战役返回
+  409 并说明「重新绑定世界，或传 `compat_mode: true`」，不再静默切到旧 LLM 执行分支；面板读取
+  （历史/日志/背包/NPC 心智/角色名册/记忆晶体/图谱搜索/回退）改为只读投影，不再为读一次而重建
+  `GameSession`。
 - **在设置里直接填模型密钥**（设置 → 「模型」→ API 密钥）：DeepSeek / OpenAI / Anthropic 只填 Key，
   本地或自建兼容接口再填地址（例如 `http://127.0.0.1:11434/v1`）。密钥存进本机 sqlite，写进
   `os.environ` 供 litellm 使用，接口只回显末四位；「测试连接」会真发一句 completion，失败就把

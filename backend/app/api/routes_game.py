@@ -35,6 +35,8 @@ from app.db.event_store import EventStore, EventType
 from app.db.game_state_store import GameStateStore
 from app.db.scenario_store import ScenarioStore
 from app.db.trace_store import TraceStore
+from app.services import compat_views
+from app.services.retrieval.graph_query import build_graph_query
 from app.services.action_service import ActionService
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services.text_action_service import TextActionService
@@ -216,7 +218,8 @@ def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
                             Condition(kind="entity_alive", target=entity.id),
                         ):
                             focus.append(entity.id)
-        except Exception:  # noqa: BLE001 - focus is advisory
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:  # focus is advisory
+            logger.info("knowledge focus unavailable: %s", exc)
             focus = []
         context = build_context(
             entries,
@@ -313,6 +316,39 @@ def _journal_for(campaign_id: str) -> JournalEngine:
     a rebuild would drop entries logged in this process but not yet persisted.
     """
     return _ensure_session(campaign_id)._journal
+
+def _npc_mind_engine(campaign_id: str) -> NpcMindEngine:
+    """The mind engine holding `campaign_id`'s minds, rebuilt from stored thoughts.
+
+    The panel endpoints used to reach through a live GameSession for this. A mind
+    engine is just a dict of minds plus an LLM handle, and every thought is
+    persisted as an NPC_THOUGHT event, so a panel can rebuild the same state
+    without constructing the retired session.
+    """
+    session = _sessions.get(campaign_id)
+    if session is not None:
+        return session._npc_minds
+    engine = NpcMindEngine(llm=_llm)
+    latest: dict[str, dict] = {}
+    for event in _event_store.get_by_type(campaign_id, EventType.NPC_THOUGHT):
+        name = event.payload.get("name", "")
+        if name:
+            latest[name] = event.payload
+    for name, payload in latest.items():
+        mind = engine._ensure_mind(campaign_id, name)
+        for alias in payload.get("aliases", []):
+            if alias.lower() not in [a.lower() for a in mind.aliases]:
+                mind.aliases.append(alias)
+        for key, raw in payload.get("thoughts", {}).items():
+            value = raw.get("value") if isinstance(raw, dict) else raw
+            if value:
+                mind.set_thought(
+                    key,
+                    str(value),
+                    current_turn=int(raw.get("created_at_turn", 0) or 0) if isinstance(raw, dict) else 0,
+                )
+    return engine
+
 
 def _ensure_session(campaign_id: str) -> GameSession:
     """Get or create a GameSession, ensuring all in-memory state is rebuilt.
@@ -474,16 +510,24 @@ class PlayerActionRequest(BaseModel):
     #: lane binds the reaction to it; the narrator lane gets it as a directive.
     target_id: str = Field(default="", max_length=64)
     target_name: str = Field(default="", max_length=200)
+    #: Explicit opt-in to the retired legacy lane. It exists only for a saved
+    #: campaign whose world can no longer be provisioned; it is never chosen
+    #: automatically, so a campaign cannot change its fact authority by itself.
+    compat_mode: bool = False
 
 
 # ---------------------------------------------------------------- unified lane
 # The chat surface (/api/game/action) and the structured surface
-# (/api/v1/campaigns/{id}/actions) share ONE authority: ActionService. When a
-# campaign has a rules world, a typed utterance is parsed into the same
-# ActionRequest, decided by the same rule engine, committed in the same
-# transaction and only then narrated. Campaigns without a world keep the legacy
-# LLM-driven session, where prose can no longer mutate items (see
-# app/engines/item_proposals.py).
+# (/api/v1/campaigns/{id}/actions) share ONE authority: ActionService. A typed
+# utterance is parsed into the same ActionRequest, decided by the same rule
+# engine, committed in the same transaction and only then narrated.
+#
+# Sunset status (see app/services/game_session.py): GameSession.process_action
+# is a RETIRED compatibility lane. It is reachable only when the client sends
+# `compat_mode: true`, which exists for a saved campaign whose world cannot be
+# provisioned. It is never selected automatically: the silent fallback was
+# removed because it let one campaign be judged by two different fact models
+# depending on whether a world happened to be bound.
 
 
 def _context_window_quietly(campaign_id: str) -> str:
@@ -560,10 +604,27 @@ def _knowledge_provider_for(scenario_store: ScenarioStore, campaign_id: str):
     return provider
 
 
+class RulesLaneUnavailable(RuntimeError):
+    """Raised when a campaign cannot be served by the rules lane at all.
+
+    The message is the user-facing explanation: it is turned into a 409 by the
+    action endpoint so the client can offer `compat_mode` explicitly instead
+    of silently receiving a different game.
+    """
+
+
 def _unified_service(req: PlayerActionRequest):
-    """Build the rules-lane service, or None when the campaign has no world."""
-    game_store = GameStateStore(_game_state_db_path())
+    """Build the rules lane, or raise :class:`RulesLaneUnavailable`.
+
+    Every campaign plays through the rules engine. The old behaviour here was a
+    silent `return None` for campaigns without a world, which made
+    `POST /api/game/action` fall through to the legacy LLM session: the same
+    utterance was then judged by two different systems depending on whether a
+    world happened to be bound. That switch is gone - a campaign that cannot be
+    bound is reported, never quietly downgraded.
+    """
     scenario_store = ScenarioStore(_scenario_db_path())
+    game_store = GameStateStore(_game_state_db_path())
     try:
         service = TextActionService(game_store, scenario_store=scenario_store)
         state = game_store.get_state(req.campaign_id)
@@ -584,23 +645,32 @@ def _unified_service(req: PlayerActionRequest):
             except LookupError:
                 world = None
         if world is None:
-            game_store.close()
-            scenario_store.close()
-            return None
+            raise RulesLaneUnavailable(
+                "This campaign has no rules world and none could be provisioned. "
+                "Logs, crystals and journal stay readable; to keep playing, rebind "
+                "a world in the scenario editor, or resend the action with "
+                "compat_mode=true to run the retired legacy lane on purpose."
+            )
         service.action_service = ActionService(
             game_store,
             narrator=_unified_narrator(req.language or "zh", req.max_tokens),
             context_provider=_knowledge_provider_for(scenario_store, req.campaign_id),
         )
         return service, scenario_store
-    except Exception:
+    except RulesLaneUnavailable:
+        game_store.close()
+        scenario_store.close()
+        raise
+    except (LookupError, ValueError, OSError, RuntimeError) as exc:
         game_store.close()
         scenario_store.close()
         logger.warning(
-            "Unified action lane unavailable for campaign %s", req.campaign_id,
+            "Rules lane could not start for campaign %s: %s", req.campaign_id, exc,
             exc_info=True,
         )
-        return None
+        raise RulesLaneUnavailable(
+            f"The rules engine could not start for this campaign ({type(exc).__name__}: {exc})."
+        ) from exc
 
 
 def _mirror_unified_turn(req, before, result: dict) -> None:
@@ -685,14 +755,12 @@ def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, st
         entity_id = getattr(value, "entity_id", None) or getattr(value, "id", None) or ""
         people.append((text, entity_id if isinstance(entity_id, str) else ""))
 
-    # Minds live on the session (they are rebuilt from events on demand); an
-    # engine built here would be empty by construction.
+    # Minds are rebuilt from stored thoughts, so this works without a session.
     try:
-        session = _sessions.get(campaign_id) or _ensure_session(campaign_id)
-        for mind in session._npc_minds.get_all_minds(campaign_id):
+        for mind in _npc_mind_engine(campaign_id).get_all_minds(campaign_id):
             add(mind)
-    except Exception:
-        logger.debug("NPC minds unavailable for %s", campaign_id, exc_info=True)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        logger.debug("NPC minds unavailable for %s: %s", campaign_id, exc)
 
     try:
         with ScenarioStore(_scenario_db_path()) as store:
@@ -905,12 +973,13 @@ async def player_action(req: PlayerActionRequest):
     _llm.config.temperature = req.temperature
     _llm.config.max_tokens = req.max_tokens
 
-    # A campaign that has a rules world plays through the unified lane: the
-    # utterance is parsed, decided and committed by the rule engine, and only
-    # then narrated. Campaigns without a world keep the legacy LLM session.
-    unified = _unified_service(req)
-    if unified is not None:
-        service, scenario_store = unified
+    # The rules lane is the only automatic path: the utterance is parsed,
+    # decided and committed by the rule engine, and only then narrated.
+    if not req.compat_mode:
+        try:
+            service, scenario_store = _unified_service(req)
+        except RulesLaneUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         # Drop the cached legacy session so returning to it rebuilds from events.
         _sessions.pop(req.campaign_id, None)
         return StreamingResponse(
@@ -918,6 +987,8 @@ async def player_action(req: PlayerActionRequest):
             media_type="text/event-stream",
         )
 
+    # Retired lane, reachable only through an explicit compat_mode request.
+    # Its prose can no longer mutate items: see app/engines/item_proposals.py.
     session = _ensure_session(req.campaign_id)
     # Update session with request-specific values that may differ per action.
     # The frontend may send the raw tone template — re-interpolate against the
@@ -1267,27 +1338,9 @@ async def regenerate_opening(campaign_id: str):
 
 @router.get("/{campaign_id}/history")
 async def get_history(campaign_id: str):
-    """Rebuild bound campaigns from engine records, never their legacy mirrors."""
+    """The transcript: engine records for a bound campaign, legacy log otherwise."""
     with GameStateStore(_game_state_db_path()) as store:
-        if store.get_state(campaign_id) is not None:
-            return {"messages": [
-                {
-                    "role": "user" if event["event_type"] == "PLAYER_ACTION" else "assistant",
-                    "content": event["payload"]["text"],
-                }
-                for event in store.narrative_history(campaign_id)
-            ]}
-    events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
-             _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
-    events.sort(key=lambda e: e.created_at)
-    messages = []
-    for ev in events:
-        text = ev.payload.get("text", "")
-        if ev.event_type == EventType.PLAYER_ACTION:
-            messages.append({"role": "user", "content": text})
-        else:
-            messages.append({"role": "assistant", "content": text})
-    return {"messages": messages}
+        return {"messages": compat_views.timeline_messages(store, _event_store, campaign_id)}
 
 
 @router.get("/{campaign_id}/traces")
@@ -1327,26 +1380,31 @@ async def rewind(campaign_id: str):
     if campaign_id in _sessions:
         _sessions[campaign_id].rewind()
 
-    # Return updated message history (same format as GET /history)
-    events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
-             _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
-    events.sort(key=lambda e: e.created_at)
-    messages = []
-    for ev in events:
-        text = ev.payload.get("text", "")
-        if ev.event_type == EventType.PLAYER_ACTION:
-            messages.append({"role": "user", "content": text})
-        else:
-            messages.append({"role": "assistant", "content": text})
+    # Same projection as GET /history, so the two can never disagree.
+    with GameStateStore(_game_state_db_path()) as store:
+        messages = compat_views.timeline_messages(store, _event_store, campaign_id)
     return {"messages": messages, "deleted": deleted}
 
 
 @router.get("/{campaign_id}/journal")
 async def get_journal(campaign_id: str, category: str | None = None):
-    # Journal reads stay pure: a rebuild would drop entries that were logged
-    # in this process but not (yet) persisted — including entries added by an
-    # in-flight session, which the player can already see in the UI. So read the
-    # live session when there is one, and only build one when there is not.
+    """Journal entries: derived from engine state, or the legacy journal.
+
+    A bound campaign has no legacy journal to rebuild - the rules lane records
+    domain events, not prose - so it gets a read-only projection of what the
+    authoritative state proves. Reading no longer constructs a GameSession,
+    which is what kept the retired lane alive for every page load.
+    """
+    with GameStateStore(_game_state_db_path()) as store:
+        state = store.get_state(campaign_id)
+        if state is not None:
+            world = store.get_world(state.world_id)
+            entries = compat_views.journal_entries(state, world)
+            if category:
+                entries = [entry for entry in entries if entry["category"] == category]
+            return entries
+    # Legacy campaigns keep the original live-session read: a rebuild would drop
+    # entries logged in this process but not yet persisted.
     if category:
         try:
             cat = JournalCategory(category)
@@ -1362,16 +1420,19 @@ async def get_journal(campaign_id: str, category: str | None = None):
 
 @router.get("/{campaign_id}/npc-minds")
 async def get_npc_minds(campaign_id: str):
-    _ensure_session(campaign_id)
-    minds = _ensure_session(campaign_id)._npc_minds.get_all_minds(campaign_id)
-    return [m.to_dict() for m in minds]
+    """Stored NPC minds.
+
+    Minds are written by the narrator side effect in both lanes, so this is a
+    read of stored data, not a projection: it no longer builds a GameSession
+    just to answer a panel.
+    """
+    return compat_views.npc_mind_rows(_npc_mind_engine(campaign_id).get_all_minds(campaign_id))
 
 
 @router.delete("/{campaign_id}/npc-minds/{npc_name}")
 async def delete_npc_mind(campaign_id: str, npc_name: str):
     """Delete an NPC mind from memory and event store."""
-    _ensure_session(campaign_id)
-    deleted = _ensure_session(campaign_id)._npc_minds.delete_mind(campaign_id, npc_name)
+    deleted = _npc_mind_engine(campaign_id).delete_mind(campaign_id, npc_name)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' not found")
     _event_store.delete_npc_thoughts(campaign_id, npc_name)
@@ -1381,10 +1442,10 @@ async def delete_npc_mind(campaign_id: str, npc_name: str):
 @router.put("/{campaign_id}/npc-minds/{npc_name}")
 async def update_npc_mind(campaign_id: str, npc_name: str, req: NpcMindUpdateRequest):
     """Update thoughts for an NPC mind."""
-    _ensure_session(campaign_id)
+    engine = _npc_mind_engine(campaign_id)
     mind = None
     for key, value in req.thoughts.items():
-        mind = _ensure_session(campaign_id)._npc_minds.update_thought(campaign_id, npc_name, key, value)
+        mind = engine.update_thought(campaign_id, npc_name, key, value)
     if not mind:
         raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' not found")
     # Persist updated thoughts to event store
@@ -1400,12 +1461,11 @@ async def get_characters(campaign_id: str, q: str = ""):
     Returns NPCs from NpcMindEngine + entities from GraphEngine (if available).
     Optional query parameter `q` filters by substring match.
     """
-    _ensure_session(campaign_id)
     characters: list[dict] = []
     seen_names: set[str] = set()
 
     # NPCs from mind engine (primary source — has thoughts and aliases)
-    for mind in _ensure_session(campaign_id)._npc_minds.get_all_minds(campaign_id):
+    for mind in _npc_mind_engine(campaign_id).get_all_minds(campaign_id):
         name_lower = mind.name.lower()
         if name_lower in seen_names:
             continue
@@ -1464,15 +1524,14 @@ async def get_characters(campaign_id: str, q: str = ""):
 
 @router.get("/{campaign_id}/memory-crystals")
 async def get_memory_crystals(campaign_id: str):
-    _ensure_session(campaign_id)
-    crystals = _memory.get_crystals(campaign_id)
+    """Crystal cards. Crystals live in the shared engine, not in a session."""
     return [
         {
             "tier": c.tier.value,
             "content": c.content,
             "event_count": c.event_count,
         }
-        for c in crystals
+        for c in _memory.get_crystals(campaign_id)
     ]
 
 
@@ -1558,27 +1617,15 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
 
 @router.get("/{campaign_id}/inventory")
 async def get_inventory(campaign_id: str):
+    """Authoritative inventory, projected into the panel's row shape."""
     with GameStateStore(_game_state_db_path()) as store:
         state = store.get_state(campaign_id)
         if state is not None:
             world = store.get_world(state.world_id)
             if world is None:
                 raise HTTPException(status_code=404, detail="Bound world not found")
-            definitions = {item.id: item for item in world.items}
-            return [
-                {
-                    "id": item_id,
-                    "name": definitions[item_id].name if item_id in definitions else item_id,
-                    "category": "misc",
-                    "source": definitions[item_id].description if item_id in definitions else "",
-                    "status": "carried",
-                    "quantity": quantity,
-                }
-                for item_id, quantity in state.inventory.items()
-                if quantity > 0
-            ]
-    _ensure_session(campaign_id)
-    items = _sessions[campaign_id]._inventory.get_inventory(campaign_id)
+            return compat_views.inventory_rows(state, world)
+    items = _ensure_session(campaign_id)._inventory.get_inventory(campaign_id)
     return [{"name": i.name, "category": i.category, "source": i.source, "status": i.status} for i in items]
 
 
@@ -1601,8 +1648,19 @@ async def update_inventory(campaign_id: str, req: InventoryActionRequest):
 
 @router.get("/{campaign_id}/graph-search")
 async def graph_search(campaign_id: str, q: str = ""):
+    """Relationship facts for a free-text question.
+
+    The graph channel only matches on names it indexed, so the question is
+    reduced to the entities it mentions before searching; passing the raw
+    sentence is what made this channel miss almost everything.
+    """
     if not q:
         return {"facts": []}
+    known = [c["name"] for c in _campaign_characters(campaign_id, limit=24)]
+    graph_query = build_graph_query(q, known)
+    # Entity names are what the graph can actually match on; a sentence with no
+    # recognised name keeps the raw text so the fallback scan still has input.
+    q = " ".join(graph_query.entities) or q
 
     facts: list[dict] = []
     engine = _get_graphiti_engine()

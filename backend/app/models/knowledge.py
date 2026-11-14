@@ -360,6 +360,13 @@ class ContextStats(BaseModel):
     excluded: List[ExcludedEntry] = Field(default_factory=list)
     layer_counts: Dict[str, int] = Field(default_factory=dict)
     max_depth: int = 9
+    #: Which retrieval channels actually ran for this context ("bm25",
+    #: "vector", "graph"), and how many candidates each returned. A panel can
+    #: show that semantics were unavailable instead of pretending they ran.
+    retrieval_channels: Dict[str, int] = Field(default_factory=dict)
+    #: Channels that were skipped or failed, with the reason. Never fatal: the
+    #: context is still assembled from the channels that did answer.
+    retrieval_degraded: List[str] = Field(default_factory=list)
 
 
 class KnowledgeContext(BaseModel):

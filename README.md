@@ -175,8 +175,16 @@ return handler(kind, state, world, effect)
 `backend/app/services/knowledge_service.py` 负责把"作者设定"喂给叙事层：
 
 - 分层、深度、上下文模式、剧情提升、聚焦标签、字符预算共同决定注入哪些条目。
-- 排序使用本地 **TF-IDF 余弦相似度**（英文词 + 中文字/二元组），不依赖 embedding 服务；
-  打分只对**通过过滤、真的会进 prompt** 的条目做，条目再多也不会退化成平方级排序。
+- 检索分四层（`backend/app/services/retrieval/`）：确定性过滤（模式/深度/受众/预算）→
+  **BM25** 词法召回（中英同一套分词器，中文切二元组）→ **多语言向量**语义召回（可选，
+  未配置 embedding 时整层跳过）→ **知识图谱**关系召回（可选，按实体而非整句查询），
+  三路结果用 **RRF** 融合，再由跨层重排按作者意图（剧情提升/聚焦标签/逐字命中/词项覆盖）定序；
+- 每个通道都可单独失败：失败的通道记进 `ContextStats.retrieval_degraded` 并显示在调试面板，
+  不再是"知识整块静默消失"；
+- 打分只对**通过过滤、真的会进 prompt** 的条目做，条目再多也不会退化成平方级排序。
+- 向量检索默认关闭；开启需设 `ENGINE_EMBEDDING_PROVIDER`（`openai` / `custom` / `local`）
+  与 `ENGINE_EMBEDDING_MODEL`，向量缓存放在 SQLite（`ENGINE_EMBEDDING_CACHE`，
+  默认 `ENGINE_STATE_DIR/embeddings.db`），换模型指纹会自动重建。
 - 知识条目可设 `audience_npc_ids`：只有当前在场且命中受众的 NPC 才会看到该条目。
 - 作者设定（canon）与已提交历史（history）走两条独立通道，防止模型把过去的叙事当成指令。
 
@@ -784,12 +792,24 @@ self-engine/
 | POST | `/worlds/{id}/authoring/propose` / `commit` | 对话式补全的提案与落盘 |
 | POST | `/worlds/{id}/evolution/propose`（含 `approve` / `reject`） | 世界演化 |
 
-### 旧聊天链路 `/api/game`（流式）
+### 旧聊天链路 `/api/game`（流式，正在日落）
 
 24 条路径：`action`（SSE 流）、`characters`、`clock`、`crystallize`、`generate`、
 `graph-search`、`history`、`inject-npc-seed`、`inventory`、`journal`、`memory-crystals`、
 `npc-minds`（含单条 PUT/DELETE）、`pause` / `resume`、`regenerate-opening`、`rewind`、
 `scenario-view`、`settings`、`setup-answers` / `setup-state`、`timeskip`、`traces`、`world-graph`。
+
+这些 URL 作为兼容层保留，但**背后的执行机制正在退役**：
+
+- 写入：`POST /api/game/{id}/action` 只有一条自动路径——规则链路（`TextActionService` →
+  `ActionService`）。没绑定世界的战役会拿到 409，响应里写明可以重新绑定规则世界，或传
+  `compat_mode: true` 显式进入旧会话；**不会再静默分流到旧 LLM 引擎**。
+- 读取：`history`、`journal`、`inventory`、`npc-minds`、`characters`、`memory-crystals`、
+  `graph-search`、`rewind` 已改成只读投影（`app/services/compat_views.py` 与共享引擎），
+  不再为了回答一个面板而重建 `GameSession`。
+- 旧存档的 `EventStore` 记录只作为**可读记录**保留，不会被当作已验证事实导入权威状态。
+- 仍待退役：`GameSession.process_action()` 本身（当前只经 `compat_mode` 可达）、
+  旧库存写入分支、`inject-npc-seed` / `timeskip` 对活动会话的依赖。
 
 这条链路默认不写权威状态（`LEGACY_APPLY_ITEM_TAGS=0`），用于未绑定世界的冒险。
 
@@ -892,7 +912,7 @@ cd frontend && npx eslint src && npm run build
 | 6 | 任务与故事线 | 可运行 | 玩家选择来自事件，而不是任务图内建节点 |
 | 7 | 物品与属性 | 部分 | 无独立交易面板；装备只加攻防 |
 | 8 | LLM 调度 | 部分 | 判定由确定性规则承担，没有 LLM judge |
-| 9 | 知识上下文 | 可运行 | 无 embedding 语义召回（只有 TF-IDF 稀疏相似度） |
+| 9 | 知识上下文 | 可运行 | 语义召回需自备 embedding 后端；默认只走 BM25 |
 | 10 | 记忆与历史 | 部分 | 无统一 NPC 知识库视图 |
 | 11 | 状态与存档 | 可运行 | — |
 | 12 | 模型配置 | 部分 | 超时/重试未按功能独立配置 |
@@ -900,8 +920,14 @@ cd frontend && npx eslint src && npm run build
 
 矩阵之外还有三处结构性缺口，同样来自审查文档：
 
-- **旧聊天链路待日落**：`LEGACY_APPLY_ITEM_TAGS` 默认 0，已不写权威状态，但代码与前端标记剥离逻辑仍在；
-  它与规则链路**两条写路径并存**，尚无日落计划。
+- **旧聊天链路正在日落**：`POST /api/game/action` 现在**只有规则链路一条自动路径**——
+  没有绑定世界的战役会返回 409 并说明原因，不再静默切到旧 LLM 执行分支；旧会话只能通过
+  `compat_mode: true` 显式指定。面板读取（历史 / 日志 / 背包 / NPC 心智 / 记忆晶体 / 角色名册 /
+  图谱搜索）已改为 `app/services/compat_views.py` 的只读投影，不再为了看一眼面板而重建
+  `GameSession`。规则链路已把历史重建与静态 prompt 块从 `services/game_session.py`
+  拆到 `session_rebuild.py` 与 `prompt_blocks.py`。剩余待办：旧存档的数据迁移（旧聊天记录
+  不当作已验证事实导入权威状态，只作为可读记录保留），以及在前端不再依赖旧状态写入接口后
+  删除 `GameSession.process_action()`。
 - **叙事语言**只支持中/英二选一；世界工坊未暴露 `language` 字段。
 - **作品库**是六部内置作品 + 可选模型补写，没有联网检索；**世界演化**只能新增，不能改字段或删除，
   故事线不在演化链路里；**角色路由**只有 narrative / system / memory 三个角色，不能按 NPC 单独分配模型。
@@ -909,7 +935,7 @@ cd frontend && npx eslint src && npm run build
 风险登记里的三条 P1：**服务默认无鉴权**（本机使用；需要共享时设 `API_TOKEN`，
 设置面板里填的令牌只存在当前标签页的 `sessionStorage`，关掉即失效）、
 **SQLite 单写者**（并发写会以版本冲突重试，不会静默覆盖）、
-**知识为词法相似度而非语义召回**。
+**语义召回依赖外部 embedding 服务**（未配置时自动退回 BM25，不会静默降质成空结果）。
 
 **后端只支持单进程运行。** `backend/app/api/routes_game.py:111` 的 `_sessions` 是进程内字典，
 挂载着每个战役的模型实例与内存态（`_ensure_session` 命中就直接复用），所以 `uvicorn --workers N`

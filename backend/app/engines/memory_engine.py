@@ -9,6 +9,8 @@ from enum import Enum
 from types import SimpleNamespace
 
 from app.db.event_store import EventStore, Event, EventType
+from app.services.retrieval.query_builder import build_graph_query, build_memory_query
+from app.services.retrieval.tokenizer import tokenize_text
 from app.utils.json_parsing import parse_json_dict
 
 logger = logging.getLogger(__name__)
@@ -30,11 +32,16 @@ _STOP_WORDS: set[str] = {
 
 
 def _extract_keywords(text: str) -> set[str]:
-    """Lowercase non-stop tokens of length >=3 from arbitrary text."""
+    """Query keywords, in whatever scripts the text uses.
+
+    The old version matched `[a-zA-ZÀ-ÿ]{3,}` only, so a Chinese query produced
+    an empty set and every crystal scored identically - semantic recall silently
+    did nothing for the language the game is written in. The shared tokenizer
+    emits Latin words and CJK bigrams, so a Chinese scene now has keywords.
+    """
     if not text:
         return set()
-    words = re.findall(r"[a-zA-ZÀ-ÿ]{3,}", text.lower())
-    return {w for w in words if w not in _STOP_WORDS and len(w) > 2}
+    return {token for token in tokenize_text(text) if token not in _STOP_WORDS}
 
 
 def _rag_crystals_enabled() -> bool:
@@ -730,7 +737,7 @@ class MemoryEngine:
         # the query is tokenized so that quoted JSON keys ("characters",
         # "events", etc.) become noise-immune via the stop list.
         if query_keywords:
-            crystal_words = set(re.findall(r"[a-zA-ZÀ-ÿ]{3,}", ai))
+            crystal_words = {token for token in tokenize_text(ai) if token not in _STOP_WORDS}
             hits = len(query_keywords & crystal_words)
             score += hits * self._KEYWORD_MATCH_SCORE
 
@@ -968,15 +975,36 @@ class MemoryEngine:
             raw_tail = self._get_uncrystallized_events(campaign_id, limit=5)
             compact_recent = [self._event_to_compact_line(event) for event in raw_tail]
             recent_text = " ".join(line for line in compact_recent if line)
-            if recent_text:
+            # The graph indexes entities, not paragraphs. Searching with the
+            # whole event tail (the previous behaviour) matched almost nothing,
+            # because Graphiti compares the query against indexed node names;
+            # so the query names the active NPCs and the current location, and
+            # only falls back to the tail when no entity is known.
+            graph_query_text = build_graph_query(
+                location=location,
+                active_npcs=active_npc_names,
+                player_input=query_text,
+            ).text()
+            if not graph_query_text:
+                graph_query_text = build_memory_query(
+                    query_text=query_text,
+                    location=location,
+                    active_npcs=active_npc_names,
+                    recent_events=recent_text,
+                ).text()
+            if graph_query_text:
                 try:
-                    facts = await self._graphiti.search(campaign_id, recent_text, limit=8)
+                    facts = await self._graphiti.search(campaign_id, graph_query_text, limit=8)
                     if facts:
                         parts.append("=== WORLD FACTS ===")
                         for f in facts:
                             parts.append(f"- {f['fact']}")
-                except Exception:
-                    pass
+                except (RuntimeError, OSError, ValueError, TypeError, KeyError, LookupError) as exc:
+                    # The graph is an optional channel: a dead Neo4j must not
+                    # take the memory window with it, but it must be visible.
+                    logger.warning(
+                        "Graphiti fact recall failed for campaign %s: %s", campaign_id, exc
+                    )
 
         raw_tail = self._get_uncrystallized_events(campaign_id, limit=10)
         if raw_tail:
