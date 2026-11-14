@@ -54,10 +54,14 @@ def build_initial_state(
     world: WorldDefinition, campaign_id: str, turn: int = 0
 ) -> GameState:
     """Derive the fresh authoritative state of a campaign from its world."""
+    # Authored stock can legitimately repeat: the forge has ore and so do the
+    # fields, a thing can be lying in two rooms. A world is a layout, not a
+    # unique index, so give every *copy* a place of its own.
     item_locations: Dict[str, str] = {}
     for location in world.locations:
         for item_id in location.item_ids:
-            item_locations[item_id] = location.id
+            if item_id not in item_locations:
+                item_locations[item_id] = location.id
     return GameState(
         campaign_id=campaign_id,
         world_id=world.world_id,

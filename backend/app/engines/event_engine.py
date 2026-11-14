@@ -623,6 +623,32 @@ def _effect_take_entity(kind: str, state: GameState, world: WorldDefinition, eff
 
 
 
+@register_effect("entity_travel")
+def _effect_entity_travel(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
+    """Effect registry entry for `entity_travel`: an actor reaches a location.
+
+    Unlike `move_entity` (an author's script placing an NPC somewhere), this is
+    the *outcome of a rules-checked action*: the route was validated by
+    `RulesEngine._travel`, and the actor is whoever submitted it. The record is
+    materialised first so the new position is authoritative and survives reload.
+    """
+    entity = next((e for e in world.entities if e.id == effect.target), None)
+    if entity is None:
+        return AppliedEffect(effect, False, f"unknown entity '{effect.target}'")
+    destination = effect.value
+    if not isinstance(destination, str):
+        return AppliedEffect(effect, False, "entity_travel requires value = location id (string)")
+    if not any(location.id == destination for location in world.locations):
+        return AppliedEffect(effect, False, f"unknown location '{destination}'")
+    record = entity_state_for(state, world, entity)
+    record.location_id = destination
+    return AppliedEffect(
+        effect,
+        True,
+        facts=[Fact("entity_traveled", entity.id, destination)],
+    )
+
+
 @register_effect("equip_item")
 def _effect_equip_item(kind: str, state: GameState, world: WorldDefinition, effect: Effect) -> AppliedEffect:
     """Effect registry entry for `equip_item`."""

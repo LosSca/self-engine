@@ -127,9 +127,11 @@ async def test_a_short_action_still_fires_an_event_that_lands_midway(campaign):
         )
     )
     assert result.status == "applied"
-    # A zero-minute action cannot advance past the event; it waits for real time
-    # to be spent, which is the only honest answer.
-    assert store.list_scheduled_events("camp-1", status="pending")[0]["kind"] == "now"
+    # An event due at the very minute the clock stands on is the world catching
+    # up with itself: it fires now rather than waiting for the player to spend
+    # time, which is the only honest answer for something already due.
+    fired = [c["kind"] for c in store.list_scheduled_events("camp-1", status="fired")]
+    assert "now" in fired
 
 
 async def test_replaying_a_wait_does_not_fire_the_same_event_twice(campaign):

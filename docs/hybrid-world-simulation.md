@@ -75,7 +75,9 @@
 
 ## 3. 分阶段交付
 
-每阶段都必须可运行、有测试、不破坏现有测试（进入 Phase 2 时的基线是 1775 个）。
+每阶段都必须可运行、有测试、不破坏现有测试。基线变化：
+Phase 1 结束 1755 → Phase 2 结束 1775 → Phase 3 结束 1795 → Phase 4 结束 1802 →
+Phase 5 结束 **1811 passed / 8 skipped**（`python -m pytest -q`，约 42 秒，不联网）。
 
 ### Phase 1 — 统一行动模型 + 原语 + Affordance ✅ 已完成
 
@@ -127,22 +129,55 @@
   提交后事件只触发一次、tick 写 request 行可重放、跨越睡眠时段的事件在正确分钟生效、
   handler 可以让世界再排下一个班次。
 
-### Phase 3 — NPC Utility AI（先简单，不上 GOAP）
+### Phase 3 — NPC Utility AI（先简单，不上 GOAP）✅ 已完成
 
-- 每个 NPC 一份状态：当前活动/地点/需求/长短期目标/计划/日程/行为状态/个性技能，
-  存在 `GameState` 的扩展字段里（**不新建第二份世界状态**）。
-- Level 1 确定性行为（日程/工作/休息/吃饭/简单移动）；Level 2 Utility 打分选目标；
-  计划仍是原语序列，逐步交给 `ActionService`。
-- 计划失效检测：每一步执行后重读权威状态，失败即重新规划。
+- **状态只加字段**：`EntityState` 新增 `needs`（hunger/energy/social）与 `activity`，
+  `EntityDef` 新增 `schedule`（`RoutineEntryDef`）与 `traits`（diligence/sociability/
+  caution/boldness/greed）。日程与个性是 World Definition 的数据，不是第二份运行状态。
+- **日程 → 调度事件**：`app/engines/npc_schedule.py`。作者写的 `08:00 work forge`
+  编译成绝对分钟（`game_clock.midnight`，day 1-based）后进 `scheduled_events`，
+  `kind="npc.routine"`；`schedule_day` 幂等，已排队/已过去的槽位不再排。
+  「现在轮到谁」由 `latest_slot_by_abs` 查询回答，不重放历史。
+- **打分**：`app/engines/npc_goals.py` 的 `score_intents` / `choose_intent` / `plan_for`。
+  意图 work/eat/rest/socialise/patrol/investigate，权重表是常量、tie 按名字排序（确定性）。
+  计划只是原语序列（`travel` / `talk` / `wait`），没有新的执行路径。
+- **决策**：`app/engines/npc_brain.py` 的 `perceive`（读 `EventStore` 且只读
+  `witnessed_by` 命中自己的事件——知识边界）与 `decide`（需求 + 个性 + 感知 → 意图 + 计划）。
+  `shift_over` 让「站在工位但班次已经结束」的 NPC 换下一个意图，否则会一直"想上班却无事可做"。
+- **执行**：`app/services/npc_turns.py` 的 `run_round`。每个 NPC 重新读权威状态，
+  只执行计划第一步，构造 `ActionRequest(actor_type="npc", actor_id=..., narrate=False)`
+  交给**同一个** `ActionService.execute`。失败记进 `failures`，不影响玩家回合。
+  `ActionService` 在玩家回合提交后回调一次（`_ATTENDANCE` contextvar 防重入），
+  且只有「世界里有作者日程」时才跑——否则每一次 `look` 都会凭空多出一轮 NPC 行动。
+- **新原语**：`travel`（与 `move` 共用 `_path_problem` 的出口校验，效果 `entity_travel`
+  物化 `EntityState.location_id`）与 `give_item`（一个动词两个方向：给出去，或从在场
+  实体手里拿走）。动作目录 20 个。
+- 测试：`tests/engines/test_npc_behaviour.py`（10）、`tests/services/test_npc_turns.py`（5）、
+  `tests/api/test_npc_rounds.py`（5）。
 
-### Phase 4 — LLM 高层决策（可选层）
+### Phase 4 — LLM 高层决策（可选层）✅ 已完成
 
-- LLM 只输出结构化建议（目标、理由、拟行动作），经 `TextActionService`/规则验证后才执行。
-- 测试用假的 router，不调用真实付费 API。
+- `app/services/town_advisor.py`：LLM 只返回结构化**建议**
+  `[{"kind": "npc.routine", "in_minutes": N, "payload": {...}}]`，解析后仅调用
+  `store.schedule_event`。它**没有**写状态的能力：建议要到期、经 handler、经规则，
+  才可能改变世界；未知 kind、超过一天、不存在的 NPC 一律丢弃。
+- 默认关闭，`ENGINE_TOWN_PLANNER` 打开；未启用时不问模型、不写调度。
+- 接线在 `routes_engine._service()`：`service.tick_advice` 只在玩家回合、每回合最多问一次
+  （NPC 回合不给顾问，避免一个回合产生两份计划）。
+- 测试：`tests/services/test_town_advisor.py`（7），全部用假 LLM，不调用真实付费 API。
 
-### Phase 5 — 小镇压力测试
+### Phase 5 — 小镇压力测试 ✅ 已完成
 
-- 见第 6 节。
+- 见第 6 节；测试文件 `tests/api/test_town_simulation.py`（9 条），
+  世界数据 `tests/fixtures/hollowmere_world.json`。
+- 一并修掉的真实缺陷（都由压力测试暴露，不是测试写法问题）：
+  - `wait` 的分钟数被丢弃（`RuleOutcome.minutes` 现在会被提交阶段采纳）；
+  - 时钟常量表缺 simulation 动词，`wait` 只走 1 分钟；
+  - `_clock_paused` 永远为真（转发旧会话），新链路时钟从不前进；
+  - `take` 拿不了第二件同类物品，`combine` 因此永远缺料；
+  - 绝对分钟 0-based / 1-based 混用（day 1 08:00 变成 1920）；
+  - `catch_up_minute` 与 `stop <= reached` 互相卡死，首个到期事件永远不触发；
+  - 世界初始物品按地点覆盖，同一物品在两个地点时只剩后一个。
 
 ### 旧 GameSession 的边界
 
@@ -163,15 +198,15 @@
 | 1 玩家可提出未预定义行动 | Phase 1 原语 + 组合 |
 | 2 原语与规则组合处理合理行动 | Phase 1 |
 | 3 所有行动经统一规则验证 | 全程只走 `ActionService` |
-| 4 NPC 自主选择并执行目标 | Phase 3 |
-| 5 NPC 有日程与持续行为状态 | Phase 2 + 3 |
-| 6 NPC 行动真实改变状态 | Phase 3（经 ActionService） |
-| 7 时间不再只靠玩家推进 | Phase 2 `world_scheduler.plan_tick/run_tick` |
+| 4 NPC 自主选择并执行目标 | Phase 3 `npc_brain.decide` + `npc_turns.run_round` |
+| 5 NPC 有日程与持续行为状态 | Phase 2 调度 + Phase 3 `EntityDef.schedule` / `EntityState.activity` |
+| 6 NPC 行动真实改变状态 | Phase 3（经 ActionService，同一条写入路径） |
+| 7 时间不再只靠玩家推进 | Phase 2 `world_scheduler`，Phase 3 起由 `ActionService.npc_clock` 起表 |
 | 8 Scheduled Events 正确触发与恢复 | Phase 2 `scheduled_events` 表 + `commit_simulation_tick` |
-| 9 NPC 不获得未授权知识 | 复用 `witnessed_by` + `NpcMindEngine` 知识边界 |
-| 10 关键状态变化可追溯 | Domain Event 记录 |
-| 11 相同输入重现相同权威状态 | 现有 `_seed` + request_id |
-| 12 测试不依赖付费 LLM | 全部用假 router |
+| 9 NPC 不获得未授权知识 | `npc_brain.perceive` 只读 `witnessed_by` 命中的事件 |
+| 10 关键状态变化可追溯 | Domain Event 记录（含 `WORLD_TICK`） |
+| 11 相同输入重现相同权威状态 | `test_the_same_inputs_produce_the_same_authoritative_state` |
+| 12 测试不依赖付费 LLM | 假 router / 假 LLM，全程无网络 |
 
 ## 6. 最小验证场景（小镇）
 
@@ -187,3 +222,32 @@
 4. 快进 3 天：无事件丢失，顺序正确。
 5. 进程重启后未到期事件仍能触发。
 6. 同 seed 重跑 → 权威状态字节级一致。
+
+### 落地情况（2026-11-15）
+
+已建成的世界 `tests/fixtures/hollowmere_world.json`：**5 个地点**
+（`square` / `forge` / `shop` / `fields` / `tavern`）、**6 个 NPC**
+（`smith_dorn` / `merchant_lia` / `farmer_oll` / `guard_bran` / `elder_mara` /
+`keeper_ryn`，每人 3 条日程、个性各异）、基础经济（矿石 → 钢锭需要 2 块矿）。相对
+原计划的 10 个 NPC 是**缩到 6 个**：断言要验证的是机制（自主选择、日程、压力 7 日、
+因果链），人数不改变结论，而每多一个人只是让测试变慢。
+
+对应测试（`tests/api/test_town_simulation.py`，9 条）：
+
+| 断言 | 测试 |
+| --- | --- |
+| 世界从作者定义的状态开始（day 1 08:00，无人行动时 `entities` 为空） | `test_the_town_starts_with_everyone_where_they_live` |
+| 自由行动改变世界、非法目标被拒绝且不消耗版本 | `test_free_player_actions_change_the_world_through_the_rules` |
+| 未预定义的多步骤制造（拿矿 → 凑齐两件 → 合成钢锭） | `test_a_player_can_do_something_nobody_defined_in_advance` |
+| NPC 自主行动，且是普通请求（`actor_type="npc"`） | `test_npcs_act_on_their_own_between_player_turns` |
+| 时间不靠打字推进：一次 12 小时等待跨过夜晚 | `test_world_time_moves_without_the_player_typing` |
+| 调度事件按分钟触发并记成 `WORLD_TICK` 事实 | `test_scheduled_events_fire_and_are_recorded_as_facts` |
+| 7 日压力：每天 12 小时，NPC 始终在真实地点 | `test_seven_days_of_authored_routines_keep_the_town_coherent` |
+| 同输入同状态（两个 campaign 跑同一脚本比对 day/minute/version/inventory） | `test_the_same_inputs_produce_the_same_authoritative_state` |
+| 同样需求下不同个性选不同意图 | `test_two_actors_with_the_same_goal_still_choose_differently` |
+
+**尚未覆盖**（诚实记账，下一步）：
+- 因果链第 2 条只跑到了「拿/合成/NPC 自主行动」这一层；「矿石变少 → 铁匠调整生产 →
+  向商人采购 → 守卫调查」的完整链条还没有端到端测试。
+- 「进程重启后未到期事件仍能触发」目前由 `scheduled_events` 的持久化 +`next_due_minute`
+  查询保证，没有专门的"重开 store 再推进"测试。

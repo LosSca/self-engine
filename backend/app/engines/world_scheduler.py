@@ -257,17 +257,25 @@ def commit_tick(
 
 
 def catch_up_minute(store: Any, campaign_id: str, now_abs_minute: int) -> int:
-    """Where the next tick should stop: the next due event, or `now`.
+    """Where the next tick should stop: the next due event, or just past `now`.
 
     This is the whole answer to "do not poll every minute": with nothing
-    scheduled the clock jumps straight to the requested instant in one hop, and
-    with something due it jumps only that far first, so the event is applied at
-    its own minute and causality holds.
+    scheduled the clock jumps straight through the requested instant in one
+    hop, and with something due it jumps only that far first, so the event is
+    applied at its own minute and causality holds.
+
+    The returned minute is strictly greater than `now_abs_minute`, so a caller
+    loop that stops when it reaches its target always makes progress.
     """
-    nxt = store.next_due_minute(campaign_id)
-    if nxt is None or nxt > int(now_abs_minute):
-        return int(now_abs_minute)
-    return int(nxt)
+    # The search starts one minute after the current one. A row due at the
+    # minute we are standing on has already been dealt with: it fired, it was
+    # recorded, or it is the very row being handled right now. Left inclusive,
+    # a schedule whose first entry is 'now' would pin the clock forever.
+    after = int(now_abs_minute) + 1
+    nxt = store.next_due_minute(campaign_id, after=int(now_abs_minute))
+    if nxt is None:
+        return after
+    return max(after, int(nxt))
 
 
 def _event(kind: EventType, payload: Dict[str, Any]) -> Dict[str, Any]:

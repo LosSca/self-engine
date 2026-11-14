@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.engines.action_registry import get_action
 from app.engines.event_engine import condition_holds, entity_item_count, entity_location
@@ -468,21 +468,54 @@ class RulesEngine:
                 message=f"The destination '{target_id}' is not defined.",
             )
 
+        path, problem = self._path_problem(
+            world, state, locations, doors, items, target_id, params
+        )
+        if problem is not None:
+            return problem
+
+        if len(path) > 1:
+            message = f"You travel to {destination.name}."
+        else:
+            message = f"You move to {destination.name}."
+        return RuleOutcome(
+            ok=True,
+            code="moved",
+            message=message,
+            effects=[Effect(kind="move_player", target=target_id)],
+        )
+
+    def _path_problem(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        locations: Dict[str, LocationDef],
+        doors: Dict[str, DoorDef],
+        items: Dict[str, ItemDef],
+        target_id: str,
+        params: Optional[Dict[str, Any]],
+    ) -> Tuple[List[str], Optional[RuleOutcome]]:
+        """The validated route to a destination, or why it cannot be walked.
+
+        Shared by `move` (the player) and `travel` (an actor that was already
+        routed elsewhere), so both answer exactly the same question with exactly
+        the same rules - one route validator, not two.
+        """
         raw_path = (params or {}).get("path")
         path: List[str] = []
         if isinstance(raw_path, list) and raw_path:
             if not all(isinstance(step, str) and step for step in raw_path):
-                return RuleOutcome(
+                return [], RuleOutcome(
                     ok=False, code="invalid_path",
                     message="path must be a non-empty list of location ids.",
                 )
             if raw_path[-1] != target_id:
-                return RuleOutcome(
+                return [], RuleOutcome(
                     ok=False, code="invalid_path",
                     message="the path must end at the destination.",
                 )
             if len(raw_path) > len(locations):
-                return RuleOutcome(
+                return [], RuleOutcome(
                     ok=False, code="invalid_path",
                     message="the path is longer than the world has locations.",
                 )
@@ -496,18 +529,49 @@ class RulesEngine:
                 world, state, locations, doors, items, cursor, step
             )
             if problem is not None:
-                return problem
+                return [], problem
             cursor = step
+        return path, None
 
-        if len(path) > 1:
-            message = f"You travel to {destination.name}."
-        else:
-            message = f"You move to {destination.name}."
+    def _travel(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        """Route an already-chosen destination for a non-player actor.
+
+        Identical rules, identical exit checks as `move`; only the resulting
+        effect differs, because an NPC walking has to change *its* position
+        rather than the player's. This is not a second movement system: it is
+        the same validator with a different effect at the end.
+        """
+        if not target_id:
+            return RuleOutcome(
+                ok=False,
+                code="missing_target",
+                message="travel requires a target_id (the destination location id).",
+            )
+        locations = self._locations(world)
+        if target_id not in locations:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_location",
+                message=f"The destination '{target_id}' is not defined.",
+            )
+        actor_id = str((params or {}).get("actor_id") or "")
+        path, problem = self._path_problem(
+            world, state, locations, self._doors(world), self._items(world), target_id, params
+        )
+        if problem is not None:
+            return problem
+        destination = locations[target_id]
         return RuleOutcome(
             ok=True,
-            code="moved",
-            message=message,
-            effects=[Effect(kind="move_player", target=target_id)],
+            code="traveled",
+            message=f"{destination.name} reached in {len(path)} step(s).",
+            effects=[Effect(kind="entity_travel", target=actor_id, value=target_id)],
         )
 
     def _equip(
@@ -707,6 +771,95 @@ class RulesEngine:
             ],
         )
 
+    def _give_item(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        """Move one item between the player and an actor standing here.
+
+        Both directions live in one verb because they are one rule: an item
+        changes hands. An amount is honoured so a produce exchange can move two
+        ores at a time, but it can never move more than the giver has.
+        """
+        params = params or {}
+        to_id = str(params.get("to_id") or "").strip()
+        from_id = str(params.get("from_id") or "").strip()
+        item = self._items(world).get(target_id or "")
+        if item is None:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_item",
+                message=f"There is no item '{target_id}' to give.",
+            )
+        actor = str(to_id or from_id)
+        entity = next((entry for entry in world.entities if entry.id == actor), None)
+        if entity is None:
+            return RuleOutcome(
+                ok=False,
+                code="unknown_recipient",
+                message="Nobody here can take that item.",
+            )
+        if entity_location(state, world, entity.id) != state.location_id:
+            return RuleOutcome(
+                ok=False,
+                code="not_here",
+                message=f"{entity.name} is not here.",
+            )
+        try:
+            amount = max(1, int(params.get("amount", 1)))
+        except (TypeError, ValueError):
+            return RuleOutcome(
+                ok=False,
+                code="invalid_amount",
+                message="An amount has to be a whole number of items.",
+            )
+        if to_id:
+            if state.inventory.get(item.id, 0) < amount:
+                return RuleOutcome(
+                    ok=False,
+                    code="not_carried",
+                    message=f"You do not carry {amount} {item.name}.",
+                )
+            effects = [
+                # The first effect consumes the player's copy, the second puts
+                # one in the recipient's hands: give_entity is the registered
+                # transfer, not a second inventory mechanism.
+                Effect(kind="remove_item", target=item.id, amount=amount),
+                Effect(
+                    kind="give_entity",
+                    target=entity.id,
+                    value=item.id,
+                    amount=amount,
+                ),
+            ]
+            code, verb = "given", "gave"
+        else:
+            if entity_item_count(state, world, entity.id, item.id) < amount:
+                return RuleOutcome(
+                    ok=False,
+                    code="not_holding",
+                    message=f"{entity.name} has no {item.name} to take.",
+                )
+            effects = [
+                Effect(
+                    kind="take_entity",
+                    target=entity.id,
+                    value=item.id,
+                    amount=amount,
+                ),
+            ]
+            code, verb = "received", "took"
+        return RuleOutcome(
+            ok=True,
+            code=code,
+            message=f"You {verb} {amount} {item.name}.",
+            effects=effects,
+            minutes=1,
+        )
+
     def _take(
         self,
         world: WorldDefinition,
@@ -728,12 +881,6 @@ class RulesEngine:
                 code="unknown_item",
                 message=f"There is no item '{target_id}' in this world.",
             )
-        if state.inventory.get(target_id, 0) > 0:
-            return RuleOutcome(
-                ok=False,
-                code="already_carried",
-                message=f"You are already carrying the {item.name}.",
-            )
         owner_id: Optional[str] = None
         for entity in world.entities:
             if entity_location(state, world, entity.id) != state.location_id:
@@ -741,11 +888,25 @@ class RulesEngine:
             if entity_item_count(state, world, entity.id, target_id) > 0:
                 owner_id = entity.id
                 break
-        if state.item_locations.get(target_id) != state.location_id and owner_id is None:
+        loose_here = state.item_locations.get(target_id) == state.location_id
+        if not loose_here and owner_id is None:
             return RuleOutcome(
                 ok=False,
                 code="item_not_here",
                 message=f"The {item.name} is not here.",
+            )
+        # "Already carrying one" is not a reason to refuse: a stack of ore is a
+        # stack, and the verb has to be able to pick up a second piece or
+        # nothing made of two pieces could ever be assembled. Refusing is only
+        # right when there is no *source* for another copy - otherwise the rule
+        # would happily mint a copy out of a thing you already hold.
+        if state.inventory.get(target_id, 0) > 0 and not (
+            loose_here or owner_id is not None
+        ):
+            return RuleOutcome(
+                ok=False,
+                code="already_carried",
+                message=f"You are already carrying the {item.name}.",
             )
         if item.pickup_requires:
             unmet = [
@@ -1070,6 +1231,10 @@ class RulesEngine:
             ok=True,
             code="waited",
             message=f"You wait for about {minutes} minutes.",
+            # The only verb whose length the player chooses: without this the
+            # clock would follow the catalogue's nominal minute and a request
+            # for "a night" would advance by one.
+            minutes=minutes,
         )
 
     # -- combat -------------------------------------------------------------

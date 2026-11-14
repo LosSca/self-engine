@@ -46,6 +46,14 @@ DEFAULT_ACTION_MINUTES: Dict[str, int] = {
     "defend": 1,
     "flee": 1,
     "custom": 1,
+    # The simulation verbs. A wait's own rule reports the minutes the player
+    # asked for (see RuleOutcome.minutes); the table entry is what keeps the
+    # clock honest when the verb arrives without a duration.
+    "travel": 10,
+    "dismantle": 5,
+    "combine": 10,
+    "give_item": 1,
+    "wait": 60,
 }
 #: A verb that is not in the table at all (a scenario-authored custom action)
 #: costs this much rather than nothing: the player did *something*.
@@ -64,15 +72,23 @@ _TIME_WORDS = {
 _DURATION_RE = re.compile(r"([0-9]+)[ \t]*([^\s0-9]+)")
 
 
+#: How to read a (day, minute) pair on the wire.
+#:
+#: A *calendar* pair is what the state carries: day 1 starts at minute 0, so
+#: "day 1, 08:00" is minute 480 of that day. An *absolute* index is what the
+#: schedule table stores, and it is anchored one day earlier, because day 0 is
+#: the day before the campaign begins. Keeping the two apart is the difference
+#: between "at 08:00" and "at 08:00 yesterday", and every bug in this area has
+#: come from forgetting which one a number is.
 def midnight(day: int, minute: int) -> int:
-    """Absolute minute index for (day, minute-of-day)."""
-    return max(0, int(day or 0)) * MINUTES_PER_DAY + max(0, int(minute or 0))
+    """Absolute minute index for a calendar (day, minute-of-day) pair."""
+    return (max(1, int(day or 1)) - 1) * MINUTES_PER_DAY + max(0, int(minute or 0))
 
 
 def split(abs_minute: int) -> tuple[int, int]:
-    """(day, minute-of-day) for an absolute minute index; day starts at 0."""
+    """Calendar (day, minute-of-day) for an absolute minute index; day is 1-based."""
     total = max(0, int(abs_minute or 0))
-    return total // MINUTES_PER_DAY, total % MINUTES_PER_DAY
+    return total // MINUTES_PER_DAY + 1, total % MINUTES_PER_DAY
 
 
 def clock_label(day: int, minute: int) -> str:
@@ -94,9 +110,11 @@ class Clock:
         """Read the clock off a GameState (old saves default to day 1, 08:00)."""
         if state is None:
             return cls()
-        paused = bool(getattr(state, "flags", {}) or {}) and False
+        # The clock is the state's own pause flag: the session that owns the
+        # world decides whether time moves, and it says so on the world.
+        paused = bool(getattr(state, "clock_paused", False))
         return cls(
-            day=int(getattr(state, "day", DEFAULT_START_DAY) or 0),
+            day=int(getattr(state, "day", DEFAULT_START_DAY) or DEFAULT_START_DAY),
             minute=int(getattr(state, "minute", DEFAULT_START_MINUTE) or 0),
             paused=paused,
         )

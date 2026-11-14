@@ -1,0 +1,366 @@
+{
+  "world_id": "hollowmere",
+  "scenario_id": "hollowmere",
+  "name": "Hollowmere",
+  "description": "A market town of five places where everyone has a day of their own.",
+  "start_location_id": "square",
+  "locations": [
+    {
+      "id": "square",
+      "name": "Market Square",
+      "tags": [
+        "town"
+      ],
+      "exits": [
+        {
+          "target_id": "forge",
+          "label": "west"
+        },
+        {
+          "target_id": "shop",
+          "label": "north"
+        },
+        {
+          "target_id": "fields",
+          "label": "east"
+        },
+        {
+          "target_id": "tavern",
+          "label": "south"
+        }
+      ],
+      "door_ids": [],
+      "item_ids": [
+        "stout_ale",
+        "loaf"
+      ],
+      "npc_ids": [
+        "guard_bran",
+        "elder_mara"
+      ]
+    },
+    {
+      "id": "forge",
+      "name": "Forge",
+      "tags": [
+        "indoor"
+      ],
+      "exits": [
+        {
+          "target_id": "square",
+          "label": "east"
+        }
+      ],
+      "door_ids": [],
+      "item_ids": [
+        "iron_ore",
+        "wooden_stool",
+        "firewood"
+      ],
+      "npc_ids": [
+        "smith_dorn"
+      ]
+    },
+    {
+      "id": "shop",
+      "name": "Shop",
+      "tags": [
+        "indoor"
+      ],
+      "exits": [
+        {
+          "target_id": "square",
+          "label": "south"
+        }
+      ],
+      "door_ids": [],
+      "item_ids": [
+        "loaf"
+      ],
+      "npc_ids": [
+        "merchant_lia"
+      ]
+    },
+    {
+      "id": "fields",
+      "name": "Fields",
+      "tags": [
+        "wild"
+      ],
+      "exits": [
+        {
+          "target_id": "square",
+          "label": "west"
+        }
+      ],
+      "door_ids": [],
+      "item_ids": [
+        "iron_ore"
+      ],
+      "npc_ids": [
+        "farmer_oll"
+      ]
+    },
+    {
+      "id": "tavern",
+      "name": "Tavern",
+      "tags": [
+        "indoor"
+      ],
+      "exits": [
+        {
+          "target_id": "square",
+          "label": "north"
+        }
+      ],
+      "door_ids": [],
+      "item_ids": [],
+      "npc_ids": [
+        "keeper_ryn"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "iron_ore",
+      "name": "Iron Ore",
+      "tags": [
+        "ore"
+      ]
+    },
+    {
+      "id": "loaf",
+      "name": "Loaf",
+      "tags": [
+        "food"
+      ]
+    },
+    {
+      "id": "stout_ale",
+      "name": "Stout Ale",
+      "tags": [
+        "food"
+      ]
+    },
+    {
+      "id": "steel_ingot",
+      "name": "Steel Ingot",
+      "tags": [
+        "good"
+      ],
+      "craftable": true,
+      "made_from": [
+        "iron_ore",
+        "iron_ore"
+      ]
+    },
+    {
+      "id": "wooden_stool",
+      "name": "Wooden Stool",
+      "tags": [
+        "furniture"
+      ],
+      "dismantles_to": [
+        "firewood"
+      ]
+    },
+    {
+      "id": "firewood",
+      "name": "Firewood",
+      "tags": [
+        "fuel"
+      ]
+    }
+  ],
+  "doors": [],
+  "entities": [
+    {
+      "id": "smith_dorn",
+      "name": "Smith Dorn",
+      "description": "The smith keeps the forge.",
+      "location_id": "forge",
+      "traits": {
+        "diligence": 0.9,
+        "greed": 0.6,
+        "caution": 0.4
+      },
+      "schedule": [
+        {
+          "start": "08:00",
+          "activity": "work",
+          "location_id": "forge",
+          "minutes": 600
+        },
+        {
+          "start": "18:00",
+          "activity": "socialise",
+          "location_id": "tavern",
+          "minutes": 180
+        },
+        {
+          "start": "21:00",
+          "activity": "sleep",
+          "location_id": "square",
+          "minutes": 660
+        }
+      ],
+      "items": [
+        "iron_ore",
+        "iron_ore",
+        "iron_ore"
+      ]
+    },
+    {
+      "id": "merchant_lia",
+      "name": "Merchant Lia",
+      "description": "Lia sells what the town makes.",
+      "location_id": "shop",
+      "traits": {
+        "greed": 0.9,
+        "sociability": 0.6
+      },
+      "schedule": [
+        {
+          "start": "08:00",
+          "activity": "work",
+          "location_id": "shop",
+          "minutes": 600
+        },
+        {
+          "start": "18:00",
+          "activity": "socialise",
+          "location_id": "tavern",
+          "minutes": 180
+        },
+        {
+          "start": "21:00",
+          "activity": "sleep",
+          "location_id": "square",
+          "minutes": 660
+        }
+      ]
+    },
+    {
+      "id": "farmer_oll",
+      "name": "Farmer Oll",
+      "description": "Oll works the fields.",
+      "location_id": "fields",
+      "traits": {
+        "diligence": 0.8,
+        "sociability": 0.4
+      },
+      "schedule": [
+        {
+          "start": "07:00",
+          "activity": "work",
+          "location_id": "fields",
+          "minutes": 660
+        },
+        {
+          "start": "18:00",
+          "activity": "eat",
+          "location_id": "tavern",
+          "minutes": 120
+        },
+        {
+          "start": "21:00",
+          "activity": "sleep",
+          "location_id": "square",
+          "minutes": 600
+        }
+      ]
+    },
+    {
+      "id": "guard_bran",
+      "name": "Guard Bran",
+      "description": "Bran watches the square.",
+      "location_id": "square",
+      "traits": {
+        "caution": 0.9,
+        "boldness": 0.7
+      },
+      "schedule": [
+        {
+          "start": "06:00",
+          "activity": "patrol",
+          "location_id": "square",
+          "minutes": 720
+        },
+        {
+          "start": "18:00",
+          "activity": "socialise",
+          "location_id": "tavern",
+          "minutes": 180
+        },
+        {
+          "start": "22:00",
+          "activity": "sleep",
+          "location_id": "square",
+          "minutes": 480
+        }
+      ]
+    },
+    {
+      "id": "elder_mara",
+      "name": "Elder Mara",
+      "description": "Mara settles what the town cannot.",
+      "location_id": "square",
+      "traits": {
+        "caution": 0.7,
+        "sociability": 0.8
+      },
+      "schedule": [
+        {
+          "start": "09:00",
+          "activity": "work",
+          "location_id": "square",
+          "minutes": 480
+        },
+        {
+          "start": "18:00",
+          "activity": "socialise",
+          "location_id": "tavern",
+          "minutes": 240
+        },
+        {
+          "start": "22:00",
+          "activity": "sleep",
+          "location_id": "square",
+          "minutes": 480
+        }
+      ]
+    },
+    {
+      "id": "keeper_ryn",
+      "name": "Keeper Ryn",
+      "description": "Ryn runs the tavern.",
+      "location_id": "tavern",
+      "traits": {
+        "sociability": 0.9,
+        "greed": 0.5
+      },
+      "schedule": [
+        {
+          "start": "07:00",
+          "activity": "work",
+          "location_id": "tavern",
+          "minutes": 720
+        },
+        {
+          "start": "19:00",
+          "activity": "socialise",
+          "location_id": "tavern",
+          "minutes": 180
+        },
+        {
+          "start": "23:00",
+          "activity": "sleep",
+          "location_id": "tavern",
+          "minutes": 480
+        }
+      ]
+    }
+  ],
+  "quests": [],
+  "events": []
+}

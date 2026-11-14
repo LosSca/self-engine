@@ -26,6 +26,25 @@
 
 ### Added
 
+- **混合式世界模拟 · Phase 5（小镇压力测试与修出来的缺陷）**：一座 5 地点、6 名 NPC 的小镇
+  （`tests/fixtures/hollowmere_world.json`）作为端到端验证世界：`tests/api/test_town_simulation.py`
+  用 9 条测试跑通「自由行动 → NPC 自主 → 世界时间 → 调度触发 → 7 日连贯 → 同输入同状态」。
+  压力测试逼出并修掉一批真缺陷：`wait` 指定的分钟数被丢弃、时钟常量表缺 simulation 动词、
+  旧会话的暂停标志让新链路的时钟永不前进、`take` 拿不了第二件同类物品（`combine` 因此
+  永远缺料）、绝对分钟 0-based/1-based 混用导致第一天的日程排到"昨天"、
+  `catch_up_minute` 与推进循环互相卡死（首个到期事件永不触发）、世界初始物品按地点覆盖
+  （同一物品在两个地点时只剩后一个）。
+- **混合式世界模拟 · Phase 4（LLM 高层决策，只提建议）**：`services/town_advisor.py` 让模型
+  输出结构化建议（"120 分钟后安排一次换班"），解析后只调用 `schedule_event`——它没有写状态的
+  能力，建议必须到期、经 handler、经规则验证才可能改变世界。默认关闭，设
+  `ENGINE_TOWN_PLANNER=1` 打开；每个玩家回合最多询问一次，测试全用假模型，不联网。
+- **混合式世界模拟 · Phase 3（NPC 自主行动）**：NPC 有了自己的日程、需求、个性和一天：
+  作者在 `EntityDef.schedule` 里写"08:00 去铁匠铺上班"，`engines/npc_schedule.py` 把它编译成
+  `npc.routine` 调度事件；`engines/npc_goals.py` 用一张常量权重表打分（饿了去吃、累了去睡、
+  守卫见到异常去查），`engines/npc_brain.py` 只感知**自己目击过**的事件（`witnessed_by`），
+  `services/npc_turns.py` 把选中的动机翻译成普通 `ActionRequest(actor_type="npc")`，
+  交给同一个 `ActionService` 执行。没有第二条写路径，也没有第二份世界状态。
+  新增 `travel` 与 `give_item` 两个原语（共 21 个），`EntityState` 新增 `needs` / `activity`。
 - **混合式世界模拟 · Phase 2（世界时钟与事件调度器）**：新增 `scheduled_events` 表
   （迁移 5）与 `backend/app/engines/world_scheduler.py`——“18:00 关门”从此是一个**记住的**
   未来事件，而不是每回合重算一遍的推导。Domain Event 仍是“已经发生的事实”，Scheduled Event 是

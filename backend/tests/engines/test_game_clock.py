@@ -106,7 +106,12 @@ class TestDuration:
         assert game_clock.duration_minutes("move", {"minutes": 42}) == 42
         assert game_clock.duration_minutes("move", {"duration_minutes": "7"}) == 7
         assert game_clock.duration_minutes("wait", {"duration": "2 hours"}) == 120
-        assert game_clock.duration_minutes("wait", {"minutes": False}) == game_clock.UNKNOWN_ACTION_MINUTES
+        # A nonsense duration is ignored, not obeyed: the verb's own default
+        # stands in rather than the "unknown verb" fallback.
+        assert (
+            game_clock.duration_minutes("wait", {"minutes": False})
+            == game_clock.DEFAULT_ACTION_MINUTES["wait"]
+        )
 
     def test_duration_text_is_narrow_on_purpose(self):
         assert game_clock.parse_duration("30 min") == 30

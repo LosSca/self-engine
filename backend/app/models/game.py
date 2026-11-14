@@ -126,6 +126,20 @@ class ItemDef(_ConfigModel):
     craftable: bool = False
 
 
+class RoutineEntryDef(_ConfigModel):
+    """One block of an NPC's day: "from 09:00, work in the forge, 480 minutes".
+
+    This is configuration, not behaviour. It says what the character does when
+    nothing more urgent happens - a theft, an alarm or hunger can and does
+    override it, and the override is decided at runtime, never here.
+    """
+
+    start: str = Field(..., min_length=1, max_length=16)
+    activity: Literal["work", "eat", "rest", "sleep", "socialise", "patrol", "idle"] = "idle"
+    location_id: str = Field("", max_length=64)
+    minutes: int = Field(0, ge=0, le=24 * 60)
+
+
 class EntityDef(_ConfigModel):
     """An authored non-player entity: NPC, creature or interactive object.
 
@@ -150,6 +164,13 @@ class EntityDef(_ConfigModel):
     items: List[str] = Field(default_factory=list)
     #: Editorial faction/team label; inter-entity relations and alert are state.
     faction: str = Field(default="", max_length=64)
+    #: The character's day, as authored data: what they are doing, where, from
+    #: when and for how long. Routines are compiled into schedules
+    #: (app/engines/npc_schedule.py); they are never a second source of truth.
+    schedule: List["RoutineEntryDef"] = Field(default_factory=list)
+    #: Personality in [0, 1] per trait (see app/engines/npc_goals.py). Missing
+    #: traits read as 0.5, so an NPC without this block is a neutral one.
+    traits: Dict[str, float] = Field(default_factory=dict)
 
 
 class DoorDef(_ConfigModel):
@@ -205,6 +226,7 @@ class Effect(_ConfigModel):
         "combat_hp",
         "player_damage",
         "move_entity",
+        "entity_travel",
         "seed_entity",
         "give_entity",
         "take_entity",
@@ -1015,6 +1037,12 @@ class EntityState(BaseModel):
     relations: Dict[str, int] = Field(default_factory=dict)
     #: How watchful/hostile this entity currently is (0 = calm).
     alert: int = 0
+    #: Needs in [0, 1], where 1 means fully satisfied. Only the three the utility
+    #: model reads are meaningful; anything else is carried along untouched.
+    needs: Dict[str, float] = Field(default_factory=dict)
+    #: What the NPC decided to do last (intent name), so the next decision can
+    #: prefer staying the course and a panel can explain what it is doing.
+    activity: str = ""
 
 
 class GameState(BaseModel):
@@ -1058,6 +1086,11 @@ class GameState(BaseModel):
     #: day 1, 08:00 (see app/engines/game_clock.py).
     day: int = Field(1, ge=0)
     minute: int = Field(480, ge=0)
+    #: Whether the world clock is frozen. The legacy session used to hold this
+    #: in memory, which meant a campaign with no cached session silently read as
+    #: paused and every turn happened at a standstill. It is part of the state
+    #: now, so the answer survives a reload and is the same for both lanes.
+    clock_paused: bool = False
     updated_at: str = ""
 
 
@@ -1099,6 +1132,13 @@ class ActionRequest(BaseModel):
         "dismantle",
         "combine",
         "wait",
+        # Movement is a destination, not a verb: an NPC (or a scripted event)
+        # that has already been routed still goes through the same rules check
+        # as a player walking there, and is recorded as its own actor.
+        "travel",
+        # Transfer is the town's economy: an item changing hands is one rule
+        # with two directions, so it is one verb, not two.
+        "give_item",
         "custom",
     ]
     actor_id: str = "player"
@@ -1114,6 +1154,11 @@ class RuleOutcome(BaseModel):
     code: str = ""
     message: str = ""
     effects: List[Effect] = Field(default_factory=list)
+    #: What the verb cost, when the rule knows better than the catalogue - a
+    #: wait asks the player for its minutes, and a rule that spends time on the
+    #: player's behalf (a march along a long path) reports it here. The action
+    #: catalogue remains the default: this only ever overrides it.
+    minutes: Optional[int] = None
 
 
 class EventExecution(BaseModel):

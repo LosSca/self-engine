@@ -1315,12 +1315,29 @@ class GameStateStore:
         ).fetchall()
         return [self._scheduled_row(row) for row in rows]
 
-    def next_due_minute(self, campaign_id: str) -> Optional[int]:
-        """Absolute minute of the earliest pending event, or None."""
+    def next_due_minute(
+        self, campaign_id: str, after: Optional[int] = None
+    ) -> Optional[int]:
+        """Absolute minute of the earliest pending event, or None.
+
+        `after` excludes everything at or before that minute, which is how the
+        scheduler asks what comes next from here without re-reading the event
+        it is standing on.
+        """
+        if after is None:
+            row = self._conn.execute(
+                "SELECT MIN(due_abs_minute) AS m FROM scheduled_events"
+                " WHERE campaign_id = ? AND status = 'pending'",
+                (campaign_id,),
+            ).fetchone()
+            if row is None or row["m"] is None:
+                return None
+            return int(row["m"])
         row = self._conn.execute(
             "SELECT MIN(due_abs_minute) AS m FROM scheduled_events"
-            " WHERE campaign_id = ? AND status = 'pending'",
-            (campaign_id,),
+            " WHERE campaign_id = ? AND status = 'pending'"
+            " AND due_abs_minute > ?",
+            (campaign_id, int(after)),
         ).fetchone()
         if row is None or row["m"] is None:
             return None

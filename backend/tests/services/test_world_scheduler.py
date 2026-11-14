@@ -93,13 +93,25 @@ async def test_a_scheduled_event_fires_at_its_own_minute(store_and_state):
 
 async def test_catch_up_stops_at_the_next_due_event(store_and_state):
     store, _state = store_and_state
-    assert catch_up_minute(store, "camp-1", _at(1, 20 * 60)) == _at(1, 20 * 60)
+    # With nothing scheduled the hop goes past the requested minute: the answer
+    # is always "something later than now", so a tick loop cannot stall.
+    assert catch_up_minute(store, "camp-1", _at(1, 20 * 60)) == _at(1, 20 * 60) + 1
 
+    # A due event in the *past* has already happened; it must not hold the clock
+    # back to a minute the world has left behind.
     store.schedule_event("camp-1", due_abs_minute=_at(1, 10 * 60), kind="shift")
-    assert catch_up_minute(store, "camp-1", _at(1, 20 * 60)) == _at(1, 10 * 60)
+    assert catch_up_minute(store, "camp-1", _at(1, 20 * 60)) == _at(1, 20 * 60) + 1
 
-    # A due event that is already in the past does not hold the clock back.
-    assert catch_up_minute(store, "camp-1", _at(1, 5 * 60)) == _at(1, 5 * 60)
+    # The next event ahead of us is where the hop stops, so it is applied at its
+    # own minute.
+    store.schedule_event("camp-1", due_abs_minute=_at(1, 22 * 60), kind="tonight")
+    past = sorted(store.list_scheduled_events("camp-1", status="pending"), key=lambda row: row["due_abs_minute"])[0]
+    assert past["kind"] == "shift"
+    store.mark_event_fired(past["id"])
+    assert catch_up_minute(store, "camp-1", _at(1, 19 * 60)) == _at(1, 22 * 60)
+
+    # Standing before both events again, the next one ahead is still the stop.
+    assert catch_up_minute(store, "camp-1", _at(1, 5 * 60)) == _at(1, 22 * 60)
 
 
 async def test_events_run_in_causal_order_not_insertion_order(store_and_state):
@@ -266,6 +278,7 @@ async def test_a_day_rollover_lands_on_the_right_day(tmp_path):
         )
         assert new_state.day == 2
         assert new_state.minute == 30
-        assert _at(2, 0) // MINUTES_PER_DAY == 2
+        # Absolute minutes are 1-based in days: day 2 starts at 1440, not 2880.
+        assert _at(2, 0) // MINUTES_PER_DAY == 1
     finally:
         store.close()

@@ -24,6 +24,7 @@ it describes.
 """
 from __future__ import annotations
 
+import contextvars
 import inspect
 import logging
 import sqlite3
@@ -66,6 +67,13 @@ from app.services.summary_service import SUMMARY_EVERY_TURNS, summarize
 
 
 logger = logging.getLogger(__name__)
+
+#: True while this turn is itself the town's answer to a player turn. A
+#: contextvar rather than a set: an NPC turn runs inside the player's task, so
+#: a concurrent campaign in another request is unaffected.
+_ATTENDANCE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "attendance_in_progress", default=False
+)
 
 
 def default_narrator_prompt() -> str:
@@ -353,6 +361,7 @@ class ActionService:
         settled_sink=None,
         clock_paused=None,
         tick_handlers: Optional[Dict[str, Any]] = None,
+        tick_advice: Optional[Callable[[Any], Any]] = None,
     ):
         self.store = store
         self.rules = rules or RulesEngine()
@@ -379,6 +388,21 @@ class ActionService:
         #: loop never advances the clock past the action's own cost, so this is
         #: a safety valve against a pathological schedule, not a time cap.
         self.max_ticks_per_action = 32
+        #: Callable[[ActionService], Any] - called after a committed turn, once
+        #: the world has had its say. It may only propose (it gets a service it
+        #: cannot lie through: every proposal is an ordinary ActionRequest), so
+        #: it can never write state. None means nobody is asked.
+        self.tick_advice: Optional[Callable[[Any], Any]] = tick_advice
+        #: Callable[[ActionService, str], Awaitable] - lets the NPCs of a world
+        #: take their turn after a committed action. They go through this very
+        #: service, so an NPC is held to the same rules and the same transaction
+        #: boundary as the player; injected rather than imported to keep the
+        #: dependency pointing one way.
+        self.npc_round = None
+        #: Puts the next days of authored routines on the calendar. Injected for
+        #: the same reason as `npc_round`: this module knows *what* a turn
+        #: costs, not what a town's day looks like.
+        self.npc_clock = None
 
     def _commit_turn(
         self,
@@ -481,7 +505,11 @@ class ActionService:
             )
 
     async def _tick_with_clock(
-        self, state: GameState, target_minutes: int
+        self,
+        state: GameState,
+        target_minutes: int,
+        *,
+        advice: Any = None,
     ) -> Tuple[int, List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
         """Apply whatever comes due while this action's own time passes.
 
@@ -497,27 +525,48 @@ class ActionService:
         With nothing scheduled this is a single lookup, which is why it can sit
         inside the commit path.
         """
-        if self.store is None or target_minutes <= 0:
+        if self.store is None:
             return target_minutes, [], [], []
         campaign_id = state.campaign_id
-        try:
-            if self.store.next_due_minute(campaign_id) is None:
+        if target_minutes > 0:
+            try:
+                if self.store.next_due_minute(campaign_id) is None:
+                    return target_minutes, [], [], []
+            except (OSError, ValueError) as exc:
+                logger.warning("could not read the schedule for %s: %s", campaign_id, exc)
                 return target_minutes, [], [], []
-        except (OSError, ValueError) as exc:
-            logger.warning("could not read the schedule for %s: %s", campaign_id, exc)
-            return target_minutes, [], [], []
 
         handlers = self.tick_handlers
         events: List[Dict[str, Any]] = []
         schedules: List[Dict[str, Any]] = []
         fired_ids: List[str] = []
         start_abs = Clock.from_state(state).abs_minute
-        target_abs = start_abs + target_minutes
-        for _hop in range(self.max_ticks_per_action):
+        target_abs = start_abs + max(0, target_minutes)
+        proposed = False
+        # The loop must run at least once when there is a planner: a turn that
+        # takes no time still happens, and the town still answers it.
+        hops = self.max_ticks_per_action if advice is not None else 1
+        for _hop in range(hops):
+
             reached = Clock.from_state(state).abs_minute
+            if advice is not None and not proposed:
+                proposed = True
+                # Once per turn, before the first hop: the planner's answer is
+                # "what should happen next", not a running commentary on every
+                # minute the clock passes. It is consulted with the clock
+                # already spent and the state already solved, so what it
+                # proposes is later than the turn it answers.
+                produced = advice(self, state)
+                if hasattr(produced, "__await__"):
+                    await produced
             stop = catch_up_minute(self.store, campaign_id, target_abs)
             if stop <= reached:
                 break
+            # The events due at `stop` run at `stop`, and this tick is the step
+            # that carries the clock there. Ordering is by minute, then priority,
+            # then insertion, so the loop ends only when it has reached the
+            # target or run dry - never because the next event looked 'earlier
+            # than now', which is what being due next means.
             plan = plan_tick(self.store, campaign_id, stop)
             if plan.empty:
                 break
@@ -536,12 +585,16 @@ class ActionService:
             # measured from there - otherwise a sleep that passes a shift counts
             # its minutes twice.
             for field_name in type(ticked).model_fields:
-                if field_name in ("version", "turn", "updated_at", "minute", "day"):
+                if field_name in ("version", "turn", "updated_at", "day", "minute"):
                     continue
                 setattr(state, field_name, getattr(ticked, field_name))
-            state.minute = ticked.minute
             state.day = ticked.day
+            state.minute = ticked.minute
             reached_abs = Clock.from_state(ticked).abs_minute
+            # The tick placed the clock at the event, so what is left of the
+            # turn is measured from there. Whatever is left is spent by the
+            # caller (advance_state), and a further hop may be needed for an
+            # event that came due between here and the target.
             target_minutes = max(0, target_abs - reached_abs)
             events.extend(fired)
             schedules.extend(scheduled)
@@ -891,7 +944,87 @@ class ActionService:
         self._notify_settled(
             request.campaign_id, new_state, getattr(result, "narrative", None)
         )
+        # The world answers last: the other actors of the town act on the state
+        # this turn produced, never on a state they only half saw. Their own
+        # turns go through this function too, so the recursion stops at the
+        # first NPC that acts and the caller still gets ITS result, not the
+        # last thing the town did.
+        if request.actor_type == "player" and not _ATTENDANCE.get():
+            # The host's world clock is part of the answer too: a town that has
+            # a routine has a day, and the day starts being kept the first time
+            # anyone acts in it - not only when the planner is switched on.
+            self._ensure_world_clock(request.campaign_id)
+            await self._run_npc_round(request)
         return result
+
+    def _ensure_world_clock(self, campaign_id: str) -> None:
+        """Queue the first day or two of authored routines, if not already done.
+
+        Scheduling is idempotent (`npc_schedule.schedule_day` skips slots that
+        are already queued or already past), so this costs one query per turn
+        and is the difference between a world that merely *has* routines and one
+        that actually lives through them. A failure here may not fail the turn:
+        the player's action is already durable.
+        """
+        if not callable(self.npc_clock):
+            return
+        try:
+            self.npc_clock(self.store, campaign_id)
+        except Exception as exc:  # noqa: BLE001 - the turn is already durable
+            logger.warning("world clock for %s not started: %s", campaign_id, exc)
+
+    def _town_has_routine(self, campaign_id: str) -> bool:
+        """Whether any NPC in this campaign has an authored routine.
+
+        Routines are the authored statement of "this person lives here and has
+        a day". Without one there is nothing for a round to carry out, and
+        letting the NPCs improvise would turn every ordinary action into a
+        second, unrequested turn.
+        """
+        state = self.store.get_state(campaign_id)
+        if state is None:
+            return False
+        world = self.store.get_world(state.world_id)
+        if world is None:
+            return False
+        for entity in getattr(world, "entities", []) or []:
+            if getattr(entity, "schedule", None):
+                return True
+        return False
+
+    async def _run_npc_round(self, request: ActionRequest) -> None:
+        """Let the other actors of the world respond to a committed turn.
+
+        Runs after the player's turn is durable, so a caller that gets a result
+        also gets a world in which the NPCs have already acted. It sits outside
+        the commit on purpose: a world where an NPC fails to decide is still a
+        world where the player's action happened. The acting NPC is excluded -
+        it does not get a second move on the back of the player's input.
+        """
+        if not callable(self.npc_round) or request.actor_type != "player":
+            return
+        if not self._town_has_routine(request.campaign_id):
+            # A world nobody lives in is not a town that stays quiet: it is a
+            # world with no NPC turns at all. Deciding that up front keeps a
+            # lone guard from "waiting" the afternoon away on every look.
+            return
+        # The acting NPC is excluded: it does not get a second move on the back
+        # of the player's input. "player" is the default actor id, not a
+        # villager, so it is never an exclusion.
+        actor = request.actor_id or ""
+        exclude = [actor] if actor and actor != "player" else []
+        # The world answers exactly once per player turn. The contextvar stops
+        # the re-entrant turns (an NPC acting inside the round) from starting a
+        # round of their own; they are the answer, not a question.
+        token = _ATTENDANCE.set(True)
+        try:
+            await self.npc_round(self, request.campaign_id, exclude=exclude)
+        except Exception as exc:  # noqa: BLE001 - the player's turn is already durable
+            logger.warning(
+                "npc round after %s failed: %s", request.request_id, exc, exc_info=True
+            )
+        finally:
+            _ATTENDANCE.reset(token)
 
     async def _narrate_committed(
         self,
@@ -1601,6 +1734,17 @@ class ActionService:
             except Exception:  # noqa: BLE001 - a broken probe freezes nothing
                 clock_paused = False
         minutes_spent = duration_minutes(request.action, request.params)
+        if getattr(outcome, "minutes", None) is not None:
+            # The rule overrides the catalogue: a wait knows its own length, and
+            # the player asked for exactly that many minutes.
+            try:
+                minutes_spent = max(0, int(outcome.minutes))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "ignoring non-numeric duration %r on %s",
+                    outcome.minutes,
+                    request.action,
+                )
         if clock_paused:
             minutes_spent = 0
         # The world clock is no longer a side effect of typing alone: it belongs
@@ -1610,9 +1754,17 @@ class ActionService:
         world_events: List[Dict[str, Any]] = []
         world_schedules: List[Dict[str, Any]] = []
         world_fired: List[str] = []
-        spent, world_events, world_schedules, world_fired = await self._tick_with_clock(
-            new_state, minutes_spent
-        )
+        # An NPC is an actor, not a schedule: giving it the high-level planner
+        # too would let one turn produce two competing plans for the same town.
+        advisor = None if request.actor_type == "npc" else self.tick_advice
+        # A paused clock is a frozen world: nothing may come due in a game where
+        # time does not pass, so the tick is skipped rather than run for zero.
+        if clock_paused:
+            spent, world_events, world_schedules, world_fired = 0, [], [], []
+        else:
+            spent, world_events, world_schedules, world_fired = await self._tick_with_clock(
+                new_state, minutes_spent, advice=advisor
+            )
         clock = advance_state(new_state, spent, paused=clock_paused)
 
         # Narration is NOT produced here. It is presentation only, but it is

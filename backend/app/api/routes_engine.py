@@ -38,7 +38,9 @@ from app.models.game import (
     QuestDef,
     WorldDefinition,
 )
+from app.engines import npc_schedule
 from app.services import authoring_session, interaction_planner, starter_worlds, world_service
+from app.services import npc_turns
 from app.api.routes_game import _game_state_db_path
 from app.services.action_service import ActionService
 from app.services import state_diagnostics
@@ -315,13 +317,36 @@ def _graph_mirror_sink():
 
 
 def _clock_paused(campaign_id: str) -> bool:
-    """Whether this campaign's world clock is frozen (the player left)."""
-    try:
-        from app.api import routes_game
+    """Whether this campaign's world clock is frozen.
 
-        return bool(routes_game.campaign_clock_paused(campaign_id))
-    except Exception:  # noqa: BLE001 - a missing runtime means "not paused"
+    The rule is "a campaign someone is playing runs, and taking a turn is that
+    playing". A campaign with no cached legacy session used to read as paused,
+    which is right for a world nobody is in front of and wrong for the
+    sessionless lane, where every turn would then happen at a standstill. The
+    saved clock is the authority: freezing and resuming are explicit actions of
+    their own, so nothing here has to infer them from who is watching.
+    """
+    try:
+        from app.db.game_state_store import GameStateStore
+
+        with GameStateStore(_game_state_db_path(), migrate=False) as store:
+            state = store.get_state(campaign_id)
+        if state is None:
+            return False
+        return bool(getattr(state, "clock_paused", False))
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning("could not read the clock for %s: %s", campaign_id, exc)
         return False
+
+
+def _tick_handlers(service: Optional[ActionService] = None) -> Dict[str, Any]:
+    """Handlers for scheduled events that come due inside a turn's clock tick.
+
+    Routines are the only scheduled thing today: when an NPC's shift starts,
+    the handler records the slot on the NPC (activity, and the slow drift of
+    its needs) inside the same transaction that advanced the clock.
+    """
+    return {npc_schedule.NPC_ROUTINE: npc_turns.routine_handler(service)}
 
 
 def _service() -> ActionService:
@@ -333,10 +358,48 @@ def _service() -> ActionService:
         history_provider=_history_provider(),
         settled_sink=_graph_mirror_sink(),
         clock_paused=_clock_paused,
+        tick_handlers={},
+    )
+    service.tick_handlers = _tick_handlers(service)
+    # The NPCs act through this very service: one action model, one rules
+    # engine, one write path. Their routines are scheduled events, so they are
+    # ticked by the same clock the player's actions advance.
+    service.npc_round = npc_turns.run_round
+    service.npc_clock = npc_turns.start_world_clock
+    #: The town's plan for what should happen next. The domain only ever sees a
+    #: callable that may propose scheduled events - it gets no write path, and
+    #: every proposal it makes still has to come due and run through a handler.
+    from app.services import town_advisor  # local: keeps the import graph acyclic
+
+    service.tick_advice = lambda svc, state: town_advisor.advise(
+        svc, state, llm=_get_town_llm()
     )
     #: Closed together with the game store by the request handler.
     service.scenario_store = scenario_store
     return service
+
+
+_town_llm_cache: list = []
+
+
+def _get_town_llm():
+    """The model the town planner may ask, or None when none is configured.
+
+    Same choice of provider as the narrator, because a world that can narrate
+    in a language can also plan in it. Built once: the router keeps its own
+    retry state and rebuilding it per request would throw that away.
+    """
+    from app.services import town_advisor
+
+    if not town_advisor.enabled():
+        return None
+    if not _town_llm_cache:
+        try:
+            _town_llm_cache.append(narrator_factory.build_router())
+        except Exception as exc:  # noqa: BLE001 - the planner is optional
+            logger.warning("town planner has no model: %s", exc)
+            _town_llm_cache.append(None)
+    return _town_llm_cache[0]
 
 
 def _build_advisor():

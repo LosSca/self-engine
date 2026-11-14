@@ -226,6 +226,22 @@ register_action(
 )
 register_action(
     ActionSpec(
+        name="travel",
+        label="前往",
+        handler="_travel",
+        minutes=10,
+        target="required",
+        description=(
+            "Route a non-player actor to a destination. Same exit checks as move; "
+            "the actor is named in params.actor_id. The text parser never maps a "
+            "phrase onto it: this verb exists for driver code, not for prose."
+        ),
+        verbs=(),
+        verb_priority=205,
+    )
+)
+register_action(
+    ActionSpec(
         name="equip",
         label="装备",
         handler="_equip",
@@ -277,6 +293,21 @@ register_action(
         description="Resolve the pending authored choice with one of its option ids.",
         verbs=(),
         verb_priority=210,
+    )
+)
+register_action(
+    ActionSpec(
+        name="give_item",
+        label="交付物品",
+        handler="_give_item",
+        minutes=1,
+        target="required",
+        description=(
+            "Hand one carried item to an actor here, or take one from it. "
+            "The world's economy is transfer, so this is how stock and debt move."
+        ),
+        verbs=(),
+        verb_priority=215,
     )
 )
 register_action(

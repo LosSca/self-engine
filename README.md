@@ -134,11 +134,11 @@ SQLite（路径均可用环境变量覆盖）
 内置行动是声明式目录（`backend/app/engines/action_registry.py` 的 `ActionSpec`），
 每个行动声明 name / label / handler / target / verbs，`RulesEngine` 按动词表分发。
 
-当前 **19 个行动**（`GET /api/v1/action-types` 可读到全部，含中文动词）：
+当前 **21 个行动**（`GET /api/v1/action-types` 可读到全部，含中文动词）：
 `attack` 攻击、`flee` 逃跑、`defend` 防御、`take` 拾取、`open` 打开、`use` 使用、
-`talk` 交谈、`move` 移动、`investigate` 调查、`look` 观察、`equip` 装备、
-`unequip` 卸下、`buy` 购买、`sell` 出售、`choose` 选择、`dismantle` 拆解、
-`combine` 合成、`wait` 等待，以及世界可扩展的 `custom`。
+`talk` 交谈、`move` 移动、`travel` 前往、`investigate` 调查、`look` 观察、`equip` 装备、
+`unequip` 卸下、`buy` 购买、`sell` 出售、`give_item` 交付物品、`choose` 选择、
+`dismantle` 拆解、`combine` 合成、`wait` 等待，以及世界可扩展的 `custom`。
 
 拆解与合成读的是**物品自己声明的材料数据**（`dismantles_to` / `made_from` / `craftable`），
 所以"拆掉木桌得到木板、木板合成木盾"不需要写代码，只需要在世界上写明。没写 `dismantles_to`
@@ -148,6 +148,12 @@ SQLite（路径均可用环境变量覆盖）
 行动主体不再隐式是玩家：`ActionRequest.actor_type` 支持 `player` / `npc` / `environment` /
 `system`，但**规则判定与写入路径完全相同**——NPC 没有自己的执行通道。详见
 [docs/hybrid-world-simulation.md](docs/hybrid-world-simulation.md)。
+
+世界会自己过日子：作者在 `EntityDef.schedule` 里给 NPC 排一天的日程（上班 / 吃饭 / 社交 /
+睡觉），时间推进时这些槽位作为 `npc.routine` 调度事件到期；到期后 NPC 按自己的需求与个性
+（`traits`）选一个意图，翻译成普通的 `ActionRequest` 交给同一个 `ActionService`。
+玩家等待 8 小时，镇子就真的过了 8 小时：有人换了班，有人去了酒馆。没有第二套时钟、
+没有第二套写路径，NPC 也只知道自己目击过的事（`witnessed_by`）。
 
 ```bash
 # 看当前构建支持的全部行动（含中文动词）
