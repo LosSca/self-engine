@@ -40,7 +40,8 @@ from app.engines.event_engine import (
     run_triggered_events,
 )
 from app.engines.quest_engine import advance_quests
-from app.engines.game_clock import advance_state, duration_minutes
+from app.engines.game_clock import Clock, advance_state, duration_minutes
+from app.engines.world_scheduler import catch_up_minute, plan_tick, run_tick
 from app.engines.rules_engine import RulesEngine
 from app.engines.story_engine import StoryStatus, advance_storyline
 from app.models.game import (
@@ -351,6 +352,7 @@ class ActionService:
         history_provider=None,
         settled_sink=None,
         clock_paused=None,
+        tick_handlers: Optional[Dict[str, Any]] = None,
     ):
         self.store = store
         self.rules = rules or RulesEngine()
@@ -369,6 +371,87 @@ class ActionService:
         #: outside the transaction. Only for work that may fail freely: the
         #: knowledge graph mirrors prose and must never roll a turn back.
         self.settled_sink = settled_sink
+        #: `{kind: handler}` for events that come due while an action's own
+        #: elapsed time passes (see `_tick_with_clock`). Empty means only the
+        #: clock advances and the events are recorded, not interpreted.
+        self.tick_handlers = dict(tick_handlers or {})
+        #: How many scheduled events to apply inside one turn's commit. The
+        #: loop never advances the clock past the action's own cost, so this is
+        #: a safety valve against a pathological schedule, not a time cap.
+        self.max_ticks_per_action = 32
+
+    def _commit_turn(
+        self,
+        *,
+        request: ActionRequest,
+        payload: Dict[str, Any],
+        result: ActionResult,
+        state: GameState,
+        base_version: int,
+        events: List[Dict[str, Any]],
+        fired_ids: List[str],
+    ) -> None:
+        """Write the turn and the world events it carried in ONE transaction.
+
+        Marking a due event as fired has to travel with the state it produced:
+        commit them separately and a crash between the two re-fires the event on
+        the next turn, which duplicates its effects in the authority.
+        """
+        if fired_ids:
+            self.store.commit_simulation_tick(
+                campaign_id=request.campaign_id,
+                request_id=request.request_id,
+                request_payload=payload,
+                result_payload=result.model_dump(mode="json"),
+                state=state,
+                events=events,
+                fired_event_ids=fired_ids,
+                expected_version=base_version,
+            )
+            return
+        self.store.commit_action(
+            campaign_id=request.campaign_id,
+            request_id=request.request_id,
+            request_payload=payload,
+            status="applied",
+            result_payload=result.model_dump(mode="json"),
+            state=state,
+            events=events,
+            expected_version=base_version,
+        )
+
+    def _queue_ticks(
+        self,
+        campaign_id: str,
+        state: GameState,
+        schedules: List[Dict[str, Any]],
+    ) -> None:
+        """Persist the follow-up events a tick asked to leave for later.
+
+        Runs after the transaction that recorded the tick. A failure here is
+        logged, not raised: the turn really did happen, and losing one future
+        intention must not turn a successful action into an error.
+        """
+        if self.store is None or not schedules:
+            return
+        stamp = int(state.day or 0) * 1440 + int(state.minute or 0)
+        for entry in schedules:
+            try:
+                kind = str(entry.get("kind") or "")
+                if not kind:
+                    continue
+                self.store.schedule_event(
+                    campaign_id,
+                    due_abs_minute=int(entry.get("due_abs_minute", stamp)),
+                    kind=kind,
+                    payload=dict(entry.get("payload") or {}),
+                    priority=int(entry.get("priority", 100)),
+                    created_abs_minute=stamp,
+                )
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.warning(
+                    "could not queue a follow-up event for %s: %s", campaign_id, exc
+                )
 
     # ------------------------------------------------------------------ utils
     @staticmethod
@@ -396,6 +479,74 @@ class ActionService:
                 actor_type=str(row.get("request", {}).get("actor_type", "player")),
                 state_version=row.get("state_version", 0),
             )
+
+    async def _tick_with_clock(
+        self, state: GameState, target_minutes: int
+    ) -> Tuple[int, List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+        """Apply whatever comes due while this action's own time passes.
+
+        Returns `(minutes_actually_used, domain_events, new_schedules,
+        fired_event_ids)`.
+
+        Every event is applied at the state as it stands when the clock reaches
+        that event's minute: the loop re-plans after each hop, so a handler that
+        changes the world invalidates a plan built before it ran. The reported
+        duration never exceeds the verb's own cost - a sleep of two hours is two
+        hours, even if the forge it passes opened at nine.
+
+        With nothing scheduled this is a single lookup, which is why it can sit
+        inside the commit path.
+        """
+        if self.store is None or target_minutes <= 0:
+            return target_minutes, [], [], []
+        campaign_id = state.campaign_id
+        try:
+            if self.store.next_due_minute(campaign_id) is None:
+                return target_minutes, [], [], []
+        except (OSError, ValueError) as exc:
+            logger.warning("could not read the schedule for %s: %s", campaign_id, exc)
+            return target_minutes, [], [], []
+
+        handlers = self.tick_handlers
+        events: List[Dict[str, Any]] = []
+        schedules: List[Dict[str, Any]] = []
+        fired_ids: List[str] = []
+        start_abs = Clock.from_state(state).abs_minute
+        target_abs = start_abs + target_minutes
+        for _hop in range(self.max_ticks_per_action):
+            reached = Clock.from_state(state).abs_minute
+            stop = catch_up_minute(self.store, campaign_id, target_abs)
+            if stop <= reached:
+                break
+            plan = plan_tick(self.store, campaign_id, stop)
+            if plan.empty:
+                break
+            ticked, fired, scheduled, _ids = await run_tick(
+                self.store,
+                state,
+                plan,
+                handlers,
+                from_abs_minute=reached,
+                to_abs_minute=min(stop, target_abs),
+            )
+            # _apply owns `state`; the tick decides what the world did, so its
+            # result is folded back in rather than rebinding the name (which the
+            # rest of the turn would never see). The tick already placed the
+            # clock at the event it ran, so the caller's own duration has to be
+            # measured from there - otherwise a sleep that passes a shift counts
+            # its minutes twice.
+            for field_name in type(ticked).model_fields:
+                if field_name in ("version", "turn", "updated_at", "minute", "day"):
+                    continue
+                setattr(state, field_name, getattr(ticked, field_name))
+            state.minute = ticked.minute
+            state.day = ticked.day
+            reached_abs = Clock.from_state(ticked).abs_minute
+            target_minutes = max(0, target_abs - reached_abs)
+            events.extend(fired)
+            schedules.extend(scheduled)
+            fired_ids.extend(_ids)
+        return target_minutes, events, schedules, fired_ids
 
     def _base(self, request: ActionRequest) -> Dict[str, Any]:
         return dict(
@@ -689,23 +840,29 @@ class ActionService:
         if not outcome.ok:
             return await self._reject(request, payload, state, world, outcome)
 
-        result, new_state, events, context_entries, narration_input = await self._apply(
-            request, payload, state, world, outcome
-        )
+        (
+            result,
+            new_state,
+            events,
+            context_entries,
+            narration_input,
+            schedules,
+            fired_ids,
+        ) = await self._apply(request, payload, state, world, outcome)
         if result.status != "applied":
             return result
 
         try:
-            self.store.commit_action(
-                campaign_id=request.campaign_id,
-                request_id=request.request_id,
-                request_payload=payload,
-                status="applied",
-                result_payload=result.model_dump(mode="json"),
+            self._commit_turn(
+                request=request,
+                payload=payload,
+                result=result,
                 state=new_state,
+                base_version=state.version,
                 events=events,
-                expected_version=state.version,
+                fired_ids=fired_ids,
             )
+            self._queue_ticks(request.campaign_id, new_state, schedules)
         except sqlite3.IntegrityError:
             raced = self._replay(request, payload)
             if raced is None:
@@ -875,22 +1032,22 @@ class ActionService:
             )
             if not outcome.ok:
                 return None
-            result, new_state, events, _, _ = await self._apply(
+            result, new_state, events, _, _, schedules, fired_ids = await self._apply(
                 request, payload, state, world, outcome, record_rejection=False
             )
             if result.status != "applied":
                 return None
             try:
-                self.store.commit_action(
-                    campaign_id=request.campaign_id,
-                    request_id=request.request_id,
-                    request_payload=payload,
-                    status="applied",
-                    result_payload=result.model_dump(mode="json"),
+                self._commit_turn(
+                    request=request,
+                    payload=payload,
+                    result=result,
                     state=new_state,
+                    base_version=state.version,
                     events=events,
-                    expected_version=state.version,
+                    fired_ids=fired_ids,
                 )
+                self._queue_ticks(request.campaign_id, new_state, schedules)
             except StateConflictError:
                 continue
             except sqlite3.IntegrityError:
@@ -1317,7 +1474,15 @@ class ActionService:
         world: WorldDefinition,
         outcome: RuleOutcome,
         record_rejection: bool = True,
-    ) -> tuple[ActionResult, GameState, List[Dict[str, Any]]]:
+    ) -> tuple[
+        ActionResult,
+        GameState,
+        List[Dict[str, Any]],
+        List[Any],
+        Any,
+        List[Dict[str, Any]],
+        List[str],
+    ]:
         new_state = state.model_copy(deep=True)
         processed: set[str] = set()
         forced: set[str] = set()
@@ -1344,7 +1509,7 @@ class ActionService:
                         refused = await self._reject(
                             request, payload, state, world, segment
                         )
-                        return refused, state, [], [], _NarrationInput()
+                        return refused, state, [], [], _NarrationInput(), [], []
                     stopped = segment.message
                     break
                 segment_applied = apply_effects(new_state, world, segment.effects)
@@ -1353,7 +1518,7 @@ class ActionService:
                     rejected = self._reject_effects(
                         request, payload, state, failed, record_rejection
                     )
-                    return (*rejected[:3], [], _NarrationInput())
+                    return (*rejected[:3], [], _NarrationInput(), [], [])
                 applied.extend(segment_applied)
                 step_facts = [
                     fact for item in segment_applied for fact in item.facts
@@ -1373,7 +1538,7 @@ class ActionService:
                     break
             if not applied:  # pragma: no cover - the full path was validated above
                 refused = await self._reject(request, payload, state, world, outcome)
-                return refused, state, [], [], _NarrationInput()
+                return refused, state, [], [], _NarrationInput(), [], []
             if stopped:
                 here = next(
                     (loc for loc in world.locations if loc.id == new_state.location_id),
@@ -1403,7 +1568,7 @@ class ActionService:
                 rejected = self._reject_effects(
                     request, payload, state, failed, record_rejection
                 )
-                return (*rejected[:3], [], _NarrationInput())
+                return (*rejected[:3], [], _NarrationInput(), [], [])
             facts = [fact for item in applied for fact in item.facts]
             new_state, executions, quest_updates = self._settle_facts(
                 world, new_state, request, facts,
@@ -1438,7 +1603,17 @@ class ActionService:
         minutes_spent = duration_minutes(request.action, request.params)
         if clock_paused:
             minutes_spent = 0
-        clock = advance_state(new_state, minutes_spent, paused=clock_paused)
+        # The world clock is no longer a side effect of typing alone: it belongs
+        # to everyone, so anything due inside this action's own elapsed time
+        # fires here, before the turn commits. A sleep through the night hands
+        # you a world where the baker really did open at dawn.
+        world_events: List[Dict[str, Any]] = []
+        world_schedules: List[Dict[str, Any]] = []
+        world_fired: List[str] = []
+        spent, world_events, world_schedules, world_fired = await self._tick_with_clock(
+            new_state, minutes_spent
+        )
+        clock = advance_state(new_state, spent, paused=clock_paused)
 
         # Narration is NOT produced here. It is presentation only, but it is
         # also the expensive part of a turn, and this state has not been
@@ -1502,6 +1677,10 @@ class ActionService:
         events.extend(
             _settled_event_rows(executions, quest_updates, new_state.version)
         )
+        # World events fired inside this action's elapsed time, in the order the
+        # scheduler produced them: both the applied facts (shift started, forge
+        # opened) and the `world_tick` bookkeeping rows that say it happened.
+        events.extend(world_events)
         if story_status is not None:
             node_map = play.config.storyline.node_map() if play is not None else {}
             for node_id in story_entered:
@@ -1537,8 +1716,15 @@ class ActionService:
             quest_updates=list(quest_updates),
             summary=new_state.summary or "",
         )
-        return result, new_state, events, context_entries, narration_input
-
+        return (
+            result,
+            new_state,
+            events,
+            context_entries,
+            narration_input,
+            world_schedules,
+            world_fired,
+        )
 
     async def record_quest_progress(
         self,

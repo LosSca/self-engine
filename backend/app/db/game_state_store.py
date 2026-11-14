@@ -26,7 +26,7 @@ from app.models.game import GameState, WorldDefinition
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 def _worlds_disagree(snapshot_json: str, current_world_id: str) -> bool:
     """True when a stored snapshot described a different world than the live one."""
@@ -159,6 +159,27 @@ _MIGRATIONS: Dict[int, List[str]] = {
         "ON evolution_proposals(world_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_evolution_proposals_campaign "
         "ON evolution_proposals(campaign_id, created_at)",
+    ],
+    # Hybrid World Simulation, Phase 2: things that have NOT happened yet.
+    # A domain_events row is a fact; this table is an intention. It has to
+    # survive a restart, because the world clock keeps running between two
+    # turns and a scheduled shift, debt or patrol is still ahead of us.
+    5: [
+        "CREATE TABLE IF NOT EXISTS scheduled_events ("
+        "    id TEXT PRIMARY KEY,"
+        "    campaign_id TEXT NOT NULL,"
+        "    due_abs_minute INTEGER NOT NULL,"
+        "    priority INTEGER NOT NULL DEFAULT 100,"
+        "    sequence_id INTEGER NOT NULL,"
+        "    kind TEXT NOT NULL,"
+        "    payload_json TEXT NOT NULL DEFAULT '{}',"
+        "    status TEXT NOT NULL DEFAULT 'pending',"
+        "    created_abs_minute INTEGER NOT NULL DEFAULT 0,"
+        "    fired_at TEXT NOT NULL DEFAULT '',"
+        "    created_at TEXT NOT NULL"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_due "
+        "ON scheduled_events(campaign_id, status, due_abs_minute, priority, sequence_id)",
     ],
 }
 
@@ -1203,6 +1224,243 @@ class GameStateStore:
             }
             for row in rows
         ]
+
+    # ------------------------------------------------------ scheduled events
+    #
+    # A scheduled event is an intention, not a fact. The row lives here (not in
+    # the state document) because it must outlive the process: the world clock
+    # keeps moving between two turns, and a shift that starts at 18:00 is still
+    # ahead of us after a restart.
+
+    def schedule_event(
+        self,
+        campaign_id: str,
+        *,
+        due_abs_minute: int,
+        kind: str,
+        payload: Optional[Dict[str, Any]] = None,
+        priority: int = 100,
+        created_abs_minute: int = 0,
+        event_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Queue one future event. Ordering is (due, priority, sequence_id).
+
+        `sequence_id` is handed out monotonically per table, so two events that
+        come due on the same minute run in the order they were scheduled - which
+        is what makes a scenario replayable.
+        """
+        event_id = event_id or str(uuid.uuid4())
+        stamp = _now()
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(sequence_id), 0) AS s FROM scheduled_events"
+            ).fetchone()
+            sequence_id = int(row["s"] if row is not None else 0) + 1
+            self._conn.execute(
+                "INSERT INTO scheduled_events (id, campaign_id, due_abs_minute, priority,"
+                " sequence_id, kind, payload_json, status, created_abs_minute,"
+                " fired_at, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, '', ?)",
+                (
+                    event_id,
+                    campaign_id,
+                    int(due_abs_minute),
+                    int(priority),
+                    sequence_id,
+                    kind,
+                    _json_dump(payload or {}),
+                    int(created_abs_minute),
+                    stamp,
+                ),
+            )
+        return {
+            "id": event_id,
+            "campaign_id": campaign_id,
+            "due_abs_minute": int(due_abs_minute),
+            "priority": int(priority),
+            "sequence_id": sequence_id,
+            "kind": kind,
+            "payload": dict(payload or {}),
+            "status": "pending",
+            "created_abs_minute": int(created_abs_minute),
+            "fired_at": "",
+            "created_at": stamp,
+        }
+
+    @staticmethod
+    def _scheduled_row(row: Any) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "campaign_id": row["campaign_id"],
+            "due_abs_minute": int(row["due_abs_minute"]),
+            "priority": int(row["priority"]),
+            "sequence_id": int(row["sequence_id"]),
+            "kind": row["kind"],
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "status": row["status"],
+            "created_abs_minute": int(row["created_abs_minute"]),
+            "fired_at": row["fired_at"],
+            "created_at": row["created_at"],
+        }
+
+    def due_events(
+        self, campaign_id: str, until_abs_minute: int, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Pending events due at or before `until_abs_minute`, in causality order."""
+        rows = self._conn.execute(
+            "SELECT * FROM scheduled_events"
+            " WHERE campaign_id = ? AND status = 'pending' AND due_abs_minute <= ?"
+            " ORDER BY due_abs_minute, priority, sequence_id LIMIT ?",
+            (campaign_id, int(until_abs_minute), int(limit)),
+        ).fetchall()
+        return [self._scheduled_row(row) for row in rows]
+
+    def next_due_minute(self, campaign_id: str) -> Optional[int]:
+        """Absolute minute of the earliest pending event, or None."""
+        row = self._conn.execute(
+            "SELECT MIN(due_abs_minute) AS m FROM scheduled_events"
+            " WHERE campaign_id = ? AND status = 'pending'",
+            (campaign_id,),
+        ).fetchone()
+        if row is None or row["m"] is None:
+            return None
+        return int(row["m"])
+
+    def mark_event_fired(self, event_id: str) -> bool:
+        """pending -> fired. Returns False when it was already resolved.
+
+        The status guard is the concurrency protection: two workers that both
+        see the same due row can call this, and only one gets True.
+        """
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "UPDATE scheduled_events SET status = 'fired', fired_at = ?"
+                " WHERE id = ? AND status = 'pending'",
+                (_now(), event_id),
+            )
+            return cursor.rowcount == 1
+
+    def cancel_event(self, event_id: str) -> bool:
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "UPDATE scheduled_events SET status = 'cancelled'"
+                " WHERE id = ? AND status = 'pending'",
+                (event_id,),
+            )
+            return cursor.rowcount == 1
+
+    def reschedule_event(self, event_id: str, due_abs_minute: int) -> bool:
+        """Move a pending event. A new `sequence_id` puts it behind its new peers."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(sequence_id), 0) AS s FROM scheduled_events"
+            ).fetchone()
+            sequence_id = int(row["s"] if row is not None else 0) + 1
+            cursor = self._conn.execute(
+                "UPDATE scheduled_events SET due_abs_minute = ?, sequence_id = ?"
+                " WHERE id = ? AND status = 'pending'",
+                (int(due_abs_minute), sequence_id, event_id),
+            )
+            return cursor.rowcount == 1
+
+    def list_scheduled_events(
+        self, campaign_id: str, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM scheduled_events WHERE campaign_id = ?"
+        params: List[Any] = [campaign_id]
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY due_abs_minute, priority, sequence_id"
+        rows = self._conn.execute(sql, tuple(params)).fetchall()
+        return [self._scheduled_row(row) for row in rows]
+
+    def has_pending_event(self, campaign_id: str, kind: str) -> bool:
+        """Whether the same kind of upcoming event is already queued.
+
+        Recurring schedules (an NPC's work shift, a patrol) are re-planned every
+        cycle; without this the table would grow one copy per turn.
+        """
+        row = self._conn.execute(
+            "SELECT 1 FROM scheduled_events"
+            " WHERE campaign_id = ? AND kind = ? AND status = 'pending' LIMIT 1",
+            (campaign_id, kind),
+        ).fetchone()
+        return row is not None
+
+    def commit_simulation_tick(
+        self,
+        *,
+        campaign_id: str,
+        request_id: str,
+        request_payload: Dict[str, Any],
+        result_payload: Dict[str, Any],
+        state: GameState,
+        events: List[Dict[str, Any]],
+        fired_event_ids: List[str],
+        expected_version: Optional[int] = None,
+    ) -> None:
+        """Commit a world-clock advance together with the events it fired.
+
+        Same transaction and the same compare-and-set as `commit_action`, plus
+        marking the due scheduled events as fired. A crash between "state
+        advanced" and "events marked" would re-fire them on the next tick, so
+        they must move together or not at all.
+        """
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO action_requests"
+                " (request_id, campaign_id, request_json, status, result_json,"
+                "  state_version, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    request_id,
+                    campaign_id,
+                    json.dumps(request_payload, sort_keys=True),
+                    "applied",
+                    json.dumps(result_payload, sort_keys=True),
+                    state.version,
+                    _now(),
+                ),
+            )
+            updated = self._conn.execute(
+                "UPDATE campaign_state SET version = ?, state_json = ?, updated_at = ?"
+                " WHERE campaign_id = ? AND version = ?",
+                (
+                    state.version,
+                    state.model_dump_json(),
+                    _now(),
+                    campaign_id,
+                    _expected_version(state, expected_version),
+                ),
+            )
+            if updated.rowcount == 0:
+                self._raise_missing_or_conflict(campaign_id, expected_version)
+            self._insert_snapshot(state, request_id=request_id)
+            self.prune_snapshots(campaign_id)
+            for event in events:
+                self._conn.execute(
+                    "INSERT INTO domain_events"
+                    " (id, campaign_id, request_id, event_type, payload_json,"
+                    "  state_version, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        event.get("id") or str(uuid.uuid4()),
+                        campaign_id,
+                        request_id,
+                        event["event_type"],
+                        json.dumps(event.get("payload", {}), sort_keys=True),
+                        event.get("state_version", state.version),
+                        event.get("created_at") or _now(),
+                    ),
+                )
+            stamp = _now()
+            for event_id in fired_event_ids:
+                self._conn.execute(
+                    "UPDATE scheduled_events SET status = 'fired', fired_at = ?"
+                    " WHERE id = ? AND status = 'pending'",
+                    (stamp, event_id),
+                )
 
     def list_requests(
         self, campaign_id: str, limit: int = 50, after_version: int = 0
