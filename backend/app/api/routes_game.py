@@ -170,8 +170,8 @@ def _load_story_cards_for_campaign(campaign_id: str):
             return []
         scenario_id = row[0]
         return store.get_story_cards(scenario_id)
-    except Exception:
-        logger.debug("Could not load story cards for campaign %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not load story cards for campaign %s: %s", campaign_id, exc)
         return []
 
 
@@ -237,8 +237,8 @@ def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
             label = LAYER_LABELS.get(block["layer"], block["layer"])
             lines.append(f"[{label}] {block['title']}\n{block['content']}")
         return "\n\n".join(lines)
-    except Exception:
-        logger.debug("Could not load world knowledge for campaign %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not load world knowledge for campaign %s: %s", campaign_id, exc)
         return ""
 
 
@@ -256,8 +256,8 @@ def _load_scenario_for_campaign(campaign_id: str):
         if not row:
             return "", "en", ""
         return row[0] or "", row[1] or "en", row[2] or ""
-    except Exception:
-        logger.debug("Could not load scenario for campaign %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not load scenario for campaign %s: %s", campaign_id, exc)
         return "", "en", ""
 
 
@@ -267,8 +267,8 @@ def _load_setup_answers_for_campaign(campaign_id: str) -> dict:
         with ScenarioStore(_scenario_db_path()) as store:
             campaign = store.get_campaign(campaign_id)
         return campaign.setup_answers if campaign else {}
-    except Exception:
-        logger.debug("Could not load setup answers for campaign %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not load setup answers for campaign %s: %s", campaign_id, exc)
         return {}
 
 
@@ -303,8 +303,8 @@ def _load_player_character_for_campaign(campaign_id: str) -> dict:
                 "expression": look.expression if look else picks.get("expression", ""),
                 "image_url": look.image_url if look else "",
             }
-    except Exception:
-        logger.debug("Could not load player character for %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not load player character for %s: %s", campaign_id, exc)
         return {}
 
 
@@ -373,8 +373,8 @@ def _ensure_session(campaign_id: str) -> GameSession:
             if _campaign.generated_opening:
                 opening = _campaign.generated_opening
             combat_enabled = _campaign.combat_enabled
-    except Exception:
-        logger.debug("Could not load campaign metadata for %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not load campaign metadata for %s: %s", campaign_id, exc)
     graph = _get_graph_engine(campaign_id)
     graphiti = _get_graphiti_engine()
     if graphiti:
@@ -424,8 +424,8 @@ def _get_graphiti_engine():
         from app.engines.graphiti_engine import GraphitiEngine
         _graphiti_engine = GraphitiEngine(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
         return _graphiti_engine
-    except Exception:
-        logger.info("Graphiti not available, running without temporal graph")
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        logger.info("Graphiti not available, running without temporal graph: %s", exc)
         return None
 
 
@@ -439,8 +439,10 @@ async def _fallback_graph_search(campaign_id: str, query: str, limit: int = 10) 
         await graph.initialize()
         nodes = await graph.get_all_nodes()
         relationships = await graph.get_all_relationships()
-    except Exception:
-        logger.warning("Fallback world graph search failed for campaign %s", campaign_id, exc_info=True)
+    except (*NEO4J_ERRORS, AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        # The fallback exists because Graphiti had nothing; if it is down too the
+        # panel shows no facts rather than failing the request.
+        logger.warning("Fallback world graph search failed for campaign %s: %s", campaign_id, exc)
         return []
 
     term = query.strip().lower()
@@ -539,8 +541,8 @@ def _context_window_quietly(campaign_id: str) -> str:
     """
     try:
         return _memory.build_context_window(campaign_id)
-    except Exception:
-        logger.warning("world memory window unavailable for %s", campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.warning("world memory window unavailable for %s: %s", campaign_id, exc)
         return ""
 
 
@@ -768,8 +770,8 @@ def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, st
             pack = store.list_characters(campaign.scenario_id) if campaign else []
         for character in pack:
             add(character)
-    except Exception:
-        logger.debug("Scenarios unavailable for %s", campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Scenarios unavailable for %s: %s", campaign_id, exc)
 
     try:
         graph = _get_graph_engine(campaign_id)
@@ -778,8 +780,8 @@ def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, st
             # graph is a fallback for campaigns that predate it.
             for node in getattr(graph, "nodes", {}).values() if isinstance(getattr(graph, "nodes", None), dict) else []:
                 add(node)
-    except Exception:
-        logger.debug("Graph entities unavailable for %s", campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Graph entities unavailable for %s: %s", campaign_id, exc)
 
     return people[:limit]
 
@@ -822,8 +824,8 @@ def _next_step_suggestions(req: PlayerActionRequest, result: dict) -> list[dict]
                     place_names.append(target.name)
         items_by_id = {item.id: item for item in getattr(world, "items", []) or []}
         item_names = [items_by_id[i].name for i in held_ids if i in items_by_id]
-    except Exception:
-        logger.debug("world unavailable while building suggestions for %s", req.campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("world unavailable while building suggestions for %s: %s", req.campaign_id, exc)
 
     present = _campaign_characters(req.campaign_id)
     return build_suggestions(
@@ -849,8 +851,8 @@ def _load_world_for_campaign(campaign_id: str):
             if state is None or not getattr(state, "world_id", ""):
                 return None
             return game_store.get_world(state.world_id)
-    except Exception:
-        logger.debug("campaign world unavailable for %s", campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("campaign world unavailable for %s: %s", campaign_id, exc)
         return None
 
 
@@ -896,8 +898,8 @@ async def _unified_event_stream(req: PlayerActionRequest, service, scenario_stor
         if trace:
             try:
                 _trace_store.append(req.campaign_id, action=req.action, entries=trace, summary=summary)
-            except Exception:
-                logger.exception("Failed to persist LLM trace for campaign %s", req.campaign_id)
+            except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+                logger.warning("Failed to persist LLM trace for campaign %s: %s", req.campaign_id, exc)
         yield "data: [DONE]\n\n"
     finally:
         try:
@@ -947,6 +949,25 @@ class CampaignSettingsRequest(BaseModel):
     combat_enabled: bool
 
 
+def _neo4j_error_types() -> tuple[type[BaseException], ...]:
+    """The driver's own failure hierarchy, so a Neo4j outage is not an OSError.
+
+    `ServiceUnavailable` -> `DriverError` -> `GqlError` -> `Exception`: none of
+    them derive from `OSError`, so a narrowed handler written with "network-ish"
+    builtins silently misses an offline graph server. `GqlError` is the common
+    base of both driver errors and server errors. The lookup happens once, at
+    import, when the driver is installed.
+    """
+    try:
+        from neo4j.exceptions import GqlError
+    except ImportError:  # pragma: no cover - driver is a hard dependency
+        return ()
+    return (GqlError,)
+
+
+NEO4J_ERRORS = _neo4j_error_types()
+
+
 def _get_graph_engine(campaign_id: str):
     """Get or create a GraphEngine for the given campaign."""
     if campaign_id in _graph_engines:
@@ -956,8 +977,8 @@ def _get_graph_engine(campaign_id: str):
         engine = GraphEngine(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password, campaign_id)
         _graph_engines[campaign_id] = engine
         return engine
-    except Exception:
-        logger.info("GraphEngine not available for campaign %s", campaign_id)
+    except (*NEO4J_ERRORS, ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+        logger.info("GraphEngine not available for campaign %s: %s", campaign_id, exc)
         return None
 
 
@@ -1043,8 +1064,8 @@ async def player_action(req: PlayerActionRequest):
         if trace:
             try:
                 _trace_store.append(req.campaign_id, action=req.action, entries=trace, summary=summary)
-            except Exception:
-                logger.exception("Failed to persist LLM trace for campaign %s", req.campaign_id)
+            except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+                logger.warning("Failed to persist LLM trace for campaign %s: %s", req.campaign_id, exc)
         yield f"data: [TRACE]{json.dumps(trace, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -1162,10 +1183,12 @@ async def _maybe_generate_opening(
             director_note=scenario.ai_opening_directive,
             router=router_,
         )
-    except Exception:
-        logger.exception(
-            "AI opening generation failed for campaign %s — falling back to template",
-            campaign_id,
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        # The opening is generated once; a failed generation falls back to the
+        # authored template instead of blocking the campaign.
+        logger.warning(
+            "AI opening generation failed for campaign %s (%s) — falling back to template",
+            campaign_id, exc,
         )
         return None
 
@@ -1189,8 +1212,8 @@ async def _maybe_generate_opening(
             location="meta",
             entities=[],
         )
-    except Exception:
-        logger.debug("Could not log AI_OPENING_GENERATED event", exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        logger.debug("Could not log AI_OPENING_GENERATED event: %s", exc)
     return text
 
 
@@ -1348,8 +1371,8 @@ async def get_traces(campaign_id: str, limit: int = 25):
     """Return persisted LLM call traces for the devtools panel."""
     try:
         return {"traces": _trace_store.get_recent(campaign_id, limit)}
-    except Exception:
-        logger.exception("Failed to load LLM traces for campaign %s", campaign_id)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+        logger.warning("Failed to load LLM traces for campaign %s: %s", campaign_id, exc)
         return {"traces": []}
 
 
@@ -1507,8 +1530,10 @@ async def get_characters(campaign_id: str, q: str = ""):
                     "aliases": [],
                     "type": node.node_type.value if hasattr(node.node_type, "value") else str(node.node_type),
                 })
-        except Exception:
-            pass
+        except (AttributeError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            # Autocomplete is advisory: a graph outage drops the graph names but
+            # must not drop the minds and the character pack collected above.
+            logger.info("graph entities unavailable for %s: %s", campaign_id, exc)
 
     # Filter by query if provided
     if q:
@@ -1610,8 +1635,8 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
         )
         try:
             await _journal_for(campaign_id).evaluate_and_log(campaign_id, world_changes)
-        except Exception:
-            logger.warning("Failed to log timeskip world changes into journal", exc_info=True)
+        except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+            logger.warning("Failed to log timeskip world changes into journal: %s", exc)
     return {"summary": world_changes or "Time passes quietly."}
 
 
@@ -1702,6 +1727,6 @@ async def get_world_graph(campaign_id: str):
                 for r in rels
             ],
         }
-    except Exception as e:
-        logger.warning("Failed to fetch world graph for campaign %s: %s", campaign_id, e)
+    except (*NEO4J_ERRORS, AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        logger.warning("Failed to fetch world graph for campaign %s: %s", campaign_id, exc)
         return {"nodes": [], "links": []}

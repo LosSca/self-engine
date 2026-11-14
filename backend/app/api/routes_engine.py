@@ -1982,8 +1982,8 @@ def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, st
             cast = store.list_characters(campaign.scenario_id) if campaign else []
         for character in cast:
             add(character)
-    except Exception:
-        logger.debug("campaign cast unavailable for %s", campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+        logger.debug("campaign cast unavailable for %s: %s", campaign_id, exc)
     return people[:limit]
 
 
@@ -1994,7 +1994,8 @@ def _campaign_language(campaign_id: str) -> str:
             campaign = store.get_campaign(campaign_id)
             scenario = store.get_scenario(campaign.scenario_id) if campaign else None
         return getattr(scenario, "language", "") or "zh"
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+        logger.debug("campaign language unavailable for %s: %s", campaign_id, exc)
         return "zh"
 
 
@@ -2006,8 +2007,8 @@ def _load_world_for_campaign(campaign_id: str):
             if state is None or not getattr(state, "world_id", ""):
                 return None
             return game_store.get_world(state.world_id)
-    except Exception:
-        logger.debug("campaign world unavailable for %s", campaign_id, exc_info=True)
+    except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+        logger.debug("campaign world unavailable for %s: %s", campaign_id, exc)
         return None
 
 def _scenario_bound_world(campaign_id: str, game_store: GameStateStore):

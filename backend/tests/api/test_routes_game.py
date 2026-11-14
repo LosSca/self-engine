@@ -216,3 +216,12 @@ def test_graph_search_reduces_the_question_to_known_entities(client):
     assert response.status_code == 200
     assert "facts" in response.json()
 
+
+
+def test_world_graph_survives_an_offline_graph_server(client):
+    """A Neo4j outage is not an OSError: the driver raises GqlError subclasses."""
+    _scenario, campaign = _bound_campaign(client, "Offline graph")
+    response = client.get(f"/api/game/{campaign['id']}/world-graph")
+    assert response.status_code == 200
+    assert response.json() == {"nodes": [], "links": []}
+

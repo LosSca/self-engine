@@ -359,7 +359,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 logger.info("Initial player power evaluated: %d (%s)", new_power, reason)
             else:
                 logger.warning("_ensure_player_power: LLM returned no 'power' key. data=%s", data)
-        except Exception:
+        except Exception:  # noqa: BLE001 - power init is colour; a failure must not block the first turn
             logger.warning("Initial player power evaluation failed", exc_info=True)
         self._player_power_initialized = True
 
@@ -448,7 +448,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                         old_power, new_power, reason,
                     )
                     return {"old_power": old_power, "new_power": new_power, "reason": reason}
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unparsed power update leaves the level unchanged
             logger.warning("Power level evaluation failed", exc_info=True)
         return None
 
@@ -514,7 +514,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             if len(window) < self._OPEN_SCENE_MIN_MESSAGES and len(self._history) >= self._OPEN_SCENE_MIN_MESSAGES:
                 window = self._history[-self._OPEN_SCENE_MIN_MESSAGES:]
             return window
-        except Exception:
+        except Exception:  # noqa: BLE001 - the window is an optimisation over full history
             logger.debug("open-scene window failed; keeping full history", exc_info=True)
             return self._history
 
@@ -620,7 +620,8 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             )
             match = re.search(r"\[.*\]", raw, re.DOTALL)
             return json.loads(match.group(0)) if match else []
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+            logger.debug("suggestion generation failed: %s", exc)
             return []
 
     @staticmethod
@@ -651,7 +652,8 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 self._turn_count,
                 self._card_image_last_shown,
             )
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+            logger.debug("card image lookup failed: %s", exc)
             return ""
         if not image:
             return ""
@@ -673,7 +675,11 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
         if self._knowledge_provider is not None:
             try:
                 knowledge = (self._knowledge_provider() or "").strip()
-            except Exception:
+            except Exception:  # noqa: BLE001 - the provider is an injected callable; any failure must fall back
+                # The provider re-reads authored knowledge each turn. It is
+                # supplied by the caller, so its failure modes are not ours to
+                # enumerate - and the last known block is still valid context.
+                logger.warning("knowledge refresh failed, keeping cached block", exc_info=True)
                 knowledge = self._knowledge_context
         if not knowledge:
             return context
@@ -961,7 +967,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             log_player_action = getattr(self._journal, "log_player_action", None)
             if callable(log_player_action):
                 player_entry = log_player_action(self.campaign_id, player_input)
-        except Exception:
+        except Exception:  # noqa: BLE001 - the journal is a log, not part of the turn
             logger.warning("Player action journal logging failed", exc_info=True)
 
         if self._is_journal_entry(player_entry):
@@ -1024,7 +1030,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             try:
                 async for chunk in self._world_tick_stream(narrative_time):
                     chunks.append(chunk)
-            except Exception:
+            except Exception:  # noqa: BLE001 - a background task boundary; nothing above can handle it
                 logger.error("world tick task failed", exc_info=True)
             finally:
                 if chunks:
@@ -1120,7 +1126,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 lines.append(f"- {source} {rel_type} {target}")
 
             return "\n".join(lines)
-        except Exception:
+        except Exception:  # noqa: BLE001 - the graph may be a third-party driver or an LLM
             logger.warning("Failed to build graph relationship summary", exc_info=True)
             return ""
 
@@ -1133,7 +1139,8 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
         At audit time the current turn is not yet in _history, so this is strictly prior context."""
         try:
             window = self._open_scene_history()[-self._AUDIT_RECENT_SCENE_MSGS:]
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            logger.debug("recent scene unavailable for the audit: %s", exc)
             return ""
         lines = []
         for m in window:
@@ -1177,7 +1184,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     len(report.get("corrections", [])),
                 )
             return final_prose
-        except Exception:
+        except Exception:  # noqa: BLE001 - the auditor is an LLM call behind a timeout; prose must ship
             logger.warning(
                 "Narrator audit timed out or failed; revealing original prose",
                 exc_info=True,
@@ -1234,8 +1241,10 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     for e in entries[-_JOURNAL_CONTEXT_LIMIT:]:
                         lines.append(f"- {e.summary}")
                     journal_ctx = "\n".join(lines)
-            except Exception:
-                pass
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                # The story log sets the scene; a broken entry drops the block
+                # instead of failing the turn.
+                logger.debug("journal context unavailable: %s", exc)
 
         story_cards_ctx = self._with_knowledge(
             self._format_story_cards_context(
@@ -1478,8 +1487,8 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 player_entry = log_player_action(self.campaign_id, player_input)
                 if self._is_journal_entry(player_entry):
                     yield f"[JOURNAL]{json.dumps({'category': player_entry.category.value, 'summary': player_entry.summary, 'created_at': player_entry.created_at})}"
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            logger.debug("player action journal logging failed: %s", exc)
 
         yield f"[MODE]{mode.value}"
 
@@ -1539,7 +1548,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     f"[Combat: {combat_opponent_name} (power {combat_npc_power}) "
                     f"vs Player (power {self._player_power}) → {combat_outcome}] "
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - combat failure falls back to narrative handling
                 logger.warning("Combat engine failed in single-call path", exc_info=True)
 
         # Build context (same as _handle_narrative) — pass RAG query so crystals
@@ -1627,8 +1636,10 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     for e in entries[-_JOURNAL_CONTEXT_LIMIT:]:
                         lines.append(f"- {e.summary}")
                     journal_ctx = "\n".join(lines)
-            except Exception:
-                pass
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                # The story log sets the scene; a broken entry drops the block
+                # instead of failing the turn.
+                logger.debug("journal context unavailable: %s", exc)
 
         static_prompt, dynamic_prompt = self._narrator.build_system_prompt_parts(
             tone_instructions=self.scenario_tone,
@@ -1656,8 +1667,10 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             try:
                 existing_nodes = await self._graph.get_all_nodes()
                 canonical_names = [n.name for n in existing_nodes]
-            except Exception:
-                pass
+            except (AttributeError, TypeError, KeyError, OSError, RuntimeError) as exc:
+                # Without the graph's names, extraction still runs on the minds
+                # and the scenario catalogue; it just loses alias folding.
+                logger.debug("graph names unavailable for entity extraction: %s", exc)
         if self._npc_minds:
             for mind in self._npc_minds.get_all_minds(self.campaign_id):
                 if mind.name not in canonical_names:
@@ -1814,7 +1827,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                             location="npc_mind",
                             entities=[mind.name],
                         )
-                except Exception:
+                except Exception:  # noqa: BLE001 - minds are optional colour, never a gate
                     logger.warning("Single-call NPC thought processing failed", exc_info=True)
 
             # Entities and relationships from result
@@ -1853,7 +1866,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                         target_id = self._find_existing_node_id(target_name, name_to_id)
                         if source_id and target_id and source_id != target_id:
                             await self._graph.add_relationship(source_id, target_id, rel_type)
-                except Exception:
+                except Exception:  # noqa: BLE001 - an LLM call plus an optional graph driver
                     logger.warning("Single-call graph extraction failed", exc_info=True)
 
             # World changes from result
@@ -1902,7 +1915,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             try:
                 async for chunk in self._maybe_trigger_auto_plot(world_ctx):
                     yield chunk
-            except Exception:
+            except Exception:  # noqa: BLE001 - an LLM call; a lost plot beat is not a lost turn
                 logger.warning("Auto plot generation failed", exc_info=True)
 
     def _apply_inventory_event(self, inv_event: dict) -> dict | None:
@@ -2060,7 +2073,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 self.campaign_id, cleaned,
             )
             return cleaned
-        except Exception:
+        except Exception:  # noqa: BLE001 - an LLM call whose failure only costs witness tags
             logger.warning("Witness extraction failed", exc_info=True)
             return []
 
@@ -2076,10 +2089,9 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 continue
             try:
                 self._event_store.update_witnessed_by(event_id, witnesses)
-            except Exception:
+            except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
                 logger.warning(
-                    "Failed to update witnessed_by for event %s", event_id,
-                    exc_info=True,
+                    "Failed to update witnessed_by for event %s: %s", event_id, exc,
                 )
 
     async def _async_side_effects(self, clean_response: str) -> None:
@@ -2122,7 +2134,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             await self._evaluate_power_update(clean_response, last_player_input)
 
             logger.info("_async_side_effects: completed")
-        except Exception:
+        except Exception:  # noqa: BLE001 - background task boundary, deliberately last-resort
             logger.error("_async_side_effects failed", exc_info=True)
 
     async def _world_tick_stream(self, narrative_time: int) -> AsyncIterator[str]:
@@ -2151,7 +2163,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
 
             async for chunk in self._maybe_trigger_auto_plot(world_ctx):
                 yield chunk
-        except Exception:
+        except Exception:  # noqa: BLE001 - background task boundary, deliberately last-resort
             logger.error("_world_tick_stream failed", exc_info=True)
 
     async def _async_world_tick(self, narrative_time: int) -> None:
@@ -2171,7 +2183,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 language=self.language,
                 witnessed_by=witnessed_by,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - an LLM call in a fire-and-forget task
             logger.warning("Async journal evaluation failed", exc_info=True)
 
     async def _post_narrative_pipeline(self, clean_response: str) -> AsyncIterator[str]:
@@ -2295,8 +2307,9 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     memory_lines.append(c.ai_content)
             if memory_lines:
                 sections.append("=== PRMNT_MEM (canon) ===\n" + "\n".join(memory_lines))
-        except Exception:
-            logger.debug("Failed to extract MEMORY tier crystals for factual context", exc_info=True)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            # Crystal rendering is context; a malformed crystal loses the block.
+            logger.debug("Failed to extract MEMORY tier crystals for factual context: %s", exc)
 
         if self._inventory:
             inv = self._inventory.format_for_prompt(self.campaign_id)
@@ -2397,8 +2410,9 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     (getattr(entity, "name", "") or key).strip().lower(): entity
                     for key, entity in entities.items()
                 }
-        except Exception:  # noqa: BLE001
-            pass
+        except (AttributeError, TypeError, KeyError) as exc:
+            logger.debug("scenario entities unavailable: %s", exc)
+            return {}
         return {}
 
     def _build_npc_knowledge_boundaries_block(
@@ -2525,7 +2539,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                     location="npc_mind",
                     entities=[mind.name],
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001 - minds are optional colour, never a gate
             logger.error(
                 "NPC mind update failed for campaign %s (narrative length: %d chars)",
                 self.campaign_id,
@@ -2538,13 +2552,13 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             return
         try:
             await self._extract_entities_to_graph(narrative_text)
-        except Exception:
+        except Exception:  # noqa: BLE001 - an LLM call plus an optional graph driver
             logger.warning("Graph entity extraction failed", exc_info=True)
 
     async def _try_auto_crystallize(self):
         try:
             return await self._memory.auto_crystallize_if_needed(self.campaign_id, language=self.language)
-        except Exception:
+        except Exception:  # noqa: BLE001 - an LLM call in a background step; crystals rebuild on read
             logger.warning("Auto-crystallization failed", exc_info=True)
             return None
 
@@ -2558,7 +2572,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 description=description,
             )
             self._graphiti_ingests.append((self.campaign_id, description))
-        except Exception:
+        except Exception:  # noqa: BLE001 - Graphiti is an optional extra (see docs)
             logger.warning("Graphiti %s ingestion failed", description, exc_info=True)
 
 
@@ -2597,8 +2611,8 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             total_narrative_time = int(
                 self._event_store.get_total_narrative_time(self.campaign_id) or 0
             )
-        except Exception:
-            logger.debug("narrative clock unavailable; assuming 0", exc_info=True)
+        except (AttributeError, KeyError, TypeError, ValueError, OSError) as exc:
+            logger.debug("narrative clock unavailable, assuming 0: %s", exc)
             total_narrative_time = 0
 
         # Get the last narrator response for scene context
@@ -2794,7 +2808,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary, language=self.language)
             if self._is_journal_entry(combat_entry):
                 yield f"[JOURNAL]{json.dumps({'category': combat_entry.category.value, 'summary': combat_entry.summary, 'created_at': combat_entry.created_at})}"
-        except Exception:
+        except Exception:  # noqa: BLE001 - combat failure falls back to narrative handling
             logger.warning("Combat engine failed, falling back to narrative handling", exc_info=True)
             async for chunk in self._handle_narrative(player_input):
                 yield chunk
@@ -2822,8 +2836,10 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
         try:
             existing_nodes = await self._graph.get_all_nodes()
             canonical_names = [n.name for n in existing_nodes]
-        except Exception:
-            pass
+        except (AttributeError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            # Without the graph's names, extraction still runs on the minds and
+            # the scenario catalogue; it only loses alias folding.
+            logger.debug("graph names unavailable for entity extraction: %s", exc)
         if self._npc_minds:
             for mind in self._npc_minds.get_all_minds(self.campaign_id):
                 if mind.name not in canonical_names:
@@ -3116,6 +3132,6 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
     def _is_journal_entry(value: object) -> bool:
         try:
             from app.engines.journal_engine import JournalEntry
-        except Exception:
+        except ImportError:
             return False
         return isinstance(value, JournalEntry)

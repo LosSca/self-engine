@@ -10,6 +10,11 @@
   `services/session_rebuild.py`，静态 prompt 块拆到 `services/prompt_blocks.py`，仍是同一个
   命名空间（mixin），测试里对 `session._xxx` 的访问不受影响。
 - 知识/记忆/叙事链路上的 `except Exception: pass` 收窄到具体异常类型并记日志，失败不再是静默的。
+  `backend/app/api/routes_game.py` 的 28 处宽泛捕获降到 6 处（全是"这一层必须兜住"的边界，逐条写了理由）；
+  `backend/app/services/game_session.py` 里不再有裸 `pass`——剩下 24 处都是后台任务或 LLM 调用边界，
+  同样逐条标注。收窄过程暴露一个真 bug：Neo4j 驱动的 `ServiceUnavailable` 继承 `GqlError` 而不是
+  `OSError`，按"网络类异常"收窄会漏掉它，图数据库离线时面板直接 500；现在按驱动的 `GqlError`
+  基类捕获，并补了离线回归测试。
 
 ### Fixed
 
