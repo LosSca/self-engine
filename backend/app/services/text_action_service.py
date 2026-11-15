@@ -273,6 +273,12 @@ class TextActionParser:
         action, fragment = self._split_verb(lowered)
         if mode == "SAY" and action not in (None, "talk"):
             return None
+        #: True when a rule did read this sentence and found it impossible
+        #: ("开着的那把铁钥匙", "拿起月亮"). Such a sentence must not become an
+        #: attempt: "明确动作不许被猜" cuts both ways, and it also keeps the
+        #: advisor from re-reading a sentence that already has an answer.
+        #: Every `return None` below happens *before* that rule reads anything.
+        explained = False
         if action is None:
             if mode == "DO":
                 custom = self._split_custom_verb(lowered, world)
@@ -289,7 +295,7 @@ class TextActionParser:
                 # somebody here, and it says who is - the same answer the
                 # advisor would give, without paying for a model call.
                 return self._addressable(state, world, "talk", raw)
-            if mode == "DO" and improvise and self._improvise_allowed(lowered):
+            if mode == "DO" and improvise and not explained and self._improvise_allowed(lowered):
                 return self._improvise(lowered, world, state)
             return None
         parsed = self._resolve(action, fragment, world, state, utterance=text)
@@ -304,6 +310,9 @@ class TextActionParser:
             loose = self._loose_place(fragment, world, state)
             if loose is not None:
                 return loose
+        # The rule behind this verb ran and refused the sentence. This is a
+        # complete answer, not an unmapped one.
+        explained = True
         return ParsedAction(
             action=action,
             confidence="missing_target",
@@ -1116,11 +1125,17 @@ class TextActionService:
         # 不改变任何状态。这样自由输入不会被当成错句，动作也不会被猜。
         parsed = self.parser.parse(text, world, state, improvise=False)
         advised = None
-        if parsed is None or not parsed.action:
+        # A rule is the cheapest and most honest reader. Only a sentence that no
+        # rule could map ("蹲下来看看裂缝", "把门推开") is worth a model call: a
+        # refusal from a real rule ("你拿不动月亮") is already an answer, and an
+        # attempt (conf. improvised, only reachable with improvise=True) is what
+        # happens when the model found nothing either.
+        unmapped = parsed is None or not parsed.action
+        if unmapped:
             advised = await self._advise(text, world, state, campaign_id)
             if advised is not None:
                 parsed = advised
-            elif parsed is None:
+            else:
                 parsed = self.parser.parse(text, world, state)
         # 明确写了动词、只是目标不存在：仍然拒绝，并把现场能做什么写进
         # message（见 _reject_parse）。「明确动作不许被猜」这条不变量没变。

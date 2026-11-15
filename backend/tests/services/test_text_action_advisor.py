@@ -183,3 +183,31 @@ def test_advisor_missing_talk_target_stays_a_rejection(service, monkeypatch):
     assert out["status"] == "rejected"
     assert out["result"]["code"] == "missing_target"
     assert service.game_store.get_state("camp-1").version == 0
+
+
+def test_a_rule_that_already_answered_is_not_sent_to_the_model(service, monkeypatch):
+    """Only an unmapped sentence is worth a model call."""
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    advisor = _FakeAdvisor(action="take", fragment="iron key")
+    service.advisor = advisor
+
+    # "look iron_key" is a real rule with an impossible target: the rule engine
+    # answers it, so asking a model what it means would spend money to learn
+    # nothing.
+    out = asyncio.run(service.execute("camp-1", "look iron_key"))
+
+    assert out["status"] == "rejected"
+    assert advisor.calls == []
+
+
+def test_an_attempt_does_not_wait_for_the_model(service, monkeypatch):
+    """With the advisor on, an unmapped sentence is asked once and then tried."""
+    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
+    advisor = _FakeAdvisor(action=None)
+    service.advisor = advisor
+
+    out = asyncio.run(service.execute("camp-1", UNPARSED))
+
+    assert advisor.calls == [UNPARSED]
+    assert out["status"] == "applied"
+    assert out["parsed"]["action"] == "improvise"
