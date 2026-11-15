@@ -8,6 +8,18 @@ import pytest
 from app.engines import llm_router
 
 
+@pytest.fixture(autouse=True)
+def isolated_prefs_db(tmp_path, monkeypatch):
+    """Point the credential/prefs store at a temp file.
+
+    CredentialStore defaults to the *real* scenarios.db in the backend
+    directory, and this test writes a row to it. One test against a
+    developer's database is already too many, and in a sandbox that denies the
+    write the test fails for a reason that has nothing to do with routing.
+    """
+    monkeypatch.setenv("SCENARIO_DB_PATH", str(tmp_path / "scenarios.db"))
+
+
 @pytest.fixture()
 def custom_env(monkeypatch):
     monkeypatch.setenv("CUSTOM_LLM_BASE_URL", "https://vendor.example/v1")

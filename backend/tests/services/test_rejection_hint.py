@@ -36,17 +36,21 @@ def test_the_hint_names_a_real_exit():
 def test_a_chinese_rejection_reads_as_sentences_not_codes():
     world, state = _world_and_state()
     message = rejection_message(world, state, text="我推开左边那扇门")
-    assert "我推开左边那扇门" in message
     assert "可以试试" in message
     assert "missing_target" not in message
+    # 原句不再复读：它既不是理由，也不是建议，只是把玩家写的字退回去。
+    assert "我推开左边那扇门" not in message
+    # 开发规范也不能冒充玩家反馈（"名字要和世界里现有的一致"）。
+    assert "一致" not in message
 
 
 def test_an_english_world_gets_an_english_hint():
     world, state = _world_and_state()
     world.language = "en"
     message = rejection_message(world, state, text="push the left door")
-    assert message.startswith("I could not match")
     assert "go to" in message
+    assert "I could not match" not in message
+    assert "Names must match" not in message
 
 
 @pytest.mark.asyncio

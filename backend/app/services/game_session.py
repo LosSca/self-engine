@@ -14,11 +14,28 @@ from app.engines.llm_router import LLMProvider
 from app.engines.narrator_engine import NarrativeMode, estimate_tokens
 from app.engines.plot_generator import AUTO_PLOT_RULES
 from app.services.prompt_blocks import PromptBlocksMixin
+from app.services.narrator_pack import context_pack_enabled
+from app.services.retrieval.tokenizer import has_cjk, tokenize_text
 from app.services.scenario_interpolation import interpolate
 from app.services.session_rebuild import SessionRebuildMixin
 from app.utils.json_parsing import parse_json_dict
 
 logger = logging.getLogger(__name__)
+
+#: Portuguese function words the shared tokenizer does not carry (it ships EN
+#: and ZH lists). The English words kept here overlap its stop list harmlessly.
+_CONTEXT_STOP_WORDS = frozenset(
+    {
+        "the", "and", "for", "that", "this", "with", "you", "your", "are",
+        "was", "were", "has", "have", "had", "been", "will", "not", "but",
+        "from", "they", "she", "his", "her", "its", "our", "que", "para",
+        "com", "uma", "por", "ele", "ela", "seu", "sua", "dos", "das",
+        "nos", "nas", "mais", "como", "não", "está", "isso", "esse",
+        "essa", "são", "tem", "foi", "ser", "ter", "mas", "quando",
+        "sobre", "entre", "depois", "antes", "muito", "pode", "seus",
+        "suas", "ainda", "também", "apenas", "cada", "outro", "outra",
+    }
+)
 
 
 def _perspective_filter_enabled() -> bool:
@@ -89,6 +106,17 @@ def _audit_timeout_s() -> float:
 
 _AUDIT_TIMEOUT_S = _audit_timeout_s()
 _JOURNAL_CONTEXT_LIMIT = 16
+
+
+def _fact_query_tokens(query: str) -> list[str]:
+    """Query tokens worth matching a fact against, using the shared tokenizer."""
+    try:
+        tokens = tokenize_text(query or "")
+    except (RuntimeError, ValueError, TypeError):
+        return []
+    return [token.casefold() for token in tokens if len(token) > 1][:24]
+
+
 # Story card fields consumed by the UI, not by the narrator; keep them out of the prompt.
 _NON_NARRATIVE_CARD_KEYS = {"images"}
 
@@ -534,24 +562,28 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
 
     @staticmethod
     def _extract_context_keywords(text: str) -> set[str]:
-        """Extract meaningful keywords from text for relevance matching."""
+        """Keywords of mixed-script text, via the shared tokenizer.
+
+        This used to match only Latin letters, so a Chinese scene produced an
+        empty keyword set and story cards fell back to author order. It now
+        calls the same tokenizer memory recall and knowledge retrieval use, so
+        all three ranking paths share one term space. The Portuguese stop list
+        below is kept because the shared tokenizer only carries EN and ZH.
+        """
         if not text:
             return set()
-        # Lowercase, split on whitespace and punctuation
-        import re
-        words = re.findall(r"[a-zA-ZÀ-ÿ]{3,}", text.lower())
-        # Filter very common words (basic stop words for EN/PT)
-        stop = {
-            "the", "and", "for", "that", "this", "with", "you", "your", "are",
-            "was", "were", "has", "have", "had", "been", "will", "not", "but",
-            "from", "they", "she", "his", "her", "its", "our", "que", "para",
-            "com", "uma", "por", "ele", "ela", "seu", "sua", "dos", "das",
-            "nos", "nas", "mais", "como", "não", "está", "isso", "esse",
-            "essa", "são", "tem", "foi", "ser", "ter", "mas", "quando",
-            "sobre", "entre", "depois", "antes", "muito", "pode", "seus",
-            "suas", "ainda", "também", "apenas", "cada", "outro", "outra",
+        try:
+            tokens = tokenize_text(text)
+        except (RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("context keyword tokenization failed: %s", exc)
+            return set()
+        # Latin words keep the old "longer than two characters" rule; CJK
+        # bigrams are two characters by construction and must survive.
+        return {
+            token
+            for token in tokens
+            if token not in _CONTEXT_STOP_WORDS and (has_cjk(token) or len(token) > 2)
         }
-        return {w for w in words if w not in stop and len(w) > 2}
 
     def _compute_story_cards_budget(self) -> int:
         """Compute token budget for story cards based on provider context window."""
@@ -588,8 +620,10 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
 
         # Keyword overlap between card content and context
         content = card.content if isinstance(card.content, dict) else {}
-        card_text = (card.name + " " + " ".join(str(v) for v in content.values())).lower()
-        card_words = set(card_text.split())
+        card_text = card.name + " " + " ".join(str(v) for v in content.values())
+        # Same tokenizer as the query side: a Chinese card must be able to
+        # match a Chinese scene, which a whitespace split never can.
+        card_words = set(tokenize_text(card_text))
         hits = len(context_keywords & card_words)
         score += hits * self._KEYWORD_MATCH_SCORE
 
@@ -1191,6 +1225,84 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             )
             return prose
 
+    def _from_context_pack(
+        self,
+        *,
+        memory_context: str,
+        npc_states: str,
+        inventory: str,
+        journal: str,
+        query: str,
+        context_window: int,
+    ) -> tuple[str, str, str]:
+        """Rebuild the memory blocks through the pack; never fails the turn.
+
+        Facts are fetched here rather than upstream because the pack decides
+        how much of them fits. They arrive already permission-filtered by the
+        fact store (observer_ids), which is why this is a layout step and not
+        an authority step.
+        """
+        from app.services.narrator_pack import (
+            build_narrator_pack,
+            pack_budget,
+            pack_notes,
+            render_narrator_pack,
+        )
+
+        try:
+            budget = pack_budget(context_window)
+            pack = build_narrator_pack(
+                self.campaign_id,
+                memory_context=memory_context,
+                npc_states=npc_states,
+                inventory=inventory,
+                journal=journal,
+                facts=self._live_facts(query),
+                token_budget=budget,
+            )
+            blocks = render_narrator_pack(pack)
+        except (ImportError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            # Layout is not gameplay: a broken pack leaves the blocks exactly
+            # as they were and says so, instead of costing the player a turn.
+            logger.warning("context pack unavailable; using raw blocks: %s", exc)
+            return memory_context, npc_states, journal
+
+        logger.debug(pack_notes(pack))
+        merged_memory = "\n".join(
+            part for part in (blocks.get("facts", ""), blocks.get("episodes", "")) if part
+        )
+        return merged_memory, blocks.get("state", "") or npc_states, ""
+
+    def _live_facts(self, query: str) -> list:
+        """Facts worth spending prompt tokens on for this query, or [].
+
+        Only live statuses come back (the store default), and none at all when
+        the campaign has no memory database - which is the shipped state.
+        """
+        store = getattr(self._memory, "fact_store", None)
+        if store is None:
+            return []
+        try:
+            from app.services.retrieval.memory_retrieval import fact_docs_from_store
+
+            docs = fact_docs_from_store(store, self.campaign_id)
+        except (ImportError, RuntimeError, ValueError, TypeError, KeyError, OSError) as exc:
+            logger.debug("fact recall unavailable: %s", exc)
+            return []
+        if not docs:
+            return []
+        wanted = _fact_query_tokens(query)
+        if not wanted:
+            return docs[:12]
+        scored = []
+        for doc in docs:
+            text = doc.as_text().casefold()
+            hits = sum(1 for token in wanted if token in text)
+            scored.append((hits, doc.confidence, doc))
+        scored.sort(key=lambda row: (-row[0], -row[1]))
+        return [row[2] for row in scored[:12]]
+
+
     async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE, combat_outcome: str = "", combat_opponent_name: str = "", combat_npc_power: int = 5, raw_player_input: str = "") -> AsyncIterator[str]:
         # RAG inputs for crystal selection: scene query + active NPC names.
         recent_narrative = self._history[-1]["content"] if self._history else ""
@@ -1253,6 +1365,20 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 exclude_lore=cache_on,
             )
         )
+
+        # P4: one pack decides what the memory half of this prompt keeps. The
+        # three blocks below were assembled independently until now, so the
+        # narrator could receive the same fact twice under two headings and a
+        # long crystal could crowd out the live state that contradicts it.
+        if context_pack_enabled():
+            memory_ctx, npc_ctx, journal_ctx = self._from_context_pack(
+                memory_context=memory_ctx,
+                npc_states=npc_ctx,
+                inventory=inventory_ctx,
+                journal=journal_ctx,
+                query=rag_query,
+                context_window=rag_context_window,
+            )
 
         system_prompt = ""
         zone0 = zone1 = zone2 = ""
@@ -2415,6 +2541,25 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
             return {}
         return {}
 
+    def _npc_knowledge_window(self, name: str) -> str:
+        """One NPC's knowledge window, with facts filtered to that NPC's view.
+
+        The engine builds each perspective from its own evidence, so nothing
+        this method returns was ever assembled for a different character. A
+        provider without perspective support (tests, older builds) still gets
+        the witnessed-crystal window rather than an exception.
+        """
+        try:
+            perspective = self._memory.build_npc_perspective(self.campaign_id, name)
+        except AttributeError:
+            perspective = None
+        except Exception:  # noqa: BLE001 - knowledge is advisory, never fatal
+            logger.warning('npc perspective failed for %s', name, exc_info=True)
+            perspective = None
+        if perspective is None:
+            return self._memory.build_npc_knowledge_window(self.campaign_id, name)
+        return self._memory.build_npc_knowledge_window(self.campaign_id, name, perspective)
+
     def _build_npc_knowledge_boundaries_block(
         self,
         active_npc_names: set[str],
@@ -2437,7 +2582,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
         for name in sorted(active_npc_names):
             if not name:
                 continue
-            crystal_knowledge = self._memory.build_npc_knowledge_window(self.campaign_id, name)
+            crystal_knowledge = self._npc_knowledge_window(name)
             card_knowledge = self._format_story_cards_for_npc(name)
             combined_parts: list[str] = []
             if crystal_knowledge:
@@ -2491,9 +2636,7 @@ class GameSession(SessionRebuildMixin, PromptBlocksMixin):
                 for name in npcs_present:
                     if not isinstance(name, str) or not name.strip():
                         continue
-                    crystal_knowledge = self._memory.build_npc_knowledge_window(
-                        self.campaign_id, name,
-                    )
+                    crystal_knowledge = self._npc_knowledge_window(name)
                     card_knowledge = self._format_story_cards_for_npc(name)
                     parts: list[str] = []
                     if crystal_knowledge:

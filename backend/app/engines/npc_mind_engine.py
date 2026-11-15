@@ -229,6 +229,16 @@ class NpcMindEngine:
         raw = await self._llm.complete(messages=messages, max_tokens=16, reasoning=False)
         return raw.strip().upper().startswith("YES")
 
+    def ensure_mind(self, campaign_id: str, npc_name: str, current_turn: int = 0) -> NpcMind:
+        """Public, synchronous accessor for a character's mind.
+
+        Callers outside this engine (the memory layer recording what a
+        character was told) need a mind without the async fuzzy-matching path,
+        which would cost an LLM call per rumour. `current_turn` is accepted so
+        the call sites read alike; creation itself does not need it.
+        """
+        return self._ensure_mind(campaign_id, npc_name)
+
     def _ensure_mind(self, campaign_id: str, npc_name: str) -> NpcMind:
         # Strip @ prefix that narration uses for mentions (e.g. "@Yuji Itadori" → "Yuji Itadori")
         npc_name = npc_name.lstrip("@").strip()

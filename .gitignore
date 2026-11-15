@@ -27,6 +27,8 @@ events.db
 backend/scenarios.db
 backend/events.db
 backend/tmp-debug-events.db
+# Derived fact layer: rebuildable from events, safe to delete.
+backend/memory.db
 backend/server.out
 backend/server.err
 

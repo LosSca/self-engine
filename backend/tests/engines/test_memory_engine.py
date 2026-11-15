@@ -266,6 +266,9 @@ def _make_witnessed_crystal(
     ai_content: str,
     witnessed_by: list[str] | None = None,
 ) -> MemoryCrystal:
+    # A distinct id, because consolidation now groups crystals by thread: with
+    # no entities and no ids the four sources would look like one thread anyway,
+    # but the id keeps the fixture honest about what a real crystal carries.
     return MemoryCrystal(
         campaign_id=campaign_id,
         tier=tier,
@@ -274,6 +277,7 @@ def _make_witnessed_crystal(
         event_count=1,
         witnessed_by=witnessed_by or [],
         audience_resolved=True,
+        memory_id=f"mem_{abs(hash(ai_content)) % 10**12:012d}",
     )
 
 

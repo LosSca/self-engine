@@ -28,8 +28,25 @@ from app.models.game import (
 )
 
 
+def _line(chinese: bool, zh: str, en: str) -> str:
+    """Pick the label in the world's language."""
+    return zh if chinese else en
+
+
+def _end(chinese: bool) -> str:
+    """Sentence terminator for the world's language."""
+    return "。" if chinese else "."
+
+
 class RulesEngine:
     """Stateless rule evaluator: (world, state, action) -> RuleOutcome."""
+
+    @staticmethod
+    def _is_chinese(world: WorldDefinition) -> bool:
+        """Whether this world speaks Chinese, honouring an unset field."""
+        from app.utils.language import detect_language
+
+        return detect_language(world) == "zh"
 
     def evaluate(
         self,
@@ -146,6 +163,32 @@ class RulesEngine:
         if any(location.id == target_id for location in world.locations):
             return True
         return target_id in state.inventory
+
+    @staticmethod
+    def _someone_not_here(entity, world: WorldDefinition, state: GameState) -> str:
+        """Say where the person actually is, when the world places them.
+
+        "not here" alone reads like a bug to a player who just named someone
+        who exists; naming the room they are standing in turns a dead end into
+        a next step.
+        """
+        where = entity_location(state, world, entity.id)
+        place = next((loc.name for loc in world.locations if loc.id == where), None)
+        from app.utils.language import detect_language
+
+        # staticmethod: no `self` here, so the language is read directly.
+        chinese = detect_language(world) == "zh"
+        if place:
+            return (
+                f"{entity.name}不在这里，在{place}。"
+                if chinese
+                else f"{entity.name} is not here - they are in {place}."
+            )
+        return (
+            f"{entity.name}不在这里。"
+            if chinese
+            else f"{entity.name} is not here."
+        )
 
     @staticmethod
     def _describe_condition(condition: Condition) -> str:
@@ -270,17 +313,18 @@ class RulesEngine:
             ]
             if contents:
                 containers.append(f"{entity.name}: " + ", ".join(contents))
+        zh = self._is_chinese(world)
         parts = [loc.description or loc.name]
         if here:
-            parts.append("You can see: " + ", ".join(here) + ".")
+            parts.append(_line(zh, "可看见：", "You can see: ") + ", ".join(here) + _end(zh))
         if door_names:
-            parts.append("Doors: " + ", ".join(door_names) + ".")
+            parts.append(_line(zh, "门：", "Doors: ") + ", ".join(door_names) + _end(zh))
         if people:
-            parts.append("People here: " + ", ".join(people) + ".")
+            parts.append(_line(zh, "这里有：", "People here: ") + ", ".join(people) + _end(zh))
         if containers:
-            parts.append("Containers here: " + "; ".join(containers) + ".")
+            parts.append(_line(zh, "容器：", "Containers here: ") + "; ".join(containers) + _end(zh))
         if exits:
-            parts.append("Exits: " + ", ".join(exits) + ".")
+            parts.append(_line(zh, "出口：", "Exits: ") + ", ".join(exits) + _end(zh))
         return RuleOutcome(
             ok=True,
             code="looked",
@@ -306,7 +350,7 @@ class RulesEngine:
             if entity_location(state, world, entity.id) != state.location_id:
                 return RuleOutcome(
                     ok=False, code="entity_not_here",
-                    message=f"{entity.name} is not here.",
+                    message=self._someone_not_here(entity, world, state),
                 )
             parts = [f"{entity.name}: {entity.description or entity.kind}."]
             record = state.entities.get(entity.id)
@@ -336,7 +380,11 @@ class RulesEngine:
             if not (held or on_ground or in_container):
                 return RuleOutcome(
                     ok=False, code="item_not_here",
-                    message=f"The {item.name} is not here.",
+                    message=(
+                        f"{item.name}不在这里。"
+                        if self._is_chinese(world)
+                        else f"The {item.name} is not here."
+                    ),
                 )
             where = (
                 "you carry it" if held
@@ -353,7 +401,11 @@ class RulesEngine:
             if door.location_id != state.location_id:
                 return RuleOutcome(
                     ok=False, code="door_not_here",
-                    message=f"The {door.name} is not here.",
+                    message=(
+                        f"{door.name}不在这里。"
+                        if self._is_chinese(world)
+                        else f"The {door.name} is not here."
+                    ),
                 )
             is_open = self._door_is_open(state, door)
             detail = "open" if is_open else ("locked" if door.locked else "closed")
@@ -408,7 +460,11 @@ class RulesEngine:
         if exit_def is None:
             return RuleOutcome(
                 ok=False, code="no_route",
-                message=f"You cannot reach {destination.name} from {source.name}.",
+                message=(
+                    f"从{source.name}没法直接到{destination.name}。"
+                    if self._is_chinese(world)
+                    else f"You cannot reach {destination.name} from {source.name}."
+                ),
             )
         if exit_def.requires_item_id:
             if state.inventory.get(exit_def.requires_item_id, 0) <= 0:
@@ -416,7 +472,11 @@ class RulesEngine:
                 name = item.name if item else exit_def.requires_item_id
                 return RuleOutcome(
                     ok=False, code="missing_item",
-                    message=f"You need the {name} to go that way.",
+                    message=(
+                        f"去那边需要{name}。"
+                        if self._is_chinese(world)
+                        else f"You need the {name} to go that way."
+                    ),
                 )
         if exit_def.door_id:
             door = doors.get(exit_def.door_id)
@@ -426,11 +486,47 @@ class RulesEngine:
                     message=f"The way is blocked by an undefined door '{exit_def.door_id}'.",
                 )
             if not self._door_is_open(state, door):
+                # "It is closed, find a way" leaves the player with nothing to
+                # act on. The door knows its key, and the key is usually
+                # visible in this very room - that is the next move.
                 return RuleOutcome(
                     ok=False, code="exit_blocked",
-                    message=f"The {door.name} is closed.",
+                    message=self._blocked_door_message(world, state, door),
                 )
         return None
+
+    def _blocked_door_message(
+        self, world: WorldDefinition, state: GameState, door
+    ) -> str:
+        """Why the way is shut, and what would open it."""
+        zh = self._is_chinese(world)
+        key_id = getattr(door, "key_item_id", None)
+        key = next((i for i in world.items if i.id == key_id), None)
+        if key is None:
+            return (
+                f"{door.name}关着，先想办法打开它。"
+                if zh
+                else f"The {door.name} is closed."
+            )
+        carried = state.inventory.get(key.id, 0) > 0
+        here = state.item_locations.get(key.id) == state.location_id
+        if carried:
+            return (
+                f"{door.name}锁着。你身上有{key.name}，试试用它。"
+                if zh
+                else f"The {door.name} is locked. You are carrying the {key.name} - try using it."
+            )
+        if here:
+            return (
+                f"{door.name}锁着，需要{key.name}。它就在这儿。"
+                if zh
+                else f"The {door.name} is locked; it needs the {key.name}, which is right here."
+            )
+        return (
+            f"{door.name}锁着，需要{key.name}。"
+            if zh
+            else f"The {door.name} is locked; it needs the {key.name}."
+        )
 
     def _move(
         self,
@@ -466,6 +562,20 @@ class RulesEngine:
                 ok=False,
                 code="unknown_location",
                 message=f"The destination '{target_id}' is not defined.",
+            )
+        if target_id == state.location_id:
+            # The player named the room they are already in. That is not a
+            # failed move, it is a correct answer about where they are: the
+            # world did hear them, it just has nothing to do.
+            return RuleOutcome(
+                ok=True,
+                code="already_here",
+                message=(
+                    f"你已经在{destination.name}了。"
+                    if self._is_chinese(world)
+                    else f"You are already in {destination.name}."
+                ),
+                effects=[],
             )
 
         path, problem = self._path_problem(
@@ -671,7 +781,11 @@ class RulesEngine:
         if merchant is None:
             return RuleOutcome(
                 ok=False, code="merchant_absent",
-                message="That merchant is not here.",
+                message=(
+                    "那个商人不在。"
+                    if self._is_chinese(world)
+                    else "That merchant is not here."
+                ),
             )
         if not game_clock.open_now(merchant, state):
             return RuleOutcome(
@@ -771,6 +885,105 @@ class RulesEngine:
             ],
         )
 
+    #: Verbs that mean "find out": an attempt that uses one of these, in a room
+    #: with nobody to react, is a search and should turn something up.
+    _SEARCH_MARKERS = (
+        "打听", "寻找", "寻找线索", "搜索", "搜查", "翻找", "查看", "检查",
+        "观察", "询问", "调查", "研究", "辨认", "听听", "看看",
+        "search", "look for", "inspect", "check", "examine", "investigate",
+        "ask", "listen", "study", "scan",
+    )
+
+    def _improvise_reveals(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        text: str,
+    ) -> str:
+        """What an unscripted search turns up in this room.
+
+        The engine may not invent knowledge - but it already knows plenty the
+        player has not been told: which door here is locked, what opens it,
+        which quest is open. Naming the single most useful of those is a real
+        gain for the player and adds no new facts about the world.
+        """
+        zh = self._is_chinese(world)
+        lowered = (text or "").lower()
+        if not any(marker in lowered for marker in self._SEARCH_MARKERS):
+            return ""
+        lead = self._most_useful_lead(world, state)
+        if not lead:
+            return ""
+        return (
+            f"你打听出：{lead}" if zh else f"You turn up: {lead}"
+        )
+
+    def _most_useful_lead(
+        self, world: WorldDefinition, state: GameState
+    ) -> str:
+        """The one thing worth telling the player, in plain words.
+
+        Ordered by how much it unblocks: a locked door here that the player
+        can already open, then a locked door here at all, then the open quest's
+        next objective, then the room's description. Only facts the world
+        already contains are candidates.
+        """
+        zh = self._is_chinese(world)
+        here_id = state.location_id
+        doors = [d for d in world.doors if d.location_id == here_id]
+        items = {item.id: item for item in world.items}
+        for door in doors:
+            if self._door_is_open(state, door):
+                continue
+            key = items.get(getattr(door, "key_item_id", None) or "")
+            if key is None:
+                continue
+            if state.inventory.get(key.id, 0) > 0:
+                return (
+                    f"{door.name}锁着，你身上就有{key.name}。"
+                    if zh
+                    else f"the {door.name} is locked, and you are carrying the {key.name}."
+                )
+        for door in doors:
+            if self._door_is_open(state, door):
+                continue
+            key = items.get(getattr(door, "key_item_id", None) or "")
+            if key is not None:
+                where = state.item_locations.get(key.id)
+                here = where == here_id
+                if zh:
+                    lead = f"{door.name}锁着，需要{key.name}。"
+                    if here:
+                        lead += "它就在这儿。"
+                    return lead
+                return f"the {door.name} is locked; it needs the {key.name}."
+        for quest in world.quests:
+            if not quest.enabled or quest.id in state.quests_completed:
+                continue
+            for objective in quest.objectives:
+                if self._objective_done(state, objective):
+                    continue
+                label = objective.description or objective.target
+                return (
+                    f"{quest.title}——下一步是{label}。"
+                    if zh
+                    else f"{quest.title} - the next step is {label}."
+                )
+        return ""
+
+    @staticmethod
+    def _objective_done(state: GameState, objective) -> bool:
+        kind, target = objective.kind, objective.target
+        if kind == "obtain_item":
+            return state.inventory.get(target, 0) >= objective.required_count
+        if kind == "open_door":
+            return bool(state.doors.get(target))
+        if kind == "reach_location":
+            return bool(state.flags.get(f"visited:{target}"))
+        if kind == "flag":
+            return bool(state.flags.get(target))
+        return False
+
     def _improvise(
         self,
         world: WorldDefinition,
@@ -798,15 +1011,57 @@ class RulesEngine:
                 code="nothing_to_try",
                 message="Nothing was described, so nothing was attempted.",
             )
+        zh = self._is_chinese(world)
+        here = next(
+            (loc for loc in world.locations if loc.id == state.location_id), None
+        )
+        present = self._entities_present(world, state)
+        effects: List[Effect] = []
+        if present:
+            # Doing something in a room is visible: whoever is standing there
+            # notices, and that notice is a real state change (alertness), not
+            # prose. Without it an attempt was indistinguishable from standing
+            # still, which is why free text felt like it did nothing at all.
+            for entity in present:
+                effects.append(
+                    Effect(kind="adjust_alert", target=entity.id, amount=1)
+                )
+        # The player's own words are quoted, not re-written: they are the one
+        # part of the turn the engine did not author.
+        quote = f"「{text}」" if zh else f"\"{text}\""
+        parts = [
+            f"你试着{quote}。" if zh else f"You try {quote}."
+        ]
+        place = here.name if here is not None else ""
+        if present:
+            names = "、".join(e.name for e in present)
+            parts.append(
+                f"{names}注意到了。" if zh else f"{names} notices."
+            )
+        else:
+            # Nobody to react, so the world reacts instead: an attempt has to
+            # turn something up. Without this the empty-room branch was a
+            # longer way of saying "nothing happened" - the exact complaint
+            # this change set out to fix.
+            found = self._improvise_reveals(world, state, text)
+            if found:
+                parts.append(found)
+            elif place:
+                parts.append(
+                    f"周围没有别人看见，{place}还是老样子。"
+                    if zh
+                    else f"Nobody else is here to see it; {place} stays as it was."
+                )
         return RuleOutcome(
             ok=True,
             code="improvised",
-            message=f"You give it a try: {text}",
-            # An attempt is an action, so it is recorded as one: it costs time
-            # and both peers can perceive it (the event engine writes the
-            # effect out as `improvised` in the event stream). It changes no
-            # state of its own - the rules engine gives it no effect at all.
-            effects=[],
+            message="".join(parts),
+            # An attempt is a real action: it costs time, it is perceivable by
+            # everyone present, and it leaves the room's people more alert. It
+            # still grants nothing the world did not already allow - no items,
+            # no opened doors, no passed quests - so free text can never act as
+            # a universal key.
+            effects=effects,
             minutes=2,
         )
 
@@ -845,7 +1100,7 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False,
                 code="not_here",
-                message=f"{entity.name} is not here.",
+                message=self._someone_not_here(entity, world, state),
             )
         try:
             amount = max(1, int(params.get("amount", 1)))
@@ -932,7 +1187,11 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False,
                 code="item_not_here",
-                message=f"The {item.name} is not here.",
+                message=(
+                    f"{item.name}不在这里。"
+                    if self._is_chinese(world)
+                    else f"The {item.name} is not here."
+                ),
             )
         # "Already carrying one" is not a reason to refuse: a stack of ore is a
         # stack, and the verb has to be able to pick up a second piece or
@@ -945,7 +1204,11 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False,
                 code="already_carried",
-                message=f"You are already carrying the {item.name}.",
+                message=(
+                    f"你身上已经有{item.name}了。"
+                    if self._is_chinese(world)
+                    else f"You are already carrying the {item.name}."
+                ),
             )
         if item.pickup_requires:
             unmet = [
@@ -1009,7 +1272,11 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False,
                 code="door_not_here",
-                message=f"The {door.name} is not here.",
+                message=(
+                    f"{door.name}不在这里。"
+                    if self._is_chinese(world)
+                    else f"The {door.name} is not here."
+                ),
             )
         if self._door_is_open(state, door):
             return RuleOutcome(
@@ -1031,7 +1298,11 @@ class RulesEngine:
                 return RuleOutcome(
                     ok=False,
                     code="door_locked",
-                    message=f"The {door.name} is locked. You need the {key_name}.",
+                    message=(
+                        f"{door.name}锁着，需要{key_name}。"
+                        if self._is_chinese(world)
+                        else f"The {door.name} is locked. You need the {key_name}."
+                    ),
                 )
             effects: List[Effect] = [Effect(kind="open_door", target=door.id)]
             if door.consumes_key:
@@ -1269,7 +1540,11 @@ class RulesEngine:
         return RuleOutcome(
             ok=True,
             code="waited",
-            message=f"You wait for about {minutes} minutes.",
+            message=(
+                f"你等了大约{minutes}分钟。"
+                if self._is_chinese(world)
+                else f"You wait for about {minutes} minutes."
+            ),
             # The only verb whose length the player chooses: without this the
             # clock would follow the catalogue's nominal minute and a request
             # for "a night" would advance by one.
@@ -1369,7 +1644,7 @@ class RulesEngine:
             return None, None, RuleOutcome(
                 ok=False,
                 code="entity_not_here",
-                message=f"{entity.name} is not here.",
+                message=self._someone_not_here(entity, world, state),
             )
         combatant = self.combatant_for(entity, state)
         if not self._entity_alive(state, world, entity.id):
@@ -1547,6 +1822,8 @@ class RulesEngine:
         state: GameState,
         target_id: Optional[str] = None,
         params: Optional[Dict] = None,
+        *,
+        auto: bool = False,
     ) -> RuleOutcome:
         locations = self._locations(world)
         loc = locations.get(state.location_id)
@@ -1566,7 +1843,11 @@ class RulesEngine:
                     return RuleOutcome(
                         ok=True,
                         code="talked",
-                        message=f"You talk to {target_id}.",
+                        message=(
+                            f"你和{target_id}说了几句。"
+                            if self._is_chinese(world)
+                            else f"You talk to {target_id}."
+                        ),
                     )
                 return RuleOutcome(
                     ok=False,
@@ -1574,16 +1855,34 @@ class RulesEngine:
                     message="There is nobody here by that name to talk to.",
                 )
             if not self._entity_here(state, world, entity):
+                if auto:
+                    # Reached from the unnamed-talk fallback, where the person
+                    # was picked from this very room: a placement that disagrees
+                    # must not turn the turn into a recursion or a refusal.
+                    # Answering "you spoke" is the honest bound.
+                    return RuleOutcome(
+                        ok=True,
+                        code="talked",
+                        message=(
+                            f"你和{entity.name}说了几句。"
+                            if self._is_chinese(world)
+                            else f"You talk to {entity.name}."
+                        ),
+                    )
                 return RuleOutcome(
                     ok=False,
                     code="entity_not_here",
-                    message=f"{entity.name} is not here.",
+                    message=self._someone_not_here(entity, world, state),
                 )
             if entity.kind == "object":
                 return RuleOutcome(
                     ok=False,
                     code="unsupported_target_kind",
-                    message=f"{entity.name} cannot talk.",
+                    message=(
+                        f"{entity.name}不会说话。"
+                        if self._is_chinese(world)
+                        else f"{entity.name} cannot talk."
+                    ),
                 )
             if not self._entity_alive(state, world, entity.id):
                 return RuleOutcome(
@@ -1604,7 +1903,11 @@ class RulesEngine:
             message = (
                 f'{entity.name}: "{line}"'
                 if line
-                else f"You talk to {entity.name}."
+                else (
+                    f"你和{entity.name}说了几句。"
+                    if self._is_chinese(world)
+                    else f"You talk to {entity.name}."
+                )
             )
             effects = (
                 [Effect(kind="advance_dialogue", target=entity.id)]
@@ -1619,8 +1922,24 @@ class RulesEngine:
             return RuleOutcome(
                 ok=False,
                 code="nobody_here",
-                message="There is nobody here to talk to.",
+                message=(
+                    "这里一个人也没有。"
+                    if self._is_chinese(world)
+                    else "There is nobody here to talk to."
+                ),
             )
+        # Speaking without naming anyone still reaches whoever is in the room.
+        # A player who types speech has already chosen to speak; answering with
+        # "you can talk to X" while nothing happens reads as a dead turn, and it
+        # is exactly the hint a rejection offered. When several people are here
+        # the sentence itself usually names one (the parser resolves it before
+        # the rule sees it), so this only picks an unambiguous room.
+        #
+        # `auto` marks this second entry so that _talk's "named but not here"
+        # branch re-raises the original refusal instead of handing the turn to
+        # itself and recursing on the same id.
+        if len(present) == 1 and entities.get(present[0].id) is not None:
+            return self._talk(world, state, present[0].id, params, auto=True)
         return RuleOutcome(
             ok=True,
             code="talk_available",

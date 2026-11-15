@@ -42,7 +42,10 @@ def test_move_through_closed_door_is_rejected():
     outcome = RulesEngine().evaluate(world, state, "move", "warehouse")
     assert not outcome.ok
     assert outcome.code == "exit_blocked"
-    assert "closed" in outcome.message
+    # The message no longer stops at "it is closed": telling the player which
+    # key opens it is what turns a refusal into a next move.
+    assert "locked" in outcome.message or "closed" in outcome.message
+    assert "Iron Key" in outcome.message
 
 
 def test_move_to_unknown_location_is_rejected():

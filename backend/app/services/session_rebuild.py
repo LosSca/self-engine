@@ -316,6 +316,11 @@ class SessionRebuildMixin:
                     visibility=ev.payload.get("visibility", "player"),
                     related_entities=list(ev.payload.get("related_entities") or []),
                     status=ev.payload.get("status", "committed"),
+                    # Theme-driven consolidation metadata (absent on crystals
+                    # written before it existed, which keep empty defaults).
+                    theme_key=ev.payload.get("theme_key", "") or "",
+                    theme_keywords=list(ev.payload.get("theme_keywords") or []),
+                    source_memory_ids=list(ev.payload.get("source_memory_ids") or []),
                 ))
                 if not crystals[-1].memory_id:
                     crystals[-1].memory_id = derive_memory_id(
@@ -328,18 +333,35 @@ class SessionRebuildMixin:
             except Exception:
                 continue
 
-        # Infer consumed state from tier counts.
-        # Each higher-tier crystal was created by consuming CONSOLIDATION_COUNT
-        # crystals of the previous tier (oldest first, in creation order).
+        # Infer consumed state.
+        #
+        # Theme-driven merges record the ids they replaced, so a rebuild uses
+        # that record when it exists: "the Eileen thread merged these three" is
+        # a fact, whereas "the first N of the tier were consumed" is a guess
+        # that is only right for the old time-ordered cascade.
         consolidation_count = self._memory.CONSOLIDATION_COUNT
+        merged_ids = {
+            doc_id
+            for c in crystals
+            for doc_id in (c.source_memory_ids or [])
+            if doc_id
+        }
+        for c in crystals:
+            if c.memory_id and c.memory_id in merged_ids:
+                c.consumed = True
         for current_tier in (CrystalTier.SHORT, CrystalTier.MEDIUM, CrystalTier.LONG):
             next_tier = current_tier.next_tier
             if next_tier is None:
                 continue
+            current_tier_crystals = [c for c in crystals if c.tier == current_tier]
+            untracked = [c for c in current_tier_crystals if c.memory_id not in merged_ids]
+            # Only fall back to the positional rule when nothing in this tier is
+            # accounted for by an explicit merge record (legacy saves).
+            if merged_ids and any(c.memory_id in merged_ids for c in current_tier_crystals):
+                continue
             next_count = sum(1 for c in crystals if c.tier == next_tier)
             consumed_count = next_count * consolidation_count
-            current_tier_crystals = [c for c in crystals if c.tier == current_tier]
-            for c in current_tier_crystals[:consumed_count]:
+            for c in untracked[:consumed_count]:
                 c.consumed = True
 
         self._memory._crystals[self.campaign_id] = crystals

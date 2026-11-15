@@ -217,9 +217,13 @@ def _localise(world: Optional[WorldDefinition], english: str, chinese: str) -> s
     knows nothing about world documents, so ``world`` is optional and an
     unknown language stays English.
     """
-    if world is not None and (world.language or "").lower().startswith("zh"):
-        return chinese
-    return english
+    if world is None:
+        return english
+    # An unset language is not English: most authored worlds leave the field
+    # empty, so the prose language is inferred from the world's own text.
+    from app.utils.language import detect_language
+
+    return chinese if detect_language(world) == "zh" else english
 
 
 def _is_chinese_world(world: Optional[WorldDefinition]) -> bool:
@@ -284,6 +288,41 @@ def describe_effects(
             sentences.append(
                 _localise(world, f"Something changes: {effect.target}.", "局势变了。")
             )
+        elif effect.kind == "adjust_alert":
+            # An attempt makes the people in the room pay attention. Without
+            # a sentence for it the effect was invisible: the rules changed
+            # state, the prose said nothing, and a player saw an action with no
+            # consequence - which is how free text felt like a no-op.
+            entity = next((e for e in world.entities if e.id == effect.target), None)
+            if entity is None:
+                continue
+            sentences.append(
+                _localise(
+                    world,
+                    f"{entity.name} notices you.",
+                    f"{entity.name}注意到了你。",
+                )
+            )
+        elif effect.kind == "advance_dialogue":
+            # Talking used to fall through to "nothing changes" even though the
+            # rule had already produced a line: the effect carries who was
+            # spoken to, and the entity carries what they say. Quoting it here
+            # keeps the fallback exactly as true as the rule outcome.
+            entity = next((e for e in world.entities if e.id == effect.target), None)
+            if entity is None:
+                continue
+            record = state.entities.get(entity.id)
+            index = 0
+            if record is not None:
+                stored = record.flags.get("dialogue_index", 0)
+                index = int(stored) if isinstance(stored, (int, float)) else 0
+            line = entity.dialogue[index % len(entity.dialogue)] if entity.dialogue else ""
+            if line:
+                sentences.append(f'{entity.name}: "{line}"')
+            else:
+                sentences.append(
+                    _localise(world, f"You speak with {entity.name}.", f"你和{entity.name}说了几句。")
+                )
     return sentences
 
 
@@ -418,6 +457,34 @@ def render_fallback(
             "这件事没有做成。",
         )
     sentences = describe_effects(world, state, outcome.effects)
+    if outcome.code == "talked" and not any(
+        effect.kind == "advance_dialogue" for effect in outcome.effects
+    ):
+        # A character with no authored line produces no effect, but the turn
+        # still did something: the rule already says who was spoken to. Drop
+        # the rule's default wording and describe the exchange in-world.
+        # The rule speaks the world's language now, so the name can no longer
+        # be read off an English template. The effect normally carries the id;
+        # when it does not, match any name the message uses.
+        target = next(
+            (
+                effect.target
+                for effect in outcome.effects
+                if effect.kind == "advance_dialogue" and effect.target
+            ),
+            "",
+        )
+        entity = next((e for e in world.entities if e.id == target), None) if target else None
+        if entity is None:
+            entity = next(
+                (e for e in world.entities if e.name and e.name in outcome.message),
+                None,
+            )
+        name = entity.name if entity is not None else target
+        if name:
+            sentences.append(
+                _localise(world, f"You speak with {name}.", f"你和{name}说了几句。")
+            )
     for execution in executions:
         if execution.status == "fired" and execution.name:
             sentences.append(f"({execution.name})")
