@@ -66,7 +66,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口；另有解析、知识、叙事、世界编辑、AI 生成、作品库、草稿与联网取材 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 六个存储模块：情景、权威状态、事件、调用追踪、偏好、供应商凭据（后两者与情景库同库） |
-| `backend/tests/` | pytest **1821 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest **1856 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、侧边栏与工具坞、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记、交付审查与 `docs/review-2026-11-15.md` 全量审查 |
 
@@ -134,11 +134,12 @@ SQLite（路径均可用环境变量覆盖）
 内置行动是声明式目录（`backend/app/engines/action_registry.py` 的 `ActionSpec`），
 每个行动声明 name / label / handler / target / verbs，`RulesEngine` 按动词表分发。
 
-当前 **21 个行动**（`GET /api/v1/action-types` 可读到全部，含中文动词）：
+当前 **22 个行动**（`GET /api/v1/action-types` 可读到全部，含中文动词）：
 `attack` 攻击、`flee` 逃跑、`defend` 防御、`take` 拾取、`open` 打开、`use` 使用、
 `talk` 交谈、`move` 移动、`travel` 前往、`investigate` 调查、`look` 观察、`equip` 装备、
 `unequip` 卸下、`buy` 购买、`sell` 出售、`give_item` 交付物品、`choose` 选择、
-`dismantle` 拆解、`combine` 合成、`wait` 等待，以及世界可扩展的 `custom`。
+`dismantle` 拆解、`combine` 合成、`wait` 等待、`improvise` 临时起意（自由输入的兜底：
+只记录尝试、不改变状态），以及世界可扩展的 `custom`。
 
 拆解与合成读的是**物品自己声明的材料数据**（`dismantles_to` / `made_from` / `craftable`），
 所以"拆掉木桌得到木板、木板合成木盾"不需要写代码，只需要在世界上写明。没写 `dismantles_to`
@@ -643,8 +644,11 @@ npm run build        # 产物在 desktop/src-tauri/target/release/bundle/
 - **迷你地图**（`MiniMap`）常驻在剧情流右上角，点一下展开完整世界地图。
 - **新手引导**（`OnboardingGuide`）在侧边栏里逐条讲清系统与配置步骤，可折叠、可跳过。
 - **行动预演**：提交前可先看判定结果（`POST /campaigns/{id}/actions/preview`），预演不写状态。
-- **自然语言**：文字行动由 `text_action_service` 解析成同一个 `ActionRequest`，解析失败回到按钮，
-  并给出此刻真正可用的出口与目标。
+- **自然语言**：文字行动由 `text_action_service` 解析成同一个 `ActionRequest`。认识动词的句子
+  照常走规则；没写动词的句子也**不会**被当成错句——它变成一次 `improvise` 尝试（花掉两分钟、
+  改变不了任何状态），把玩家想做的事记进行动记录。写得明确但目标不存在（"拿起月亮"）仍然拒绝，
+  并给出此刻真正可用的出口与目标。配了模型时可以打开 `ENGINE_INTENT_ADVISOR=1`，让模型在
+  "尝试"之前先看一眼能不能把它翻译成真实动作。
 - **下一步建议**（`SuggestionList`）：输入框上方三个可点的选项，可以直接发送或先改再发。
 - **调试台四个页签**：调用追踪、叙事与上下文、行动记录、模型调用。
 - **内容策略**在设置面板切换；切到「NSFW（本地）」后叙事整条走本地模型。

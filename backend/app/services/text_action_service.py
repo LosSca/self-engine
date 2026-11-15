@@ -81,14 +81,41 @@ _WAIT_DURATIONS: Sequence[Tuple[str, int]] = (
 _VERBS_PRIMARY: Dict[str, str] = {
     action: verbs[0] for action, verbs in _VERBS if verbs
 }
+#: Every verb word the catalogue knows, for "did the player start a verb?".
+_VERB_WORDS: frozenset = frozenset(
+    verb.rstrip() for _action, verbs in _VERBS for verb in verbs if verb.strip()
+)
 
 _TRAILING = ("", "。", "！", "?", "？", ".", "吧", "啊", "呢")
 #: Leading filler stripped before verb matching, longest phrase first so "我想"
 #: wins over "我". `我` alone matters for Chinese utterances like "我拆掉木桌"
-#: that would otherwise never reach the verb table.
+#: that would otherwise never reach the verb table. The longer ones (want,
+#: plan, try, let me) only mean "this is what I intend", so dropping them
+#: leaves the real verb: "我想看看那块木头" -> "看看那块木头" -> look.
 _LEADING_PARTICLES = (
-    "我想", "我要", "我打算", "我准备", "让我", "帮我", "麻烦", "试着", "试图", "请", "我",
+    "我想要", "我想", "我要", "我打算", "我准备", "我决定", "我试着", "让我", "帮我",
+    "麻烦", "试着", "试图", "请", "我",
 )
+#: What a place is called in the player's own words. A translated world keeps
+#: English ids and names ("Forge"), so "铁匠铺" can only be recognised through
+#: the meaning of the place, and this table is that meaning, kept small on
+#: purpose: a wrong entry here moves the player somewhere they did not ask for.
+_WORD_FOR_HINT: Dict[str, Tuple[str, ...]] = {
+    # The Chinese entries are not corroborated by an English name, so a world
+    # that keeps them is a world that says "Forge" and means 铁匠铺.
+    "forge": ("铁匠", "锻", "打铁", "铁铺", "熔炉", "forg", "smith"),
+    "shop": ("商店", "店铺", "杂货", "商人", "柜台", "shop", "store"),
+    "tavern": ("酒馆", "客栈", "酒吧", "喝酒", "酒", "inn", "tavern", "bar"),
+    "square": ("广场", "集市", "市集", "中心", "market", "square", "plaza"),
+    "fields": ("田", "农场", "麦", "野外", "田地", "field", "farm"),
+    "warehouse": ("仓库", "货栈", "货仓", "warehouse", "storehouse"),
+    "forest": ("森林", "树林", "林子", "forest", "wood"),
+    "temple": ("神庙", "神殿", "庙", "temple", "shrine"),
+    "gate": ("城门", "大门", "门楼", "gate"),
+    "dock": ("码头", "港口", "dock", "harbor", "harbour"),
+    "mine": ("矿", "矿井", "矿洞", "mine"),
+    "library": ("图书馆", "藏书", "library", "archive"),
+}
 _ENVELOPE = re.compile(r"^\[([A-Z]+)\]\s*", re.IGNORECASE)
 _PARSE_FAILURES = {"missing_target", "ambiguous", "no_target"}
 
@@ -219,8 +246,19 @@ class TextActionParser:
     """Deterministic utterance -> (action, target) mapping."""
 
     def parse(
-        self, text: str, world: WorldDefinition, state: GameState
+        self,
+        text: str,
+        world: WorldDefinition,
+        state: GameState,
+        *,
+        improvise: bool = True,
     ) -> Optional[ParsedAction]:
+        """Map an utterance to an action.
+
+        `improvise=False` is for the advisor's second look: it must be able to
+        tell "I mapped nothing" from "I would record an attempt", otherwise a
+        model would never get the chance to name a real action first.
+        """
         envelope = _ENVELOPE.match((text or "").strip())
         mode = envelope[1].upper() if envelope else "DO"
         if mode not in ("DO", "SAY"):
@@ -241,14 +279,211 @@ class TextActionParser:
                 if custom is not None:
                     return self._resolve_custom(custom[0], custom[1], world, state)
             guessed = self._guess_without_verb(lowered, world, state)
-            return guessed if guessed and (mode == "DO" or guessed.action == "talk") else None
+            if guessed is not None and (mode == "DO" or guessed.action == "talk"):
+                # A guess is only a hint: if the words did not really name the
+                # thing, the attempt is still an attempt.
+                if guessed.confidence not in _PARSE_FAILURES:
+                    return guessed
+            if mode == "SAY":
+                # "老板，这块铁怎么卖？" is speech. The rule for talking needs
+                # somebody here, and it says who is - the same answer the
+                # advisor would give, without paying for a model call.
+                return self._addressable(state, world, "talk", raw)
+            if mode == "DO" and improvise and self._improvise_allowed(lowered):
+                return self._improvise(lowered, world, state)
+            return None
         parsed = self._resolve(action, fragment, world, state, utterance=text)
         if parsed is not None:
             return parsed
+        if action in ("move", "travel") and fragment:
+            # "去铁匠铺" is how people actually name a place: they shorten it.
+            # This runs after the exact resolver so an ordinary name always
+            # wins; it only stops a shortened place name from becoming
+            # missing_target. Stop at the place name: "去铁匠铺看看" is a move,
+            # not a look - the suffix names the errand, not the verb.
+            loose = self._loose_place(fragment, world, state)
+            if loose is not None:
+                return loose
         return ParsedAction(
             action=action,
             confidence="missing_target",
             note=f"could not resolve a target from '{fragment}'",
+        )
+
+    @staticmethod
+    def _addressable(
+        state: GameState, world: WorldDefinition, action: str, text: str
+    ) -> Optional[ParsedAction]:
+        """The only sensible target of `talk` when nobody was named.
+
+        A player who types speech expects the person in front of them to hear
+        it; the rule then answers with who is actually here, which is exactly
+        the hint a rejection would have given.
+        """
+        from app.engines.event_engine import entity_location
+
+        here = [
+            entity
+            for entity in world.entities
+            if entity_location(state, world, entity.id) == state.location_id
+        ]
+        if not here:
+            return ParsedAction(
+                action="talk",
+                confidence="missing_target",
+                note="nobody is here to hear it",
+            )
+        return ParsedAction(
+            action=action,
+            confidence="spoken",
+            note="said it out loud here",
+        )
+
+    @staticmethod
+    def _improvise_allowed(lowered: str) -> bool:
+        """Whether an unmapped sentence is worth recording as an attempt.
+
+        Two utterances are deliberately *not* improvised:
+
+        * one that names a thing here and nothing else ("iron") - the player
+          already named the object, they just have not said what to do with it;
+        * one that spells a real verb with a prefix ("takeover iron_key",
+          "lookout guard") - that is a slip, and recording "takeover" as an
+          attempt teaches the player nothing while it looks like it worked.
+        """
+        text = (lowered or "").strip()
+        # One clause is enough: Chinese has no spaces, so the word count says
+        # nothing about whether a sentence was written. A single Latin word is
+        # not one - it is a bare name, and naming a thing is not an attempt.
+        if not text:
+            return False
+        if text.isascii() and len(text.split()) < 2:
+            return False
+        if not text.isascii() and len(text) < 2:
+            return False
+        words = text.split()
+        first = words[0].strip(",.;:!?，。；：") if words else ""
+        if (
+            len(first) > 2
+            and first not in _VERB_WORDS
+            and any(
+                # English verbs are space-delimited, so the "word" has to be
+                # understood without spaces: "openly", "guardrail", "takeover".
+                first.startswith(verb) and first[len(verb):].isalpha()
+                for verb in _VERB_WORDS
+                if verb.isascii()
+            )
+        ):
+            # A real verb with something stuck to it: the writer meant a verb,
+            # just not as one. Recording that as a free attempt would swallow
+            # the typo silently, so it stays a parse error.
+            return False
+        for _action, verbs in _VERBS:
+            for verb in verbs:
+                verb = verb.rstrip()
+                if verb and any(
+                    text.startswith(verb + extra) for extra in ("over", "out", "ing")
+                ):
+                    return False
+        return True
+
+    def _improvise(
+        self, lowered: str, world: WorldDefinition, state: GameState
+    ) -> Optional[ParsedAction]:
+        """Anything else the player described: attempt it, do not reject it.
+
+        Free text is the point of a text adventure. The rule engine still owns
+        the outcome - `_improvise` records the attempt and changes nothing
+        else - so this is not a bypass, it is a verb the world always has.
+        """
+        text = (lowered or "").strip()
+        if not text:
+            return None
+        # The envelope ([DO], [SAY]) is our own syntax: it is stripped here so
+        # the recorded attempt reads like what the player wrote.
+        text = _ENVELOPE.sub("", text).strip()
+        text = text.strip("[]").strip()
+        return ParsedAction(
+            action="improvise",
+            confidence="improvised",
+            note="not a defined verb: attempted as written",
+            params={"attempt": text[:280]},
+        )
+
+    def _loose_place(
+        self, fragment: str, world: WorldDefinition, state: GameState
+    ) -> Optional[ParsedAction]:
+        """Resolve a shortened place name, but only when exactly one place fits.
+
+        "铁匠铺" against "Forge" is not a name match; it is a meaning match. The
+        cheap approximation is a shared character run with the place's name or
+        the words in that place's own description, and only a unique hit is
+        accepted - an ambiguous one stays a rejection, because guessing between
+        two places would move the player somewhere they never asked for.
+        """
+        names = {fragment}
+        for prefix in ("去", "到", "前往", "走"):
+            if fragment.startswith(prefix):
+                names.add(fragment[len(prefix):].strip())
+        # A place's own name is the best evidence there is: if one place is
+        # named anywhere in the utterance, the errand after it ("看看", "一趟")
+        # changes nothing.
+        for location in world.locations:
+            for alias in (location.name, location.id):
+                alias = (alias or "").strip().lower()
+                if alias and alias in fragment:
+                    return ParsedAction(
+                        action="move",
+                        target_id=location.id,
+                        matched_name=location.name,
+                        confidence="named",
+                        note=f"named {location.name} inside '{fragment}'",
+                    )
+        for enclitic in ("那里", "那儿", "去看看", "看看", "看看去", "一趟"):
+            for name in list(names):
+                if name.endswith(enclitic):
+                    names.add(name[: -len(enclitic)].strip())
+        scored: List[Tuple[int, str]] = []
+        for location in world.locations:
+            haystack = f"{location.id} {location.name}".lower()
+            for name in names:
+                if not name:
+                    continue
+                if name in haystack:
+                    scored.append((1000 + len(name), location.id))
+                    break
+                # The player's own word for a place ("铁匠铺") is not in its
+                # English name, so the Chinese description an author wrote is
+                # part of the evidence. Without it a translated world would
+                # reject every shortened name.
+                hint = (
+                    f"{getattr(location, 'description', '') or ''}"
+                    f" {getattr(location, 'name', '')}"
+                ).lower()
+                # The player's word has to be inside the utterance, and it has
+                # to actually mean this place: a table entry that no world word
+                # corroborates is not evidence.
+                corroborated = [
+                    word
+                    for word in _WORD_FOR_HINT.get(location.id, ())
+                    if not word.isascii() or word in hint or word in location.id.lower()
+                ]
+                if any(word in name for word in corroborated):
+                    scored.append((40, location.id))
+                    break
+        if not scored:
+            return None
+        scored.sort(reverse=True)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return None
+        location_id = scored[0][1]
+        target = next((l for l in world.locations if l.id == location_id), None)
+        return ParsedAction(
+            action="move",
+            target_id=location_id,
+            matched_name=getattr(target, "name", location_id),
+            confidence="loose",
+            note=f"matched a place from '{fragment}'",
         )
 
     def _split_verb(self, text: str) -> Tuple[Optional[str], str]:
@@ -875,16 +1110,20 @@ class TextActionService:
             return await self._replay_text(campaign_id, text, request_id, narrate, replayed)
         state = self.ensure_state(campaign_id)
         world = self._world_for_state(state, campaign_id)
-        parsed = self.parser.parse(text, world, state)
+        # 1) 确定性解析。2) 认不出来的句子先让可选顾问看一眼（它只能给一个
+        # 候选动作 + 目标片段，仍然要过同一套解析与规则）。3) 顾问也给不出
+        # 任何动作时，这句话仍然是一次「尝试」：规则记录尝试、花掉时间，但
+        # 不改变任何状态。这样自由输入不会被当成错句，动作也不会被猜。
+        parsed = self.parser.parse(text, world, state, improvise=False)
         advised = None
         if parsed is None or not parsed.action:
             advised = await self._advise(text, world, state, campaign_id)
             if advised is not None:
                 parsed = advised
-        # 解析不出来就拒：文本链路的契约是「没听懂就不动状态」，并把
-        # 现场能做什么写在 message 里（见 _reject_parse）。曾经试过把自由
-        # 描述降级成 look，但那会让「写对了动词、只是目标不存在」的输入
-        # 也变成成功，破坏「明确动作不许被猜」的不变量，已回退。
+            elif parsed is None:
+                parsed = self.parser.parse(text, world, state)
+        # 明确写了动词、只是目标不存在：仍然拒绝，并把现场能做什么写进
+        # message（见 _reject_parse）。「明确动作不许被猜」这条不变量没变。
         if parsed is None or not parsed.action or parsed.confidence in _PARSE_FAILURES:
             return await self._reject_parse(campaign_id, request_id, text, state, parsed)
         request = ActionRequest(

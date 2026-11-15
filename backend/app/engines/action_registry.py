@@ -312,6 +312,21 @@ register_action(
 )
 register_action(
     ActionSpec(
+        name="improvise",
+        label="临时起意",
+        handler="_improvise",
+        minutes=2,
+        target="optional",
+        description=(
+            "Anything the world never defined, tried anyway and recorded as an "
+            "attempt: no new state, but a fact that people can notice."
+        ),
+        verbs=(),
+        verb_priority=230,
+    )
+)
+register_action(
+    ActionSpec(
         name="custom",
         label="自定义行动",
         handler="_custom",

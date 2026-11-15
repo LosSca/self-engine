@@ -1139,6 +1139,10 @@ class ActionRequest(BaseModel):
         # Transfer is the town's economy: an item changing hands is one rule
         # with two directions, so it is one verb, not two.
         "give_item",
+        # Not every utterance maps to a defined verb. "Try it anyway" is one
+        # action with one rule: record the attempt, cost a minute, touch
+        # nothing else. Without it a player's free-form idea is a parse error.
+        "improvise",
         "custom",
     ]
     actor_id: str = "player"

@@ -292,10 +292,17 @@ def test_parser_still_prefers_built_in_verbs():
 
 
 def test_parser_ignores_unknown_verbs():
+    """An unknown verb is not a custom action; it is only a free attempt."""
     world = _world_with(_pray_action())
     state = fresh_state(world)
 
-    assert TextActionParser().parse("dance wildly", world, state) is None
+    parsed = TextActionParser().parse("dance wildly", world, state)
+
+    assert parsed.action == "improvise"
+    assert parsed.params["attempt"] == "dance wildly"
+    # The advisor's pass has to see "nothing mapped" here, or a model would
+    # never get the chance to name a real verb before the attempt is recorded.
+    assert TextActionParser().parse("dance wildly", world, state, improvise=False) is None
 
 
 def test_parser_resolves_a_target_for_a_custom_action():

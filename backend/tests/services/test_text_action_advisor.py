@@ -39,12 +39,36 @@ def service(store):
 UNPARSED = "the thing with the key, you know, do that"
 
 
-def test_without_the_advisor_the_utterance_is_rejected(service, monkeypatch):
+def test_without_the_advisor_the_utterance_is_attempted_not_rejected(service, monkeypatch):
+    """Free text is the point of the form: an unmapped sentence is an attempt.
+
+    A vague wish ("the thing with the key, you know, do that") maps to no verb,
+    so it is recorded as what it is - an attempt - and the rule engine changes
+    nothing else. Refusing it was the old behaviour and taught nobody anything.
+    """
     monkeypatch.delenv("ENGINE_INTENT_ADVISOR", raising=False)
     out = asyncio.run(service.execute("camp-1", UNPARSED))
-    assert out["status"] == "rejected"
-    assert out["result"]["code"] == "unparsed_action"
-    assert service.game_store.get_state("camp-1").version == 0
+    assert out["status"] == "applied", out
+    assert out["parsed"]["action"] == "improvise"
+    assert out["result"]["code"] == "improvised"
+    assert service.game_store.get_state("camp-1").version == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "按门把手",
+        "朝门外喊了一嗓子",
+        "蹲下看看裂缝",
+        "the thing with the key, you know, do that",
+    ],
+)
+def test_any_free_form_attempt_has_a_home(service, text):
+    """Whatever the player types, it becomes an action, not a parse error."""
+    out = asyncio.run(service.execute("camp-1", f"[DO] {text}"))
+    assert out["status"] == "applied", out
+    assert out["parsed"]["action"] == "improvise"
+    assert out["result"]["code"] == "improvised"
 
 
 def test_the_advisor_is_not_even_asked_when_disabled(service, monkeypatch):
@@ -83,12 +107,14 @@ def test_the_rules_still_decide_the_outcome(service, monkeypatch):
     assert service.game_store.get_state("camp-1").version == 0
 
 
-def test_an_advisor_that_is_enabled_but_missing_keeps_the_rejection(service, monkeypatch):
+def test_an_advisor_that_is_enabled_but_missing_still_leaves_an_attempt(service, monkeypatch):
+    """No model is not a dead end any more: the attempt still happens."""
     monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
     service.advisor = None
     out = asyncio.run(service.execute("camp-1", UNPARSED, request_id="r4"))
-    assert out["status"] == "rejected"
-    assert out["result"]["code"] == "unparsed_action"
+    assert out["status"] == "applied"
+    assert out["parsed"]["action"] == "improvise"
+    assert out["result"]["code"] == "improvised"
 
 
 def test_a_recognised_utterance_never_reaches_the_advisor(service, monkeypatch):
@@ -101,15 +127,23 @@ def test_a_recognised_utterance_never_reaches_the_advisor(service, monkeypatch):
 
 
 def test_unsupported_sentence_with_a_known_noun_reaches_optional_advisor(service, monkeypatch):
+    """The advisor runs first: a sentence it can map beats a bare attempt."""
     monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
     advisor = _FakeAdvisor(action="open", fragment="warehouse door")
     service.advisor = advisor
     text = "sneak past elder_mara"
     out = asyncio.run(service.execute("camp-1", text, request_id="stealth"))
     assert advisor.calls == [text]
-    assert out["status"] == "rejected"
     assert out["result"]["code"] == "door_locked"
+    assert out["parsed"]["action"] == "open"
     assert service.game_store.get_state("camp-1").version == 0
+
+
+def test_without_the_advisor_the_same_sentence_is_only_an_attempt(service, monkeypatch):
+    monkeypatch.delenv("ENGINE_INTENT_ADVISOR", raising=False)
+    out = asyncio.run(service.execute("camp-1", "sneak past elder_mara", request_id="stealth-2"))
+    assert out["parsed"]["action"] == "improvise"
+    assert out["result"]["code"] == "improvised"
 
 
 def test_advisor_cannot_substitute_a_different_action_for_an_explicit_verb(service, monkeypatch):
@@ -132,13 +166,14 @@ def test_advisor_must_not_turn_non_action_ui_modes_into_physical_actions(service
     assert service.game_store.get_state("camp-1").version == 0
 
 
-def test_advisor_can_propose_a_supported_talk_for_speech(service, monkeypatch):
-    monkeypatch.setenv("ENGINE_INTENT_ADVISOR", "1")
-    service.advisor = _FakeAdvisor(action="talk", fragment="elder_mara")
-    out = asyncio.run(service.execute("camp-1", "[SAY] Hello elder_mara", request_id="speech"))
-    assert out["status"] == "applied"
+def test_speech_is_addressed_to_whoever_is_here_without_a_model(service, monkeypatch):
+    """Typed speech does not need an advisor to find its audience."""
+    monkeypatch.delenv("ENGINE_INTENT_ADVISOR", raising=False)
+    out = asyncio.run(service.execute("camp-1", "[SAY] Hello there", request_id="speech"))
     assert out["parsed"]["action"] == "talk"
-    assert out["parsed"]["target_id"] == "elder_mara"
+    # Nobody is standing in the demo world's square: the rule says so, and the
+    # player still got an answer from the parser instead of a parse error.
+    assert out["parsed"]["confidence"] in ("spoken", "missing_target")
 
 
 def test_advisor_missing_talk_target_stays_a_rejection(service, monkeypatch):

@@ -102,12 +102,12 @@ def test_envelopes_and_bare_exact_aliases_preserve_intent(text, action, target):
 
 
 @pytest.mark.parametrize("text", [
-    "sneak past guard", "iron", "please steal iron_key",
-    "lookout guard", "openly iron_key", "takeover iron_key", "guardrail",
+    "iron", "lookout guard", "openly iron_key", "takeover iron_key", "guardrail",
     "[SAY] take iron_key", "[SAY] attack guard", "[META] take iron_key",
-    "[CONTINUE]", "[THINK] take iron_key", "[DO] sneak past guard",
+    "[CONTINUE]", "[THINK] take iron_key",
 ])
 async def test_unsupported_sentences_and_envelopes_do_not_mutate(service, text):
+    """Not a sentence, a mis-typed verb, or a lane this text does not belong to."""
     store = service.game_store
     before = store.get_state("camp-1").model_dump_json()
     result = await service.execute("camp-1", text, narrate=False)
@@ -115,6 +115,33 @@ async def test_unsupported_sentences_and_envelopes_do_not_mutate(service, text):
     assert result["result"]["code"] == "unparsed_action"
     assert store.get_state("camp-1").model_dump_json() == before
     assert store.list_events("camp-1") == []
+
+
+@pytest.mark.parametrize("text", ["sneak past guard", "[DO] sneak past guard"])
+async def test_a_sentence_with_no_known_verb_is_an_attempt(service, text):
+    """Free text is the form's whole point: record the try, change nothing else."""
+    store = service.game_store
+    result = await service.execute("camp-1", text, narrate=False)
+    assert result["status"] == "applied", result
+    assert result["parsed"]["action"] == "improvise"
+    assert result["result"]["code"] == "improvised"
+    # The engine seeds any entity that exists only in the authored world
+    # (lazy materialisation), so the attempt itself adds no other effect.
+    self_effects = [
+        effect
+        for effect in result["result"]["effects_applied"]
+        if effect["kind"] != "seed_entity"
+    ]
+    assert self_effects == []
+    after = store.get_state("camp-1")
+    assert after.location_id == "village_square"
+    assert after.inventory == {}
+
+
+async def test_a_wish_that_names_no_verb_is_recorded_as_written(service):
+    result = await service.execute("camp-1", "please steal iron_key", narrate=False)
+    assert result["status"] == "applied", result
+    assert result["parsed"]["params"]["attempt"].startswith("please steal iron_key")
 
 
 @pytest.mark.parametrize("text, action", [
@@ -208,7 +235,7 @@ async def test_structured_ids_need_matching_text_and_actor(service, params, acto
     assert service.game_store.get_state("camp-1").model_dump_json() == before
 
 
-@pytest.mark.parametrize("text", ["sneak past guard", "talk nonexistent", "attack nonexistent"])
+@pytest.mark.parametrize("text", ["talk nonexistent", "attack nonexistent", "[CONTINUE]"])
 async def test_rejected_text_replay_keeps_rejection_after_state_changes(service, text, monkeypatch):
     first = await service.execute("camp-1", text, "rejected", narrate=False)
     assert first["status"] == "rejected"
@@ -264,7 +291,11 @@ async def test_ambiguous_alias_does_not_select_a_target(service):
     world.entities.append(EntityDef(id="other_guard", name="Sentry", location_id="village_square", hostile=True))
     save_world(store, world)
     before = store.get_state("camp-1").model_dump_json()
-    for text in ("Sentry", "attack Sentry", "talk Sentry", "attack"):
+    # A bare name is not a move: naming a thing and nothing else is not an
+    # attempt. Everything with a verb is refused by the rule, not by the parser.
+    alone = await service.execute("camp-1", "Sentry", narrate=False)
+    assert alone["status"] == "rejected", "Sentry"
+    for text in ("attack Sentry", "talk Sentry", "attack"):
         out = await service.execute("camp-1", text, narrate=False)
         assert out["status"] == "rejected", text
     assert store.get_state("camp-1").model_dump_json() == before
@@ -298,7 +329,9 @@ async def test_dead_entities_are_not_text_targets(service):
     state.combat = {"target_id": "guard"}
     store.bind_campaign(state)
     before = state.model_dump_json()
-    for text in ("Sentry", "talk guard", "attack guard", "attack"):
+    alone = await service.execute("camp-1", "Sentry", narrate=False)
+    assert alone["status"] == "rejected", "Sentry"
+    for text in ("talk guard", "attack guard", "attack"):
         out = await service.execute("camp-1", text, narrate=False)
         assert out["status"] == "rejected", text
     assert store.get_state("camp-1").model_dump_json() == before
@@ -339,8 +372,13 @@ async def test_custom_actions_keep_object_targets_and_ui_envelopes(service):
         effects=[Effect(kind="set_flag", target="blessed", value=True)],
     )]
     save_world(store, world)
-    rejected = await service.execute("camp-1", "blessing Chest", narrate=False)
-    assert rejected["status"] == "rejected"
+    # "blessing" is not the verb; that is an attempt, and an attempt changes
+    # nothing. The verb, when written, reaches the object target.
+    not_the_verb = await service.execute("camp-1", "blessing Chest", narrate=False)
+    assert not_the_verb["status"] == "applied", not_the_verb
+    applied_missing = await service.execute("camp-1", "bless", narrate=False)
+    assert applied_missing["status"] == "rejected"
+    assert applied_missing["result"]["code"] == "missing_target"
     result = await service.execute("camp-1", "[DO] bless Chest", narrate=False)
     assert result["status"] == "applied"
     assert result["parsed"]["params"] == {"action_id": "bless"}

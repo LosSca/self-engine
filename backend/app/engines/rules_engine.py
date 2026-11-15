@@ -771,6 +771,45 @@ class RulesEngine:
             ],
         )
 
+    def _improvise(
+        self,
+        world: WorldDefinition,
+        state: GameState,
+        target_id: Optional[str] = None,
+        params: Optional[Dict] = None,
+    ) -> RuleOutcome:
+        """An action the world never defined, recorded as an attempt.
+
+        A player may try anything: "蹲下来检查地上的裂缝" is not in any verb
+        table, and refusing it teaches nothing. The rule is still a rule - the
+        attempt becomes a fact everybody can see, costs a minute or two, and
+        changes nothing else. Anything that *is* defined (moving, taking,
+        opening, fighting) keeps its own verb and its own preconditions, so
+        this can never act as a universal key.
+        """
+        params = params or {}
+        # "attempt" is the parser's stripped copy; the raw text is only useful
+        # as a fallback (a structured caller that sends "improvise" itself).
+        text = str(params.get("attempt") or params.get("text") or "").strip()[:280]
+        text = text.replace("[DO]", "").replace("[SAY]", "").strip()
+        if not text:
+            return RuleOutcome(
+                ok=False,
+                code="nothing_to_try",
+                message="Nothing was described, so nothing was attempted.",
+            )
+        return RuleOutcome(
+            ok=True,
+            code="improvised",
+            message=f"You give it a try: {text}",
+            # An attempt is an action, so it is recorded as one: it costs time
+            # and both peers can perceive it (the event engine writes the
+            # effect out as `improvised` in the event stream). It changes no
+            # state of its own - the rules engine gives it no effect at all.
+            effects=[],
+            minutes=2,
+        )
+
     def _give_item(
         self,
         world: WorldDefinition,
