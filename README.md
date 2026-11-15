@@ -66,7 +66,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口；另有解析、知识、叙事、世界编辑、AI 生成、作品库、草稿与联网取材 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 六个存储模块：情景、权威状态、事件、调用追踪、偏好、供应商凭据（后两者与情景库同库） |
-| `backend/tests/` | pytest **1856 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest **1951 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、侧边栏与工具坞、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记、交付审查与 `docs/review-2026-11-15.md` 全量审查 |
 
@@ -895,7 +895,7 @@ cd frontend && npx eslint src && npm run build
 > `TEMP` / `TMP` 必须设置：pytest 默认临时目录在部分 Windows 环境下不可写；
 > `-p no:cacheprovider` 同理，避免 `.pytest_cache` 写入失败。
 
-- 最近一次全量：**1700 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 **30 秒**。
+- 最近一次全量：**1951 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 **150 秒**。
   前端模块 **2984** 个，构建约 2.5 秒；eslint 0 error（12 条既有的 `react-hooks/exhaustive-deps` 警告）。
 - 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 个用例），覆盖 14 条验收：
   建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/
