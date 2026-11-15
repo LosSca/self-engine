@@ -122,23 +122,72 @@ def build_suggestions(
     character_ids: Sequence[str] = (),
     items: Sequence[str] = (),
     language: str = "zh",
+    doors: Sequence[str] = (),
+    door_ids: Sequence[str] = (),
+    keys: Sequence[str] = (),
+    key_ids: Sequence[str] = (),
+    here_items: Sequence[str] = (),
+    here_item_ids: Sequence[str] = (),
 ) -> list[Suggestion]:
     """Three next-step options built only from names the state already knows.
 
-    Ordered by how much context each needs: move somewhere concrete, then
-    engage a person, then a small act that always works. Whatever the world
-    lacks is skipped; generic lines fill the gap so the player always gets
-    three buttons.
+    Ordered by what actually moves the turn forward *right now*: the key that
+    opens a locked door on the only way out, a shut door you can open, an item
+    lying within reach, somewhere concrete to walk, then a person to address,
+    then a small act that always works. Whatever the world lacks is skipped;
+    generic lines fill the gap so the player always gets three buttons.
+
+    ``exits`` must already be limited to ways the rules would let the player
+    walk; a locked exit is passed through ``doors`` instead, and its key
+    through ``keys`` when it is in this room or already carried.
     """
     zh = not language or language.lower().startswith("zh")
+    # A shut door and a blocking key lead: "walk to X" behind a locked door is
+    # the one option the rules are guaranteed to refuse.
+    shut_doors = [n for n in (_text(x) for x in doors) if n][:1]
+    shut_door_ids = [_text(x) for x in door_ids][:1]
+    open_keys = [n for n in (_text(x) for x in keys) if n][:1]
+    open_key_ids = [_text(x) for x in key_ids][:1]
     places = [n for n in (_text(x) for x in exits) if n][:3]
+    reachable = [n for n in (_text(x) for x in here_items) if n][:2]
+    reachable_ids = [_text(x) for x in here_item_ids][:2]
     people = [n for n in (_text(x) for x in characters) if n][:3]
     things = [n for n in (_text(x) for x in items) if n][:2]
     # The first character's entity id lets a click address them directly
     # instead of relying on the name being parsed back out of the prose.
     person_id = _text(character_ids[0]) if len(character_ids) else ""
 
+    def pointed(entity_id: str) -> dict[str, str]:
+        # The id lets a click address the real object instead of hoping the
+        # client parses the name back out of the prose.
+        return {"target_id": entity_id} if entity_id else {}
+
     candidates: list[Suggestion] = []
+
+    # The key first: it is the step that makes the locked exit a real choice.
+    if open_keys:
+        key = open_keys[0]
+        hint = pointed(open_key_ids[0] if open_key_ids else "")
+        if zh:
+            candidates.append({"action": f"拿起{key}", "speech": "", "target": key, **hint})
+        else:
+            candidates.append({"action": f"Pick up the {key}", "speech": "", "target": key, **hint})
+
+    if shut_doors:
+        door = shut_doors[0]
+        hint = pointed(shut_door_ids[0] if shut_door_ids else "")
+        if zh:
+            candidates.append({"action": f"打开{door}", "speech": "", "target": door, **hint})
+        else:
+            candidates.append({"action": f"Open the {door}", "speech": "", "target": door, **hint})
+
+    if reachable:
+        item = reachable[0]
+        hint = pointed(reachable_ids[0] if reachable_ids else "")
+        if zh:
+            candidates.append({"action": f"拿起{item}", "speech": "", "target": item, **hint})
+        else:
+            candidates.append({"action": f"Pick up the {item}", "speech": "", "target": item, **hint})
 
     if places:
         verb = _MOVE_VERBS_ZH[0] if zh else _MOVE_VERBS_EN[0]
@@ -251,6 +300,152 @@ def target_directive(name: str, language: str = "zh") -> str:
     )
 
 
+def _names(items: Any, attr: str = "name") -> list[str]:
+    return [n for n in (_text(getattr(x, attr, None)) for x in (items or [])) if n]
+
+
+def _room_facts(
+    world: Any,
+    state: Mapping[str, Any] | None,
+    *,
+    location_id: str = "",
+) -> dict[str, list[str]]:
+    """What is true of the player's room *right now*, in readable names.
+
+    The one-turn rule is the whole point: a door that just opened, a key that
+    just got picked up and a person who just walked out all have to show up in
+    the next three buttons, so every list here is recomputed from the state
+    that is about to be shown to the player.
+
+    * exits      -- neighbour rooms the rules would let them walk to,
+    * doors      -- doors in this room that are still shut,
+    * door_ids   -- the ids of those doors,
+    * keys       -- keys for those doors that are here or already carried,
+    * key_ids    -- the ids of those keys,
+    * here_items -- items lying within reach,
+    * here_item_ids -- their ids,
+    * characters -- people actually in this room, not the whole cast.
+    """
+    facts: dict[str, list[str]] = {
+        "exits": [], "doors": [], "door_ids": [], "keys": [], "key_ids": [],
+        "here_items": [], "here_item_ids": [], "characters": [], "_here_name": [],
+    }
+    if world is None:
+        return facts
+    state = state if isinstance(state, Mapping) else {}
+    locations = {
+        getattr(loc, "id", ""): loc for loc in (getattr(world, "locations", []) or [])
+    }
+    wanted = _text(location_id) or _text(state.get("location_id"))
+    here = locations.get(wanted)
+    if here is None and wanted:
+        # The player is standing somewhere the world document does not define
+        # (a rebuilt world, a renamed room). Guessing the start room here would
+        # describe a different place entirely.
+        return facts
+    if here is None:
+        # A campaign that has not acted yet has no location: the world's own
+        # start room is the only honest answer.
+        start = _text(getattr(world, "start_location_id", ""))
+        here = locations.get(start) or next(iter(locations.values()), None)
+    if here is None:
+        return facts
+
+    here_id = _text(getattr(here, "id", ""))
+    inventory = state.get("inventory") if isinstance(state.get("inventory"), Mapping) else {}
+    door_state = state.get("doors") if isinstance(state.get("doors"), Mapping) else {}
+    item_at = state.get("item_locations") if isinstance(state.get("item_locations"), Mapping) else {}
+    doors = {_text(getattr(d, "id", "")): d for d in (getattr(world, "doors", []) or [])}
+    items = {_text(getattr(i, "id", "")): i for i in (getattr(world, "items", []) or [])}
+
+    def door_is_open(door: Any) -> bool:
+        door_id = _text(getattr(door, "id", ""))
+        live = door_state.get(door_id)
+        if isinstance(live, bool):
+            return live
+        return bool(getattr(door, "opened", False))
+
+    for exit_def in getattr(here, "exits", []) or []:
+        target = locations.get(_text(getattr(exit_def, "target_id", "")))
+        label = _text(getattr(exit_def, "label", ""))
+        name = label or (_text(getattr(target, "name", "")) if target is not None else "")
+        door = doors.get(_text(getattr(exit_def, "door_id", "")) or "")
+        if door is not None and not door_is_open(door):
+            # Walking this way is refused until the door opens, so it is not a
+            # destination yet: it is a door to open.
+            door_name = _text(getattr(door, "name", "")) or name
+            if door_name and door_name not in facts["doors"]:
+                facts["doors"].append(door_name)
+                facts["door_ids"].append(_text(getattr(door, "id", "")))
+            key_id = _text(getattr(door, "key_item_id", ""))
+            key = items.get(key_id) if key_id else None
+            try:
+                reachable = item_at.get(key_id) == here_id
+            except TypeError:
+                reachable = False
+            # Only a key still lying here is something to pick up; a key
+            # already carried needs no further step, so it is not offered.
+            if (
+                key is not None
+                and reachable
+                and not inventory.get(key_id)
+                and key_id not in facts["key_ids"]
+            ):
+                facts["keys"].append(_text(getattr(key, "name", "")))
+                facts["key_ids"].append(key_id)
+            continue
+        need = _text(getattr(exit_def, "requires_item_id", ""))
+        if need and not inventory.get(need):
+            continue
+        if name:
+            facts["exits"].append(name)
+
+    room_items = set(getattr(here, "item_ids", []) or [])
+    for item_id, item in items.items():
+        try:
+            at = item_at.get(item_id)
+        except TypeError:
+            at = None
+        if item_id in inventory and inventory.get(item_id):
+            # Carried: it is in the player's hands. The state is the authority
+            # here - a stale item_locations row must not put it back on the
+            # floor and offer "pick it up" again.
+            continue
+        # The state is authoritative; the room's authored list is what makes an
+        # item visible before the first commit placed it.
+        if at == here_id or (at is None and item_id in room_items):
+            facts["here_items"].append(_text(getattr(item, "name", "")))
+            facts["here_item_ids"].append(item_id)
+
+    live = state.get("entities") if isinstance(state.get("entities"), Mapping) else {}
+    for entity in getattr(world, "entities", []) or []:
+        if getattr(entity, "kind", "npc") == "object":
+            continue
+        entity_id = _text(getattr(entity, "id", ""))
+        record = live.get(entity_id)
+        if isinstance(record, Mapping):
+            # A plain-dict record (e.g. a model_dump) keeps its place under the
+            # same key the model uses.
+            place = _text(record.get("location_id", ""))
+        elif isinstance(record, str):
+            # A dump that is already flattened to {"id": "place"} is still a
+            # live position; only a missing record means "where the author put
+            # them".
+            place = _text(record)
+        else:
+            place = _text(getattr(record, "location_id", "")) if record is not None else ""
+        if not place:
+            place = _text(getattr(entity, "location_id", ""))
+        # Where they are *now* wins. The room's npc_ids list is authored and is
+        # never rewritten when someone walks off, so trusting it would keep
+        # offering "talk to X" to an empty room.
+        if place == here_id:
+            facts["characters"].append(_text(getattr(entity, "name", "")))
+
+    facts["_here_name"] = [_text(getattr(here, "name", ""))] if _text(getattr(here, "name", "")) else []
+    return facts
+
+
 def suggestions_for_result(
     result: Any,
     *,
@@ -265,6 +460,10 @@ def suggestions_for_result(
     for the turn (result["world"]) with world_getter as a fallback. Everything
     is optional: an unreadable world narrows the list to the generic lines
     rather than failing the turn.
+
+    The room is resolved from the state *after* the turn, so a door that just
+    opened, a key that was just taken and the people still standing here are
+    what the three buttons describe.
     """
     payload = result if isinstance(result, dict) else {}
     state = payload.get("state") or {}
@@ -276,35 +475,40 @@ def suggestions_for_result(
     location_id = str(state.get("location_id") or "")
     inventory = state.get("inventory")
     held_ids = list(inventory) if isinstance(inventory, dict) else []
-
-    location_name = ""
-    place_names: list[str] = []
-    item_names: list[str] = []
     try:
         if world is None and callable(world_getter):
             world = world_getter()
-        locations = {loc.id: loc for loc in getattr(world, "locations", []) or []}
-        if location_id in locations:
-            here = locations[location_id]
-            location_name = here.name
-            for exit_def in getattr(here, "exits", []) or []:
-                target = locations.get(exit_def.target_id)
-                label = (getattr(exit_def, "label", "") or "").strip()
-                if label:
-                    place_names.append(label)
-                elif target is not None:
-                    place_names.append(target.name)
-        items_by_id = {item.id: item for item in getattr(world, "items", []) or []}
-        item_names = [items_by_id[i].name for i in held_ids if i in items_by_id]
     except Exception:  # noqa: BLE001 - suggestions are advisory
-        location_name, place_names, item_names = "", [], []
+        world = None
+    facts = _room_facts(world, state, location_id=location_id)
 
-    present = list(characters)
+    # Only people who are in this room. A caller's cast list is a fallback for
+    # worlds whose entities the builder cannot read at all - naming someone who
+    # is elsewhere is exactly what made every talk suggestion a rejection.
+    people = [(n, "") for n in facts["characters"]]
+    if not people and not (getattr(world, "entities", None) or []):
+        people = list(characters)
+
+    items_by_id = {}
+    try:
+        items_by_id = {i.id: i for i in (getattr(world, "items", []) or [])}
+    except AttributeError:
+        items_by_id = {}
+    item_names = [
+        _text(getattr(items_by_id[i], "name", "")) for i in held_ids if i in items_by_id
+    ]
+
     return build_suggestions(
-        location=location_name,
-        exits=place_names,
-        characters=[name for name, _ in present],
-        character_ids=[entity_id for _, entity_id in present],
+        location=(facts["_here_name"] or [""])[0],
+        exits=facts["exits"],
+        doors=facts["doors"],
+        door_ids=facts["door_ids"],
+        keys=facts["keys"],
+        key_ids=facts["key_ids"],
+        here_items=facts["here_items"],
+        here_item_ids=facts["here_item_ids"],
+        characters=[name for name, _ in people],
+        character_ids=[entity_id for _, entity_id in people],
         items=item_names,
         language=language,
     )
@@ -316,6 +520,9 @@ def hints_from_state(
     characters: Iterable[tuple[str, str]] = (),
     world: Any = None,
     language: str = "zh",
+    doors: Mapping[str, Any] | None = None,
+    item_locations: Mapping[str, str] | None = None,
+    entities: Mapping[str, Any] | None = None,
 ) -> list[Suggestion]:
     """Three options for the state a campaign is in *right now*.
 
@@ -323,38 +530,49 @@ def hints_from_state(
     screen has no turn yet, and the client wants buttons before the first
     action, so this takes the raw state fields instead (location id, held item
     ids, cast) and resolves names from the world document.
+
+    ``doors`` / ``item_locations`` / ``entities`` are the live overrides from the
+    committed state: without them the builder would describe the world as it
+    was authored, e.g. still calling a door "locked" three turns after it was
+    opened and offering a walk the rules now allow.
     """
-    areas: list[str] = []
-    location_name = ""
+    view: dict[str, Any] = {
+        "location_id": _text(location_id),
+        "inventory": {_text(k): 1 for k in inventory if _text(k)},
+    }
+    if isinstance(doors, Mapping):
+        view["doors"] = dict(doors)
+    if isinstance(item_locations, Mapping):
+        view["item_locations"] = dict(item_locations)
+    if isinstance(entities, Mapping):
+        view["entities"] = {}
+        for key, record in entities.items():
+            place = getattr(record, "location_id", None)
+            if place is None and isinstance(record, Mapping):
+                place = record.get("location_id")
+            view["entities"][_text(key)] = {"location_id": _text(place)}
+    try:
+        facts = _room_facts(world, view, location_id=view["location_id"])
+    except Exception:  # noqa: BLE001 - hints are advisory
+        facts = _room_facts(None, view)
+    people = [(n, "") for n in facts["characters"]] or list(characters)
     item_names: list[str] = []
     try:
-        locations = {loc.id: loc for loc in getattr(world, "locations", []) or []}
-        # A campaign that has not taken a turn yet has no location id; the
-        # world it will start in is the only meaningful answer.
-        here = locations.get(location_id) or next(
-            iter([loc for loc in locations.values()]), None
-        )
-        if here is not None:
-            location_name = here.name
-            for exit_def in getattr(here, "exits", []) or []:
-                label = (getattr(exit_def, "label", "") or "").strip()
-                target = locations.get(exit_def.target_id)
-                if label:
-                    areas.append(label)
-                elif target is not None:
-                    areas.append(target.name)
         items_by_id = {item.id: item for item in getattr(world, "items", []) or []}
-        item_names = [
-            items_by_id[key].name for key in inventory if key in items_by_id
-        ]
-    except Exception:  # noqa: BLE001 - hints are advisory
-        location_name, areas, item_names = "", [], []
-    present = list(characters)
+        item_names = [items_by_id[key].name for key in inventory if key in items_by_id]
+    except (AttributeError, KeyError, TypeError):
+        item_names = []
     return build_suggestions(
-        location=location_name,
-        exits=areas,
-        characters=[name for name, _ in present],
-        character_ids=[entity_id for _, entity_id in present],
+        location=(facts["_here_name"] or [""])[0],
+        exits=facts["exits"],
+        doors=facts["doors"],
+        door_ids=facts["door_ids"],
+        keys=facts["keys"],
+        key_ids=facts["key_ids"],
+        here_items=facts["here_items"],
+        here_item_ids=facts["here_item_ids"],
+        characters=[name for name, _ in people],
+        character_ids=[entity_id for _, entity_id in people],
         items=item_names,
         language=language,
     )

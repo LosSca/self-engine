@@ -41,7 +41,28 @@ from app.services.action_service import ActionService
 from app.services.narrative_service import LLMNarrator, TemplateNarrator
 from app.services.text_action_service import TextActionService
 from app.services.scenario_interpolation import interpolate
-from app.services.suggestions import build_suggestions, exits_from_state, target_directive
+from app.services.suggestions import (
+    exits_from_state,
+    suggestions_for_result,
+    target_directive,
+)
+
+
+def _build_advisor():
+    """The optional intent advisor, or None when the switch is off.
+
+    Imported lazily: ``routes_engine`` imports this module, so a module-level
+    import here would be circular. Off by default (ENGINE_INTENT_ADVISOR),
+    and a router that cannot be built degrades to no advice rather than to a
+    broken turn.
+    """
+    try:
+        from app.api.routes_engine import _build_advisor as build
+
+        return build()
+    except Exception as exc:  # noqa: BLE001 - advice must never break a turn
+        logging.getLogger(__name__).info("intent advisor unavailable: %s", exc)
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +127,32 @@ _narrator = NarratorEngine(llm=_llm)
 # The store is resolved lazily on first use: the play-loop database may not
 # exist yet at import time.
 _memory = MemoryEngine(event_store=_event_store, llm=_llm)
+
+
+def _attach_memory_layers() -> None:
+    """Give the memory engine its optional fact store and NPC minds.
+
+    Both are optional by design: `MEMORY_FACTS_ENABLED=0` (or a memory.db that
+    cannot be opened) leaves the engine exactly as it was before this existed,
+    and the play loop never fails because a derived index is missing.
+    """
+    if os.environ.get("MEMORY_FACTS_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    try:
+        from app.db.memory_fact_store import MemoryFactStore, default_db_path
+
+        _memory.set_fact_store(MemoryFactStore(default_db_path()))
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.info("structured fact layer unavailable: %s", exc)
+    try:
+        from app.engines.npc_mind_engine import NpcMindEngine
+
+        _memory.set_mind_store(NpcMindEngine(llm=_llm))
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.info("NPC belief layer unavailable: %s", exc)
+
+
+_attach_memory_layers()
 _world_reactor = WorldReactor(llm=_llm)
 _combat = CombatEngine(llm=_llm)
 _plot_generator = PlotGenerator(llm=_llm)
@@ -628,7 +675,16 @@ def _unified_service(req: PlayerActionRequest):
     scenario_store = ScenarioStore(_scenario_db_path())
     game_store = GameStateStore(_game_state_db_path())
     try:
-        service = TextActionService(game_store, scenario_store=scenario_store)
+        # The optional intent advisor belongs on *this* lane: it is the only
+        # one the web client calls (frontend/src/api.js posts to
+        # /api/game/action). Without it here the switch was wired to a route
+        # the UI never used, so a sentence no rule could read was always
+        # refused even when a model was configured and reachable.
+        service = TextActionService(
+            game_store,
+            scenario_store=scenario_store,
+            advisor=_build_advisor(),
+        )
         state = game_store.get_state(req.campaign_id)
         try:
             if state is not None:
@@ -789,51 +845,21 @@ def _campaign_characters(campaign_id: str, limit: int = 8) -> list[tuple[str, st
 def _next_step_suggestions(req: PlayerActionRequest, result: dict) -> list[dict]:
     """Three advisory next steps for a rule-lane turn (never committed).
 
-    The authoritative GameState only stores location ids and an item-id ->
-    count map, so names and exits come from the world document the engine
-    resolved for this turn (result["world"]) with the campaign store as a
-    fallback. Everything is optional: an unreadable world narrows the list
-    to the generic lines rather than failing the turn.
+    Everything comes from the state the turn just committed: the room the
+    player is standing in, the exits the rules would actually let them walk,
+    the doors still shut and their keys, and the people who are *here*. The
+    whole helper used to hand the builder the authored world, so the buttons
+    described a room the player had already left and offered walks a locked
+    door would refuse. `suggestions_for_result` now owns that derivation for
+    both API lanes, so there is one answer instead of two.
     """
     payload = result if isinstance(result, dict) else {}
-    state = payload.get("state") or {}
-    if not isinstance(state, dict):
-        dump = getattr(state, "model_dump", None)
-        state = dump() if callable(dump) else {}
     world = payload.get("world")
-
-    location_id = str(state.get("location_id") or "")
-    held_ids = list(state.get("inventory") or {}) if isinstance(state.get("inventory"), dict) else []
-
-    location_name = ""
-    place_names: list[str] = []
-    item_names: list[str] = []
-    try:
-        if world is None:
-            world = _load_world_for_campaign(req.campaign_id)
-        locations = {loc.id: loc for loc in getattr(world, "locations", []) or []}
-        if location_id in locations:
-            here = locations[location_id]
-            location_name = here.name
-            for exit_def in getattr(here, "exits", []) or []:
-                target = locations.get(exit_def.target_id)
-                label = (getattr(exit_def, "label", "") or "").strip()
-                if label:
-                    place_names.append(label)
-                elif target is not None:
-                    place_names.append(target.name)
-        items_by_id = {item.id: item for item in getattr(world, "items", []) or []}
-        item_names = [items_by_id[i].name for i in held_ids if i in items_by_id]
-    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
-        logger.debug("world unavailable while building suggestions for %s: %s", req.campaign_id, exc)
-
-    present = _campaign_characters(req.campaign_id)
-    return build_suggestions(
-        location=location_name,
-        exits=place_names,
-        characters=[name for name, _ in present],
-        character_ids=[entity_id for _, entity_id in present],
-        items=item_names,
+    if world is None:
+        world = _load_world_for_campaign(req.campaign_id)
+    return suggestions_for_result(
+        {**payload, "world": world},
+        characters=_campaign_characters(req.campaign_id),
         language=req.language or "zh",
     )
 

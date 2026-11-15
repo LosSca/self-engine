@@ -2134,6 +2134,12 @@ def _current_hints(campaign_id: str) -> list[Dict[str, Any]]:
             characters=_campaign_characters(campaign_id),
             world=world,
             language=_campaign_language(campaign_id),
+            # The committed state decides which doors are still shut and where
+            # people and items actually are; the world document alone would
+            # describe the room as it was authored.
+            doors=getattr(state, "doors", None),
+            item_locations=getattr(state, "item_locations", None),
+            entities=getattr(state, "entities", None),
         )
     except Exception:  # noqa: BLE001 - hints must never break a screen
         logger.debug("hints unavailable for %s", campaign_id, exc_info=True)
