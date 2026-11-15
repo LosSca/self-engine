@@ -67,6 +67,9 @@ HEALTH_URL = "http://127.0.0.1:%d/api/health" % BACKEND_PORT
 
 CREATE_NEW_CONSOLE = 0x00000010
 
+#: 桌面壳（desktop/）：一个 Electron 载体，窗口里只有本机后端的地址。
+DESKTOP = ROOT / "desktop"
+
 LABELS = {"backend": "后端", "frontend": "前端"}
 LOG_NAMES = {"backend": "backend.log", "frontend": "frontend.log"}
 
@@ -325,12 +328,110 @@ def log_path(kind: str) -> Path:
     return Path(tempfile.mkdtemp(prefix="lunar-")) / LOG_NAMES[kind]
 
 
+def desktop_app_url() -> str:
+    return "http://127.0.0.1:%d/" % BACKEND_PORT
+
+
+def desktop_electron() -> Path | None:
+    """Electron 的可执行文件；装在 desktop/node_modules 里，不污染前端依赖。"""
+    if os.name == "nt":
+        binary = DESKTOP / "node_modules" / "electron" / "dist" / "electron.exe"
+    elif sys.platform == "darwin":
+        binary = (
+            DESKTOP
+            / "node_modules"
+            / "electron"
+            / "dist"
+            / "Electron.app"
+            / "Contents"
+            / "MacOS"
+            / "Electron"
+        )
+    else:
+        binary = DESKTOP / "node_modules" / "electron" / "dist" / "electron"
+    return binary if binary.is_file() else None
+
+
+def open_desktop_window(url: str) -> int:
+    """把已经就绪的后端地址交给桌面壳。窗口关闭即退出，服务由外面的看门狗回收。"""
+    electron = desktop_electron()
+    if electron is None:
+        say("[错误] 找不到桌面壳运行时：%s" % (DESKTOP / "node_modules" / "electron"))
+        say("       先执行  cd desktop ^&^& npm install")
+        return 1
+    env = dict(os.environ)
+    env["LUNAR_APP_URL"] = url
+    env["LUNAR_BACKEND_PORT"] = str(BACKEND_PORT)
+    say("[窗口] 打开桌面窗口: %s" % url)
+    proc = subprocess.Popen([str(electron), str(DESKTOP)], cwd=str(DESKTOP), env=env)
+    return proc.wait()
+
+
+def run_desktop(py: str, host: str, debug: bool) -> int:
+    """--app：一个进程里起后端，后端自己托管 dist，然后开窗口。
+
+    与本地开发的区别只有一个：前端不再单独起，构建产物由后端在同一个端口上
+    提供，于是窗口里只有一种来源，不存在跨端口代理与 CORS 的偶发失败。
+    """
+    if not (DIST / "index.html").is_file():
+        say("[错误] 桌面模式需要 frontend/dist：先执行  npm --prefix frontend run build")
+        return 1
+    if desktop_electron() is None:
+        say("[错误] 桌面壳还没安装：先执行  cd desktop ^&^& npm install")
+        return 1
+    if port_open(BACKEND_PORT) and not http_ok(HEALTH_URL):
+        say("[错误] 端口 %d 已被其他进程占用，但它不是本项目的后端。" % BACKEND_PORT)
+        return 1
+
+    our_backend = http_ok(HEALTH_URL)
+    child = None
+    if our_backend:
+        say("[1/2] 后端已在运行: %s" % HEALTH_URL)
+    else:
+        say("[1/2] 启动后端并托管界面: %s" % HEALTH_URL)
+        child = spawn_service(
+            "backend",
+            py,
+            host,
+            False,
+            debug,
+            True,
+            extra_env={"SELF_ENGINE_DESKTOP_DIST": str(DIST)},
+        )
+    try:
+        if child is not None and not wait_until(lambda: http_ok(HEALTH_URL), 120):
+            print_failure_help("后端", "backend", show_log=True)
+            return 1
+        say("[2/2] 打开窗口")
+        say()
+        say("关闭窗口即停止服务。")
+        return open_desktop_window(desktop_app_url())
+    finally:
+        if child is not None:
+            stop_children([child])
+            say()
+            say("已停止。")
+
+
 def spawn_service(
-    kind: str, py: str, host: str, prod: bool, debug: bool, no_window: bool, port: int | None = None
+    kind: str,
+    py: str,
+    host: str,
+    prod: bool,
+    debug: bool,
+    no_window: bool,
+    port: int | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.Popen:
-    """启动一个服务进程。默认开独立窗口（关闭窗口即停止该服务），--no-window 时写日志。"""
+    """启动一个服务进程。默认开独立窗口（关闭窗口即停止该服务），--no-window 时写日志。
+
+    extra_env 只给这一个子进程加变量（桌面壳用它把 dist 挂进后端），不污染
+    其它服务，也不写进用户的 .env。
+    """
     label = LABELS[kind]
     env = child_env(debug)
+    if extra_env:
+        env.update(extra_env)
     if no_window:
         cmd, cwd = service_command(kind, py, host, prod, debug, port)
         path = log_path(kind)
@@ -552,6 +653,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run-frontend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--app",
+        action="store_true",
+        help="桌面壳模式：只起后端，并让它直接托管 frontend/dist，随后打开独立窗口。",
+    )
+    parser.add_argument(
+        "--open-app",
+        metavar="地址",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
 
     # --mobile 只是 --host 0.0.0.0 的别名；显式给了 --host 时以 --host 为准。
@@ -565,6 +677,10 @@ def main(argv: list[str] | None = None) -> int:
     # 图谱库小工具：只转交，不拉起任何服务。
     if args.neo4j:
         return run_neo4j_tool(args.neo4j)
+
+    # 桌面壳的第二步：服务已经就绪，这里只负责把窗口开出来。
+    if args.open_app:
+        return open_desktop_window(args.open_app)
 
     # 内部模式：本进程就是这个服务（由窗口模式自我重启产生）。
     if args.run_backend:
@@ -583,6 +699,9 @@ def main(argv: list[str] | None = None) -> int:
     say("[环境] 前端目录: %s" % FRONTEND)
     say("[环境] 模式: %s" % ("预览构建产物" if args.prod else "开发服务器"))
     say("[环境] 绑定地址: %s" % host)
+
+    if args.app:
+        return run_desktop(py, host, args.debug)
 
     want_backend = not args.frontend_only
     want_frontend = not args.backend_only

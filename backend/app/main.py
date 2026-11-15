@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,7 @@ from app.api.routes_game import router as game_router, _llm, apply_model_policy
 from app.api.routes_engine import router as engine_router
 from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
+from app.api.routes_memory import router as memory_router
 from app.api.routes_works import router as works_router
 from app.engines.llm_router import POLICY_CHOICES, LLMProvider, custom_route_available
 
@@ -59,6 +60,7 @@ app.include_router(game_router, prefix="/api/game", tags=["game"])
 app.include_router(engine_router, prefix="/api/v1", tags=["engine"])
 app.include_router(characters_router, prefix="/api", tags=["characters"])
 app.include_router(knowledge_router, prefix="/api/v1", tags=["knowledge"])
+app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(works_router, prefix="/api/v1", tags=["works"])
 
 
@@ -424,3 +426,38 @@ async def test_provider(provider: str, req: ProviderTestRequest | None = None):
         return {"status": "ok", "reply": text[:120]}
     except Exception as exc:  # noqa: BLE001 - the message is the whole point
         return {"status": "error", "error": str(exc)[:400]}
+
+# ---------------------------------------------------------------------------
+# Desktop shell
+#
+# The packaged app ships the built frontend inside the same server that answers
+# /api, so the window loads one origin (http://127.0.0.1:PORT/) and there is no
+# CORS, no second port and no proxy rule to keep in sync. The mount is opt-in:
+# a normal launch.py run keeps the dev split and never serves a stale dist.
+#
+# It is appended last on purpose - StaticFiles at "/" would otherwise swallow
+# every route registered after it.
+# ---------------------------------------------------------------------------
+def _desktop_dist():
+    raw = os.environ.get("SELF_ENGINE_DESKTOP_DIST", "").strip()
+    if not raw:
+        return None
+    index = Path(raw).expanduser().resolve() / "index.html"
+    return index.parent if index.is_file() else None
+
+
+_desktop_root = _desktop_dist()
+_desktop_container = _desktop_root.parent if _desktop_root is not None else None
+if _desktop_root is not None:
+    # A client-side route ("/studio") is not a file. StaticFiles would answer
+    # 404 and the window would show the error page instead of the app, so the
+    # catch-all serves index.html for any GET that is not an asset. /api and
+    # /media are registered above and therefore still win.
+    @app.get("/{path:path}", include_in_schema=False)
+    async def desktop_shell(path: str):
+        candidate = (_desktop_root / path).resolve()
+        # Only files that really sit under the shipped folder: ".." tricks in a
+        # URL must not read the disk.
+        if path and candidate.is_file() and _desktop_container in candidate.parents:
+            return FileResponse(str(candidate))
+        return FileResponse(str(_desktop_root / "index.html"))
