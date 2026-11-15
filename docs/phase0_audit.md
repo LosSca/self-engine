@@ -71,7 +71,7 @@
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
 cd ../frontend && node scripts/check-agent-wiring.mjs
 ```
 

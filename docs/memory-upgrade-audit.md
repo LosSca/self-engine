@@ -312,15 +312,15 @@ Windows 上 `Path.mkdir(mode=0o700)` 会写出一个只授权"创建者主体"�
 
 ```python
 from pathlib import Path
-a = Path(r"E:/se/z1")
+a = Path(r"<scratch>/z1")
 a.mkdir(mode=0o700, exist_ok=True)   # ok
-(a / "z2").mkdir()                    # PermissionError [WinError 5] E:/se/z1/z2
-list(a.iterdir())                     # PermissionError [WinError 5] E:/se/z1
+(a / "z2").mkdir()                    # PermissionError [WinError 5] <scratch>/z1/z2
+list(a.iterdir())                     # PermissionError [WinError 5] <scratch>/z1
 ```
 
 ### 10.3 解决方案（仓库外，不进版本库）
 
-新建 `E:/se/_dsh_shim/dsh_pytest_shim.py`，通过 `PYTHONPATH` + `-p dsh_pytest_shim` 加载，做三件事：
+新建 `<scratch>/_dsh_shim/dsh_pytest_shim.py`，通过 `PYTHONPATH` + `-p dsh_pytest_shim` 加载，做三件事：
 
 1. 把 `os.mkdir` 与 `pathlib` 各 `Path.mkdir` 的 mode 强制成 `0o777`；
 2. 在 pytest 之前预建 `<tempdir>/pytest-of-<user>`；

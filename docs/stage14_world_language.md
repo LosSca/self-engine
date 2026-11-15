@@ -64,7 +64,7 @@ You arrive at Forest Edge.
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
   tests/services/test_narrative_service.py tests/api/test_acceptance_story.py
 ```
 

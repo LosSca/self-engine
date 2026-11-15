@@ -52,7 +52,7 @@ dropping it would be a worse failure than labelling it.
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/engines/test_memory_provenance.py
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/engines/test_memory_provenance.py
 ```
 
 A witnessed crystal records source, observer, entities and confidence; the label

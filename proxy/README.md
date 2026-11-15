@@ -34,27 +34,27 @@ cd proxy/cliproxyapi
 
 ```
 ANTHROPIC_PROXY_URL=http://127.0.0.1:8318
-ANTHROPIC_PROXY_KEY=lunar-proxy-key
+ANTHROPIC_PROXY_KEY=$PROXY_KEY
 OPENAI_PROXY_URL=http://127.0.0.1:8318/v1
-OPENAI_PROXY_KEY=lunar-proxy-key
+OPENAI_PROXY_KEY=$PROXY_KEY
 ```
 
 ### Verify
 
 ```bash
 # List models
-curl -s http://127.0.0.1:8318/v1/models -H "Authorization: Bearer lunar-proxy-key" | python -m json.tool
+curl -s http://127.0.0.1:8318/v1/models -H "Authorization: Bearer $PROXY_KEY" | python -m json.tool
 
 # Test Sonnet 4.6
 curl -s -X POST http://127.0.0.1:8318/v1/messages \
-  -H "Authorization: Bearer lunar-proxy-key" \
+  -H "Authorization: Bearer $PROXY_KEY" \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model":"claude-sonnet-4-6","max_tokens":50,"messages":[{"role":"user","content":"Say hi"}]}'
 
 # Test GPT-5.6 Sol
 curl -s -X POST http://127.0.0.1:8318/v1/chat/completions \
-  -H "Authorization: Bearer lunar-proxy-key" \
+  -H "Authorization: Bearer $PROXY_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5.6-sol","max_tokens":50,"messages":[{"role":"user","content":"Say hi"}]}'
 ```
@@ -63,5 +63,5 @@ curl -s -X POST http://127.0.0.1:8318/v1/chat/completions \
 
 - The backend's `LLMRouter` falls back to non-streaming when using the proxy (CLIProxyAPI streaming adds extra fields that confuse litellm's SSE parser). Text arrives as a single chunk instead of token-by-token.
 - Auth credentials are saved in `~/.cli-proxy-api/`. Token auto-refreshes every 15 minutes.
-- The API key (`lunar-proxy-key` in the examples) is whatever you put in `config.yaml`; it must match `ANTHROPIC_PROXY_KEY` / `OPENAI_PROXY_KEY` in `.env`.
+- The API key (`$PROXY_KEY` in the examples) is whatever you put in `config.yaml`; it must match `ANTHROPIC_PROXY_KEY` / `OPENAI_PROXY_KEY` in `.env`. `config.yaml` ships a placeholder, not a working key — put your own random string there (`openssl rand -hex 24`) and export it as `PROXY_KEY` before running the commands above.
 - An existing CLIProxyAPI instance may use a different local port and key through the untracked `.env`.

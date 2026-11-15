@@ -40,12 +40,12 @@ NInfer (ninfer-serve-89.exe, RTX 4070 SUPER 12GB)
 ## 3. 启动 NInfer
 
 ```powershell
-E:\ninfer\start-local.ps1      # 后台启动，日志在 E:\ninfer\logs
+<local-model-dir>\start-local.ps1      # 后台启动，日志在 <local-model-dir>\logs
 Invoke-RestMethod http://127.0.0.1:8094/health
 ```
 
 服务参数：`--host 127.0.0.1 --port 8094 --model-id qwen3.8-27b`，API key 取
-`E:\ninfer\api-key.txt` 首行。显卡 12GB，只支持文本；不要开
+`<local-model-dir>\api-key.txt` 首行。显卡 12GB，只支持文本；不要开
 `--structured-output`（当前版本会崩溃）。
 
 ## 4. 使用方式
@@ -71,7 +71,7 @@ Invoke-RestMethod http://127.0.0.1:8094/health
 改用低显存启动器，模型相同，只是设备预算更小：
 
 ```powershell
-E:\ninfer\start-local-lowvram.bat   # kv-capacity 24576 / 窗口 24576 + 检索 8192
+<local-model-dir>\start-local-lowvram.bat   # kv-capacity 24576 / 窗口 24576 + 检索 8192
 ```
 
 有效上下文从 49152 降到 32768——叙事提示词只有几百 token，实际不受影响。
@@ -101,7 +101,7 @@ reachable / available_models / detail`。它只读 `/v1/models`，不会触发�
 ## 5. 验证
 
 ```powershell
-cd E:\shujia\backend
+cd <repo>/backend
 .\.venv\Scripts\python.exe scripts\check_local_model.py
 .\.venv\Scripts\python.exe -m pytest tests/engines/test_llm_router_local.py tests/api/test_local_model_status.py -q
 ```
@@ -117,7 +117,7 @@ cd E:\shujia\backend
 
 | 现象 | 处理 |
 | --- | --- |
-| `LOCAL_LLM_API_KEY is not configured` | 把 `E:\ninfer\api-key.txt` 首行写进 `.env` 的 `LOCAL_LLM_API_KEY`，重启后端 |
+| `LOCAL_LLM_API_KEY is not configured` | 把 `<local-model-dir>\api-key.txt` 首行写进 `.env` 的 `LOCAL_LLM_API_KEY`，重启后端 |
 | `reachable: false` + 连接失败 | 先 `start-local.ps1`，再 `GET /health`；模型加载需要时间 |
 | 叙事超时 | `LLMNarrator` 默认 30s 超时，返回 `narrative.failed`，状态已提交；可改回 `ENGINE_NARRATOR=template` |
 | 服务停止后游戏卡住 | 旧 `/api/game` 流式接口会失败；v1 行动接口在 `ENGINE_NARRATOR=template` 下完全不需要 LLM |

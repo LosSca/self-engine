@@ -48,7 +48,7 @@
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest tests/services/test_narrative_diagnostics.py tests/api/test_narrative_diagnostics_api.py -q -p no:cacheprovider
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest tests/services/test_narrative_diagnostics.py tests/api/test_narrative_diagnostics_api.py -q -p no:cacheprovider
 ```
 
 手动验证：跑一个真实回合后 `GET /api/v1/campaigns/{id}/events`，看 `narrator.response` 里 `diagnostics.provider/model/content_policy/blocks`。

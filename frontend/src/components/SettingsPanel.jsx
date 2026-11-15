@@ -112,7 +112,6 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
   const [customModel, setCustomModel] = useState(llmModel || '')
-  const [customReady, setCustomReady] = useState(false)
   const [modelError, setModelError] = useState('')
   const [theme, setTheme] = useState(currentTheme())
   const [apiToken, setApiToken] = useState(() => readApiToken())
@@ -164,7 +163,6 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
     fetchContentPolicy()
       .then((data) => {
         if (!alive) return
-        setCustomReady(!!data?.custom_route_available)
         if (data?.custom_route_available) {
           if (data.custom_model) setCustomModel(data.custom_model)
           const current = useGameStore.getState().llmProvider

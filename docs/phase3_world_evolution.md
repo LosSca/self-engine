@@ -119,7 +119,7 @@ store that cannot be read should not turn a timeskip into a 500.
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/api/test_routes_evolution.py
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/api/test_routes_evolution.py
 ```
 
 Ten cases: dry run, commit, redeclaration refused, rumour never canonical,

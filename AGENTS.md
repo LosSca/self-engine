@@ -14,7 +14,7 @@ fatal: could not open '<repo>/.git/COMMIT_EDITMSG': Permission denied
 ```js
 const { execFileSync } = await import('node:child_process');
 const git = (args, env) => execFileSync('git', args, {
-  cwd: 'E:\\se\\self-engine',
+  cwd: process.cwd(),
   env: Object.assign({}, process.env, env || {}),
   encoding: 'utf-8',
   maxBuffer: 64 * 1024 * 1024,

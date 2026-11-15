@@ -89,7 +89,7 @@ so inspecting a database never rewrites it.
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
 ```
 
 Then, with the server running, `GET /api/v1/agents` shows each role and whether

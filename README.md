@@ -36,10 +36,11 @@
 - 当前版本：**0.5.0**（`backend/app/main.py`、`frontend/package.json`、`desktop/src-tauri/tauri.conf.json` 一致）
 - 运行时：Python 3.10+ / FastAPI 后端，React 19 + Vite 7 + Tailwind 3 前端，SQLite 存储
 - 语言：界面与内容中文优先；**叙事语言跟随世界文档的 `language` 字段**，未声明时为英文
-- 规模：**123 条 API 路径**（159 个操作）。其中 `/api/v1` 规则链路 73 条，旧聊天链路 `/api/game` 24 条，
-  情景与作者工具 `/api/scenarios` 12 条，角色库 `/api/characters` 6 条，供应商 `/api/providers` 3 条，
-  健康检查 2 条，全局设置 `/api/settings`、偏好 `/api/prefs`、战役角色 `/api/campaigns` 各 1 条
-- 代码：后端 77 个 Python 模块、127 个测试文件；前端 29 个组件，全部按路由懒加载
+- 规模：**130 条 API 路径**（166 个操作）。其中 `/api/v1` 规则链路 73 条，旧聊天链路 `/api/game` 24 条，
+  情景与作者工具 `/api/scenarios` 12 条，记忆 `/api/memory` 7 条，角色库 `/api/characters` 6 条，
+  供应商 `/api/providers` 3 条，健康检查 2 条，全局设置 `/api/settings`、偏好 `/api/prefs`、
+  战役角色 `/api/campaigns` 各 1 条
+- 代码：后端 112 个 Python 模块、162 个测试文件；前端 29 个组件，全部按路由懒加载
 - 模型：**不配置任何密钥也能完整游玩**——确定性叙事器按世界语言产出文本
 
 ### 一句话能做的事
@@ -64,9 +65,9 @@
 |------|------|
 | `backend/app/engines/` | 规则与引擎层：行动目录、规则判定、事件与效果、任务、剧情、战斗、记忆、NPC 心智 |
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口；另有解析、知识、叙事、世界编辑、AI 生成、作品库、草稿与联网取材 |
-| `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
+| `backend/app/api/` | 七个路由模块（引擎 / 知识 / 记忆 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 六个存储模块：情景、权威状态、事件、调用追踪、偏好、供应商凭据（后两者与情景库同库） |
-| `backend/tests/` | pytest **2039 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest（数量见「测试与质量」，由 CI 守护），验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、侧边栏与工具坞、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记、交付审查与 `docs/review-2026-11-15.md` 全量审查 |
 
@@ -715,7 +716,7 @@ self-engine/
 │   │   ├── db/                  # scenario_store / game_state_store / event_store /
 │   │   │                        # trace_store / prefs_store / credential_store
 │   │   │                        # （prefs 与 credentials 复用 scenarios.db 连接）
-│   │   ├── engines/             # 规则与引擎层（24 个模块）
+│   │   ├── engines/             # 规则与引擎层（30 个模块）
 │   │   ├── models/              # game.py / knowledge.py / work.py
 │   │   ├── services/            # 编排与服务层（action_service 是唯一写入口）
 │   │   └── utils/
@@ -731,11 +732,11 @@ self-engine/
 │       └── lib/                 # interpolate / theme / scenarioTypes
 ```
 
-**engines/**（24 个模块）：`action_registry`（行动目录）、`rules_engine`（纯函数判定）、
+**engines/**（30 个模块）：`action_registry`（行动目录）、`rules_engine`（纯函数判定）、
 `event_engine`（事件与效果注册表）、`quest_engine`、`story_engine`、`combat_engine`、
 `journal_engine`、`narrator_engine`、`memory_engine`、`npc_mind_engine`、`plot_generator`、
 `world_reactor`、`inventory_engine`、`item_proposals`、`opening_generator`、`llm_router`、
-`graph_engine`、`graphiti_engine`、`auditor_engine`。
+`graph_engine`、`graphiti_engine`、`auditor_engine`、`memory_consolidation` 等（完整清单见目录）。
 
 **agent 层**（阶段 1–5）：`agent_router`（按角色路由模型，`AGENTS_<ROLE>_*` 决定用哪个，代码里没有一个模型名）、
 `system_agent`（先确定性分类，只有长断言才问模型）、`npc_dossier`（NPC 是每回合按数据拼出来的档案）、
@@ -755,7 +756,7 @@ self-engine/
 
 ## API 概览
 
-全部接口挂在 `/api` 下，共 **123 条路径 / 159 个操作**；设置 `API_TOKEN` 后除健康检查外都要求
+全部接口挂在 `/api` 下，共 **130 条路径 / 166 个操作**；设置 `API_TOKEN` 后除健康检查外都要求
 `Authorization: Bearer <token>` 或 `X-API-Token`。完整清单与请求/响应结构见 <http://127.0.0.1:8000/docs>，
 `/api/v1` 的每条路由都有类型化响应模型，并由 `backend/tests/api/test_routes_contracts.py` 守住。
 
@@ -764,16 +765,21 @@ self-engine/
 | `/api/v1` | 73 | 规则链路、知识、预设、AI 生成、作品库、世界编辑 |
 | `/api/game` | 24 | 旧聊天链路（流式 SSE） |
 | `/api/scenarios` | 12 | 情景、战役、故事卡、作者草稿、联网取材 |
+| `/api/memory` | 7 | 结构化事实、混合检索、NPC 视角 |
 | `/api/characters` | 6 | 角色卡与外观 |
 | `/api/providers` | 3 | 供应商密钥的写入 / 删除 / 连通性测试 |
 | `/api/health` | 2 | 存活探针与 Neo4j 连通性 |
 | `/api/settings`、`/api/prefs`、`/api/campaigns` | 各 1 | 全局设置、跨设备偏好、战役角色 |
 
+> 上表由 `app.openapi()` 实测得出（`130` 条路径 / `166` 个操作）；
+> `/api/v1` 是 `routes_engine`、`routes_knowledge`、`routes_works` 三个模块叠加的前缀，
+> 所以按模块数并不等于按前缀数。
+
 ### 规则链路 `/api/v1`（确定性游玩）
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| GET | `/action-types` | 内置行动目录（16 个行动，含中文动词） |
+| GET | `/action-types` | 内置行动目录（22 个行动，含中文动词） |
 | POST | `/campaigns/{id}/world` | 为战役绑定世界 |
 | POST | `/campaigns/{id}/actions` | 提交结构化行动（唯一写入口） |
 | POST | `/campaigns/{id}/actions/preview` | 干运行：只看判定，不写状态 |
@@ -910,12 +916,13 @@ cd frontend && npx eslint src && npm run build
 > `TEMP` / `TMP` 必须设置：pytest 默认临时目录在部分 Windows 环境下不可写；
 > `-p no:cacheprovider` 同理，避免 `.pytest_cache` 写入失败。
 
-- 最近一次全量：**2039 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），约 **60 秒**。
-  前端模块 **2984** 个，构建约 2.5 秒；eslint 0 error（12 条既有的 `react-hooks/exhaustive-deps` 警告）。
+- 最近一次全量：**2069 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），热缓存约 **90 秒**、冷启动约 **250 秒**。
+  前端模块 **2984** 个，构建约 2.8 秒；eslint **0 error**（13 条既有的 `react-hooks/exhaustive-deps` 警告）。
+  `.github/workflows/` 里两条 CI（backend pytest / frontend lint+build）会守住这两个数字。
 - 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 个用例），覆盖 14 条验收：
   建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/
   叙事失败不回滚/非法事件配置/模拟只读/中文世界读中文。
-- 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层（127 个测试文件），
+- 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层（162 个测试文件），
   包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放、内容策略与本地回退、
   角色路由与降级、NPC 档案的知识隔离、演化提案的「未写入不叫已采纳」、游戏时钟暂停即冻结等。
 - 架构场景跑成测试：`backend/tests/services/test_architecture_acceptance.py`（10 个用例）——
@@ -926,9 +933,9 @@ cd frontend && npx eslint src && npm run build
 - 前端构建先执行 `frontend/scripts/check-hook-order.mjs`，防止 `useCallback` 未声明就进依赖数组；
   构建完再跑 `scripts/fix-fragment-calls.mjs`；页面全部懒加载，产物在 `frontend/dist`。
 - 数据层：`scenarios.db`（情景、知识、剧情线、预设、角色、偏好、供应商密钥）、`game_state.db`、
-  `events.db`、`traces.db`，前三者的 `SCHEMA_VERSION` 为 **13 / 4 / 2**（`traces.db` 无版本表），
-  打开旧库时按版本增量迁移；路径分别可用 `SCENARIO_DB_PATH` / `GAME_STATE_DB_PATH` /
-  `EVENT_DB_PATH` / `LLM_TRACE_DB_PATH` 覆盖。
+  `events.db`、`memory.db`、`traces.db`。前四个的 `SCHEMA_VERSION` 为 **13 / 5 / 2 / 1**（`traces.db`
+  无版本表），打开旧库时按版本增量迁移；路径分别可用 `SCENARIO_DB_PATH` / `GAME_STATE_DB_PATH` /
+  `EVENT_DB_PATH` / `MEMORY_DB_PATH` / `LLM_TRACE_DB_PATH` 覆盖。
 
 ---
 

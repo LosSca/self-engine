@@ -79,7 +79,7 @@ backend/tests/engines/test_narrator_stream_policy.py  6 项：流式哨兵不转
 
 ## 本地验证
 
-1. 起本地模型（`E:\ninfer\start-local.ps1`），`.env` 配 `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_API_KEY`。
+1. 起本地模型（`<local-model-dir>\start-local.ps1`），`.env` 配 `LOCAL_LLM_BASE_URL` / `LOCAL_LLM_API_KEY`。
 2. `GET /api/settings` 应看到 `local_route_available: true`。
 3. `POST /api/settings {"content_policy":"nsfw"}` 后再开一局，日志里模型名应为 `openai/<本地模型>`。
 4. 关掉本地服务再发一次：日志出现 `LLM policy route failed ... falling back to the primary provider`，

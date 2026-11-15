@@ -78,7 +78,7 @@
 **没有过 `vite build`**（见第五节第 1 条）。
 ## 五、仍然存在的问题
 
-1. **前端从未经过 `vite build`**。沙箱里 DSH 预览钩子让 `vite.config.js` 报 `Cannot find module E:\shujia\.dsh-tmp\config-module.mjs`，只能用 esbuild 逐文件语法检查。前端功能没有在真实浏览器里被自动化验证过。
+1. **前端从未经过 `vite build`**。沙箱里 DSH 预览钩子让 `vite.config.js` 报 `Cannot find module <sandbox>/.dsh-tmp/config-module.mjs`，只能用 esbuild 逐文件语法检查。前端功能没有在真实浏览器里被自动化验证过。
 2. **旧 LLM 文本标记通道尚未删除**：`backend/app/services/game_session.py:64` 的 `_legacy_item_tags_enabled()` 与 `frontend/src/api.js` 的剥标记逻辑仍在，默认不写权威状态。
 3. **`routes_game.py` / `routes_scenarios.py` 仍返回 `Dict[str, Any]`**；`/api/v1` 已全部类型化并有契约测试。
 4. **③ 故事线、⑦ 联网**：见第二节。
@@ -90,14 +90,14 @@
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
 ```
 
 只跑验收走查与本次新增：
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
   tests/api/test_acceptance_story.py tests/api/test_routes_authoring.py \
   tests/services/test_authoring_session.py tests/api/test_routes_planner.py \
   tests/services/test_interaction_planner.py tests/api/test_routes_knowledge_extract.py

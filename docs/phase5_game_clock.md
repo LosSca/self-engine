@@ -70,7 +70,7 @@ the clock label, the phase and whether it is frozen:
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/engines/test_game_clock.py tests/services/test_game_clock_pause.py
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/engines/test_game_clock.py tests/services/test_game_clock_pause.py
 ```
 
 They cover midnight rollover, paused clocks never moving, old saves reading as

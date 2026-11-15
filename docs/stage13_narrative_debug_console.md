@@ -65,7 +65,7 @@
 
 - 相关套件 17 → 22 项全过；契约测试 8 项全过。
 - 全量后端：**1447 passed, 8 skipped**（128.76s）。
-- 前端：本沙箱 `vite build` 不可用（`Cannot find module E:\shujia\.dsh-tmp\config-module.mjs`），用 esbuild 逐文件语法检查 api.js / store.js / App.jsx / GameCanvas.jsx / DevtoolsPanel.jsx / WorldStudio.jsx 全过，检查脚本已删除。**前端仍未经过真实构建。**
+- 前端：本沙箱 `vite build` 不可用（`Cannot find module <sandbox>/.dsh-tmp/config-module.mjs`），用 esbuild 逐文件语法检查 api.js / store.js / App.jsx / GameCanvas.jsx / DevtoolsPanel.jsx / WorldStudio.jsx 全过，检查脚本已删除。**前端仍未经过真实构建。**
 
 ## 6. 仍未完成
 
@@ -78,7 +78,7 @@
 
 ```bash
 cd backend
-TEMP='E:/shujia/.tmp' TMP='E:/shujia/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
+TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
   tests/services/test_narrative_diagnostics.py tests/api/test_narrative_diagnostics_api.py \
   tests/api/test_routes_contracts.py
 ```

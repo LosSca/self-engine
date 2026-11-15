@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     openai_proxy_key: str = "proxy"
     # Local OpenAI-compatible inference server (NInfer and friends). Selecting
     # provider "local" sends chat completions to this base URL instead of a cloud
-    # provider; the NInfer defaults below match the local RTX 4070 SUPER launch
-    # (E:\ninfer\start-local.ps1: --host 127.0.0.1 --port 8094 --model-id qwen3.8-27b).
+    # provider. The defaults are only a starting point: point LOCAL_LLM_BASE_URL
+    # at whatever serves the model on your box (see docs/local_model_ninfer.md).
     local_llm_base_url: str = "http://127.0.0.1:8094/v1"
     local_llm_model: str = "qwen3.8-27b"
     local_llm_api_key: str = ""

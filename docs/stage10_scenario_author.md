@@ -90,7 +90,7 @@ pytest tests/services/test_scenario_author.py tests/api/test_routes_scenario_aut
 
 - 未做真正的联网检索：「一句话」只靠提示词，不查外部资料。理由见 `docs/stage9_world_crossover.md`：本环境外网受限，且模型对具体作品的记忆不稳定；策展数据可测。
 - 生成结果不能直接一键开新战役 —— 先保存剧本，再走已有的创建战役流程。
-- 前端在本沙箱无法执行 `vite build`（`Cannot find module E:\shujia\.dsh-tmp\config-module.mjs`），只做了 esbuild 语法检查。
+- 前端在本沙箱无法执行 `vite build`（`Cannot find module <sandbox>/.dsh-tmp/config-module.mjs`），只做了 esbuild 语法检查。
 
 ## 本地验证
 

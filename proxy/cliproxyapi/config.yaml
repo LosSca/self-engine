@@ -1,8 +1,17 @@
+# 本地 CLIProxyAPI 的运行配置。**这个文件在仓库里，所以里面不能有真 key。**
+#
+# api-keys 是从本文件读的：把它换成你自己的随机串，再让 .env 的
+# ANTHROPIC_PROXY_KEY / OPENAI_PROXY_KEY 指向同一个值。留空表示不校验，
+# 那就只在你确定只有本机能访问时用。
+#
+# 完整的可选字段见同目录的 config.example.yaml。
 host: "127.0.0.1"
 port: 8318
 
 api-keys:
-  - "lunar-proxy-key"
+  # 改成你自己的串，例如 "openssl rand -hex 24" 的输出。
+  # 不要用这里原来的示例值：它写在公开仓库里，等于没有口令。
+  - "replace-with-your-own-random-key"
 
 debug: false
 
