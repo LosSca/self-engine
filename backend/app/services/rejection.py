@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, List, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -23,6 +24,17 @@ _NOTE_ZH = {
     "no_target": "没找到要针对的目标",
     "unparsed_action": "",
 }
+
+
+def _is_envelope_only(text: str) -> bool:
+    """True when the player sent nothing but a talk-type tag ("[CONTINUE]").
+
+    Such a tag is an instruction to the narrator, not an utterance the parser
+    can read, so echoing it back ("「[CONTINUE]」这句话…") only repeats the
+    machine syntax at the player. The message drops the echo instead.
+    """
+    stripped = (text or "").strip()
+    return bool(re.fullmatch(r"\[[A-Z]+\]", stripped, re.IGNORECASE))
 
 
 def _note_line(code: str, detail: str, chinese: bool) -> str:
@@ -93,7 +105,7 @@ def rejection_message(
     """一句可读的说明：没听懂 + 现场能做的一两件事。"""
     chinese = (getattr(world, "language", "") or "").lower().startswith("zh")
     stripped = (text or "").strip()
-    echo = stripped.splitlines()[0][:40] if stripped else ""
+    echo = "" if _is_envelope_only(stripped) else (stripped.splitlines()[0][:40] if stripped else "")
     options = available_actions(world, state, chinese=chinese)
     explained = _note_line(code, note, chinese)
     if chinese:

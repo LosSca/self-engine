@@ -904,7 +904,12 @@ export default function GameCanvas() {
           </div>
           <div className="flex items-end max-w-4xl mx-auto w-full">
             <div className="flex-1">
-              <ActionInput onSubmit={handleAction} disabled={isStreaming} draft={draft} />
+              <ActionInput
+                onSubmit={handleAction}
+                disabled={isStreaming}
+                draft={draft}
+                rulesLane={engineLane.checked && engineLane.bound}
+              />
             </div>
             <div className="pb-4 pr-4 md:pr-6">
               <button

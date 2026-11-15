@@ -48,6 +48,52 @@ def _abs_minute(state: GameState) -> int:
     return Clock.from_state(state).abs_minute
 
 
+def record_minds(event_store: Any, campaign_id: str, world: WorldDefinition, state: GameState) -> int:
+    """Write down what each NPC is doing, as an `NPC_THOUGHT` event.
+
+    The NPC panel reads that event type, and the legacy session was the only
+    writer: a rules-lane campaign showed an empty panel with a working button.
+    What is recorded is behaviour the utility function already decided - no
+    second personality model, and no writer besides the event stream.
+    """
+    if event_store is None:
+        return 0
+    from app.db.event_store import EventType
+
+    written = 0
+    for entity in getattr(world, "entities", []) or []:
+        if not getattr(entity, "schedule", None):
+            continue
+        record = state.entities.get(entity.id)
+        here = entity_location(state, world, entity.id)
+        activity = str(getattr(record, "activity", "") or "").strip()
+        needs = dict(getattr(record, "needs", {}) or {})
+        if not activity and not needs and not here:
+            continue
+        event_store.append(
+            campaign_id,
+            EventType.NPC_THOUGHT,
+            {
+                "name": entity.name,
+                "npc_id": entity.id,
+                "thoughts": {
+                    "activity": activity or "idle",
+                    "where": here,
+                    "needs": {key: round(float(value), 3) for key, value in needs.items()},
+                },
+                "turn": int(getattr(state, "turn", 0) or 0),
+            },
+            narrative_time_delta=0,
+            location=here,
+            entities=[entity.id],
+            # The panel shows a person's own state; it is not a rumour about
+            # somebody else, so the NPC itself is the witness.
+            witnessed_by=[entity.name],
+        )
+        written += 1
+    return written
+
+
 #: Marker for "the place, not a person". Handled by the caller, never sent to
 #: the rules engine: the engine validates real targets.
 _PLACE = "__here__"

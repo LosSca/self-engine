@@ -159,3 +159,26 @@ def test_the_routine_handler_repairs_a_need_without_writing_elsewhere(store, sta
     # The handler works on the copy the scheduler already owns: it commits
     # nothing by itself, exactly like every other tick handler.
     assert store.get_state("c1").version == snapshot.version
+
+
+def test_a_round_leaves_a_mind_the_panel_can_read(tmp_path):
+    """The NPC panel reads NPC_THOUGHT events; this lane used to write none."""
+    from app.db.event_store import EventStore, EventType
+
+    world = _world()
+    game_store = GameStateStore(str(tmp_path / "state.db"))
+    save_world(game_store, world)
+    state = bind_world(game_store, "c1", "town", reset=True)
+    events = EventStore(str(tmp_path / "events.db"))
+    try:
+        assert npc_turns.record_minds(events, "c1", world, state) == 1
+        rows = events.get_by_type("c1", EventType.NPC_THOUGHT)
+        assert len(rows) == 1
+        payload = rows[0].payload
+        assert payload["name"] == "Smith"
+        assert payload["thoughts"]["where"] == "square"
+        # Recording is not a second write path: the state itself is untouched.
+        assert game_store.get_state("c1").version == state.version
+    finally:
+        events.close()
+        game_store.close()

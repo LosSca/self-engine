@@ -55,6 +55,8 @@ async def test_the_text_lane_returns_the_hint_as_the_message(service):
     assert result["status"] == "rejected"
     message = result["result"]["message"]
     # 以前这里是 "无法理解这条行动：…"，玩家读完仍不知道该做什么。
-    assert "[CONTINUE]" in message
     assert "Try:" in message or "可以试试" in message
     assert "unparsed" not in message
+    # 但机器标签不再回显：玩家没打字，把那串 [CONTINUE] 念回去只会像是系统在
+    # 自言自语。整句就是标签时，回声是空的。
+    assert "[CONTINUE]" not in message

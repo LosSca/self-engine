@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -307,3 +308,40 @@ def _service(client):
     from app.api.routes_engine import _service as make_service
 
     return make_service()
+
+
+def test_the_panel_shows_what_the_town_is_doing(client):
+    """The NPC mind panel used to be empty in this lane: nobody wrote minds."""
+    from app.api import routes_game
+
+    # The legacy panel reads the process-wide event store, which is bound to
+    # whatever EVENT_DB_PATH existed when the API first imported. Point it at
+    # this test's own database so the assertion is about the panel, not about
+    # which file happened to import first.
+    from app.db.event_store import EventStore
+
+    routes_game._event_store = EventStore(os.environ["EVENT_DB_PATH"])
+    _bind(client)
+    assert client.get("/api/game/camp-town/npc-minds").json() == []
+
+    _act(client, "r1", "wait", params={"minutes": 60})
+
+    minds = client.get("/api/game/camp-town/npc-minds").json()
+    names = {row["name"] for row in minds}
+    assert "Smith Dorn" in names
+    # A mind is a record of the state the rules lane produced, not a guess.
+    first = next(row for row in minds if row["name"] == "Smith Dorn")
+    assert first["thoughts"]["activity"]["value"]
+
+
+def test_a_bare_continue_tag_is_not_echoed_back(client):
+    """[CONTINUE] is narrator syntax; repeating it at the player reads as a bug."""
+    _bind(client)
+
+    body = client.post(
+        f"{API}/campaigns/{CAMPAIGN}/text-actions",
+        json={"campaign_id": CAMPAIGN, "request_id": "c1", "text": "[CONTINUE]"},
+    ).json()
+
+    message = body["result"]["message"]
+    assert "[CONTINUE]" not in message

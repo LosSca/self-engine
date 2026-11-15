@@ -10,7 +10,12 @@ const ACTION_TYPES = [
   { id: 'META', label: '旁白', description: '与 AI 叙事者对话' },
 ]
 
-export default function ActionInput({ onSubmit, disabled, draft }) {
+//: 规则链路里「继续」是一个真实动作：时钟自己往前走一段，世界替你过日子。
+//: 旧链路把它当叙事指令，两条链路对同一句话的期待不一样，所以要分开写。
+const CONTINUE_SENTENCE = '按 Enter 继续推进故事……'
+const CONTINUE_SENTENCE_RULES = '按 Enter 让时间往前走一段（世界会自己动）……'
+
+export default function ActionInput({ onSubmit, disabled, draft, rulesLane = false }) {
   const [text, setText] = useState('')
   const [type, setType] = useState('DO')
   // Who this turn is aimed at. Carried from suggestion buttons (which know the
@@ -24,6 +29,15 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
   const dropdownRef = useRef(null)
   const lastSpaceRef = useRef(0)
   const campaignId = useGameStore((s) => s.activeCampaignId)
+
+  // What "continue" means depends on who is listening. The rules lane has a
+  // real `wait` action: [CONTINUE] is not a verb there, so it was parsed as an
+  // utterance with no target and answered with "这句话没能对上眼前的任何东西".
+  // The legacy lane keeps the tag, where it is a narration instruction.
+  const continuePayload = useCallback(
+    () => (rulesLane ? '等待' : '[CONTINUE]'),
+    [rulesLane],
+  )
 
   // Load an externally supplied "[TYPE] text" draft into the field for editing.
   // The props are tracked by stamp and applied during render (the lint rule
@@ -56,7 +70,7 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
         if (now - lastSpaceRef.current < 450) {
           lastSpaceRef.current = 0
           e.preventDefault()
-          onSubmit('[CONTINUE]')
+          onSubmit(continuePayload())
           return
         }
         lastSpaceRef.current = now
@@ -66,13 +80,13 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         if (!text.trim() && !disabled) {
           e.preventDefault()
-          onSubmit('[CONTINUE]')
+          onSubmit(continuePayload())
         }
       }
     }
     window.addEventListener('keydown', handleGlobalKey)
     return () => window.removeEventListener('keydown', handleGlobalKey)
-  }, [text, disabled, onSubmit])
+  }, [text, disabled, onSubmit, continuePayload])
 
   // Fetch characters when mention query changes
   useEffect(() => {
@@ -136,7 +150,7 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
     if (visibleResults.length > 0) return // Don't submit while picking mention
     const trimmed = text.trim()
     if (!trimmed && type !== 'CONTINUE' || disabled) return
-    onSubmit(type === 'CONTINUE' ? '[CONTINUE]' : `[${type}] ${trimmed}`, target)
+    onSubmit(type === 'CONTINUE' ? continuePayload() : `[${type}] ${trimmed}`, target)
     setText('')
     setTarget(null)
     closeMention()
@@ -219,7 +233,9 @@ export default function ActionInput({ onSubmit, disabled, draft }) {
             disabled={disabled}
             className="flex-1 text-left bg-white/[0.03] border border-white/20 rounded-xl px-5 py-3.5 text-white hover:bg-white/[0.03] hover:border-white/20 transition-all font-light text-sm group disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            <span className="opacity-70 group-hover:opacity-100 transition-opacity">按 Enter 继续推进故事……</span>
+            <span className="opacity-70 group-hover:opacity-100 transition-opacity">
+              {rulesLane ? CONTINUE_SENTENCE_RULES : CONTINUE_SENTENCE}
+            </span>
           </button>
         ) : (
           <div className="flex-1 relative">

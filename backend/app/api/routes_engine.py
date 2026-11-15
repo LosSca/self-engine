@@ -349,6 +349,18 @@ def _tick_handlers(service: Optional[ActionService] = None) -> Dict[str, Any]:
     return {npc_schedule.NPC_ROUTINE: npc_turns.routine_handler(service)}
 
 
+def _event_store():
+    """The legacy event stream, opened per service.
+
+    NPC minds are stored there as `NPC_THOUGHT` events (the panel in
+    routes_game rebuilds them from the same rows), so the rules lane needs a
+    handle of its own to write them.
+    """
+    from app.db.event_store import EventStore
+
+    return EventStore(os.environ.get("EVENT_DB_PATH", os.path.join(_BACKEND_DIR, "events.db")))
+
+
 def _service() -> ActionService:
     scenario_store = _get_scenario_store()
     service = ActionService(
@@ -359,6 +371,9 @@ def _service() -> ActionService:
         settled_sink=_graph_mirror_sink(),
         clock_paused=_clock_paused,
         tick_handlers={},
+        # NPC minds live in the event stream; this lane never wrote there, so
+        # the panel was showing an empty table with a working button.
+        event_store=_event_store(),
     )
     service.tick_handlers = _tick_handlers(service)
     # The NPCs act through this very service: one action model, one rules

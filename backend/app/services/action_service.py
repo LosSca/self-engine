@@ -362,6 +362,7 @@ class ActionService:
         clock_paused=None,
         tick_handlers: Optional[Dict[str, Any]] = None,
         tick_advice: Optional[Callable[[Any], Any]] = None,
+        event_store=None,
     ):
         self.store = store
         self.rules = rules or RulesEngine()
@@ -376,6 +377,9 @@ class ActionService:
         #: Callable[[str], bool] - whether the campaign's clock is frozen. A
         #: paused campaign is one the player left; time must not move in it.
         self.clock_paused = clock_paused
+        #: The event stream NPC minds are stored in (`NPC_THOUGHT` events).
+        #: Optional: a service without one simply records no minds.
+        self.event_store = event_store
         #: Callable[[str, GameState, str], None] - runs after a turn commits,
         #: outside the transaction. Only for work that may fail freely: the
         #: knowledge graph mirrors prose and must never roll a turn back.
@@ -954,8 +958,33 @@ class ActionService:
             # a routine has a day, and the day starts being kept the first time
             # anyone acts in it - not only when the planner is switched on.
             self._ensure_world_clock(request.campaign_id)
-            await self._run_npc_round(request)
+            if self._town_has_routine(request.campaign_id):
+                await self._run_npc_round(request)
+                await self._record_town_minds(request.campaign_id)
         return result
+
+    async def _record_town_minds(self, campaign_id: str) -> None:
+        """Write down what the town is currently doing, as NPC memories.
+
+        Without this the NPC panel reads an event type nobody writes: the
+        legacy session used to record thoughts and the rules lane never did.
+        What matters here is behaviour already decided by the utility function,
+        so this is a record of a real state, not a second personality layer.
+        """
+        try:
+            if self.event_store is None:
+                return
+            state = self.store.get_state(campaign_id)
+            if state is None:
+                return
+            world = self.store.get_world(state.world_id)
+            if world is None:
+                return
+            from app.services import npc_turns  # local: keeps the import graph flat
+
+            npc_turns.record_minds(self.event_store, campaign_id, world, state)
+        except Exception as exc:  # noqa: BLE001 - the turn is already durable
+            logger.warning("town minds for %s not recorded: %s", campaign_id, exc)
 
     def _ensure_world_clock(self, campaign_id: str) -> None:
         """Queue the first day or two of authored routines, if not already done.
