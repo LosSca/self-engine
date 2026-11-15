@@ -373,10 +373,17 @@ async def test_openai_without_proxy_uses_direct_provider_configuration():
     mock_response.choices = [MagicMock(message=MagicMock(content="ok"))]
     mock_acompletion = AsyncMock(return_value=mock_response)
     # A custom endpoint in .env would take this call over; this test is about
-    # the plain OpenAI case, so switch the custom route off explicitly.
+    # the plain OpenAI case, so switch the custom route off explicitly. The
+    # environment must go too: the router reads it at call time (that is how a
+    # provider saved in the settings panel takes effect without a restart), so
+    # patching only the module attribute is no longer enough.
     with patch("app.engines.llm_router._OPENAI_PROXY_URL", ""), \
             patch("app.engines.llm_router._CUSTOM_LLM_URL", ""), \
             patch("app.engines.llm_router._CUSTOM_LLM_KEY", ""), \
+            patch.dict(
+                "os.environ",
+                {"CUSTOM_LLM_BASE_URL": "", "CUSTOM_LLM_API_KEY": ""},
+            ), \
             patch("app.engines.llm_router.litellm.acompletion", new=mock_acompletion):
         await router.complete(messages=[{"role": "user", "content": "test"}])
     call_kwargs = mock_acompletion.call_args.kwargs

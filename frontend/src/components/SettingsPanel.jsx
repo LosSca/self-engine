@@ -17,8 +17,8 @@ const PROVIDERS = [
   // --model-id and .env LOCAL_LLM_MODEL; start it with E:\ninfer\start-local.ps1.
   { id: 'local', label: '本地 NInfer', models: ['qwen3.8-27b'] },
   // A custom OpenAI-compatible vendor. Listed only when the backend reports a
-  // configured base URL + key (.env CUSTOM_LLM_*), because there is nothing the
-  // panel could fill in to make it work.
+  // Any OpenAI-dialect endpoint: the address, key and model name are filled in
+  // the panel itself (or CUSTOM_LLM_* in .env).
   { id: 'custom', label: '自定义兼容接口', models: [] },
 ]
 
@@ -134,19 +134,29 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
   const [providers, setProviders] = useState([])
   const [keyDraft, setKeyDraft] = useState({ deepseek: '', openai: '', anthropic: '', local: '', custom: '' })
   const [urlDraft, setUrlDraft] = useState({ local: '', custom: '' })
+  // 每行自己的模型名：local/custom 这两类只有地址不够，还得知道该发哪个模型。
+  const [modelDraft, setModelDraft] = useState({ local: '', custom: '' })
   const [providerBusy, setProviderBusy] = useState('')
   const [providerMsg, setProviderMsg] = useState({ id: '', kind: '', text: '' })
 
-  const availableProviders = customReady
-    ? PROVIDERS
-    : PROVIDERS.filter((p) => p.id !== 'custom')
+  // 「自定义兼容接口」必须常驻：它以前只在 custom_route_available 为真时才出现，
+  // 而那个值要地址和密钥都已配置才为真——于是没配置的人看不见入口，也就永远
+  // 配置不了。入口属于界面，可用性由下面的提示语负责。
+  const availableProviders = PROVIDERS
   const currentProviderModels = PROVIDERS.find((p) => p.id === provider)?.models || []
 
   const handleProviderChange = (newProvider) => {
     setProvider(newProvider)
     const providerModels = PROVIDERS.find((p) => p.id === newProvider)?.models || []
-    if (newProvider === 'custom') setModel(customModel)
-    else setModel(providerModels[0] || '')
+    if (newProvider === 'custom') {
+      // The model name typed in the provider row is the truth; the box above is
+      // only a mirror of it until the user overwrites it.
+      setModel(customModel || modelDraft.custom || '')
+    } else if (newProvider === 'local') {
+      setModel(modelDraft.local || providerModels[0] || '')
+    } else {
+      setModel(providerModels[0] || '')
+    }
   }
 
   useEffect(() => {
@@ -175,6 +185,9 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
       .then((data) => {
         if (!alive) return
         const prefs = data?.prefs || {}
+        if (typeof prefs.custom_model === 'string' && prefs.custom_model.trim()) {
+          setCustomModel(prefs.custom_model.trim())
+        }
         if (typeof prefs.default_narrator_prompt === 'string') {
           setDirective(prefs.default_narrator_prompt)
         }
@@ -211,10 +224,16 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
       const list = await fetchProviders()
       setProviders(list)
       const urls = { local: '', custom: '' }
+      const models = { local: '', custom: '' }
       list.forEach((p) => {
-        if (p && (p.id === 'local' || p.id === 'custom')) urls[p.id] = p.base_url || ''
+        if (p && (p.id === 'local' || p.id === 'custom')) {
+          urls[p.id] = p.base_url || ''
+          models[p.id] = p.model || ''
+        }
       })
       setUrlDraft(urls)
+      setModelDraft(models)
+      if (models.custom && !customModel) setCustomModel(models.custom)
     } catch {
       // 后端不可用时保持空列表，面板仍然可以改其它设置。
     }
@@ -231,7 +250,12 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
       const body = {}
       const key = (keyDraft[id] || '').trim()
       if (key) body.apiKey = key
-      if (id === 'local' || id === 'custom') body.baseUrl = (urlDraft[id] || '').trim()
+      if (id === 'local' || id === 'custom') {
+        body.baseUrl = (urlDraft[id] || '').trim()
+        // 模型名跟着地址一起存：自定义端点发的是这个名字，缺了它路由就没有
+        // 可用的默认模型，设置面板也永远读不回它。
+        body.model = (modelDraft[id] || '').trim()
+      }
       const list = await saveProvider(id, body)
       setProviders(list)
       setKeyDraft((d) => ({ ...d, [id]: '' }))
@@ -498,7 +522,7 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     type="text"
                     value={customModel}
                     onChange={(e) => setCustomModel(e.target.value)}
-                    placeholder="deepseek-v4.1-flash"
+                    placeholder="spark-x2.6 / deepseek-v4.1-flash"
                     spellCheck={false}
                     className={C.input}
                   />
@@ -511,7 +535,8 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                 )}
                 {provider === 'custom' && (
                   <p className={C.help}>
-                    地址与密钥来自 .env：CUSTOM_LLM_BASE_URL / CUSTOM_LLM_API_KEY。填什么模型就发什么模型名，密钥不会回到浏览器。
+                    地址、密钥与默认模型在下方「自定义兼容接口」那一行填（也可以写在 .env：CUSTOM_LLM_BASE_URL /
+                    CUSTOM_LLM_API_KEY / CUSTOM_LLM_MODEL）。填什么模型就发什么模型名，密钥不会回到浏览器。
                   </p>
                 )}
                 {provider === 'local' && (
@@ -537,6 +562,8 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                     const withUrl = row.id === 'local' || row.id === 'custom'
                     const typedKey = (keyDraft[row.id] || '').trim()
                     const typedUrl = (urlDraft[row.id] || '').trim()
+                    // 只填地址也算一次有效编辑：本地 Ollama 这类端点不需要密钥。
+                    const typedModel = (modelDraft[row.id] || '').trim()
                     return (
                       <div key={row.id} data-testid={`provider-row-${row.id}`} className={`${C.card} rounded-lg border p-3`}>
                         <div className="flex items-center justify-between gap-2 mb-2">
@@ -563,6 +590,18 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                         {withUrl && (
                           <input
                             type="text"
+                            value={modelDraft[row.id] || ''}
+                            onChange={(e) => setModelDraft((d) => ({ ...d, [row.id]: e.target.value }))}
+                            placeholder="模型名，例如 spark-x2.6"
+                            spellCheck={false}
+                            autoComplete="off"
+                            data-testid={`provider-model-${row.id}`}
+                            className={`${C.input} mt-2`}
+                          />
+                        )}
+                        {withUrl && (
+                          <input
+                            type="text"
                             value={urlDraft[row.id] || ''}
                             onChange={(e) => setUrlDraft((d) => ({ ...d, [row.id]: e.target.value }))}
                             placeholder="http://127.0.0.1:8094/v1"
@@ -575,7 +614,10 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                         <div className="flex flex-wrap items-center gap-2 mt-2">
                           <button
                             type="button"
-                            disabled={busyRow || (!typedKey && !(withUrl && typedUrl))}
+                            disabled={
+                              busyRow ||
+                              (!typedKey && !(withUrl && (typedUrl || typedModel)))
+                            }
                             onClick={() => saveKey(row.id)}
                             data-testid={`provider-save-${row.id}`}
                             className="text-[10px] px-2.5 py-1 rounded-md bg-[#262421] text-white disabled:opacity-40"
@@ -611,7 +653,8 @@ export default function SettingsPanel({ onClose, activeScenarioId }) {
                   })}
                 </div>
                 <p className={C.help}>
-                  填了就用这里的密钥；清空后回落到 .env 里的同名变量。Ollama 这类本地服务把地址填成 http://127.0.0.1:11434/v1 即可。
+                  填了就用这里的密钥；清空后回落到 .env 里的同名变量。Ollama、讯飞星火这类服务把地址和模型名填上即可，
+                  不需要密钥的端点留空也行。想用它跑叙事，记得在上面的「模型服务商」里选中对应项并点「保存」。
                 </p>
               </div>
 

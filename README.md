@@ -55,7 +55,7 @@
 | 换个模型只换一个角色 | `AGENTS_NARRATIVE_MODEL` 等环境变量，或调试台「模型调用」页签看路由 | 不需要 |
 | 换一个起步世界 | `GET /api/v1/world-presets`：奇幻村庄、雾镇、轨道站、荒野营地 | 不需要 |
 | 让模型写得更好 | 设置面板选供应商与预设；上游拒绝时可自动改走本地模型 | 需要 |
-| 用别家的兼容接口 | 设置面板「自定义兼容接口」，地址与密钥放 `.env` 的 `CUSTOM_LLM_*` | 需要 |
+| 用别家的兼容接口 | 设置面板「自定义兼容接口」：地址、密钥、模型名直接在面板里填，也可放 `.env` 的 `CUSTOM_LLM_*`；没有密钥的端点（Ollama、内网网关）留空即可 | 需要 |
 | 换个设备接着玩 | 设置统一存服务端 `/api/prefs`，换浏览器仍然生效（令牌不进去） | 不需要 |
 
 ### 代码地图
@@ -66,7 +66,7 @@
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口；另有解析、知识、叙事、世界编辑、AI 生成、作品库、草稿与联网取材 |
 | `backend/app/api/` | 六个路由模块（引擎 / 知识 / 旧链路 / 情景 / 角色 / 作品） |
 | `backend/app/db/` | 六个存储模块：情景、权威状态、事件、调用追踪、偏好、供应商凭据（后两者与情景库同库） |
-| `backend/tests/` | pytest **1700 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
+| `backend/tests/` | pytest **1818 passed / 8 skipped**，验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、侧边栏与工具坞、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记、交付审查与 `docs/review-2026-11-15.md` 全量审查 |
 

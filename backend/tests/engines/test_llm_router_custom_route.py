@@ -20,6 +20,7 @@ def custom_env(monkeypatch):
 
 
 def test_without_configuration_the_route_is_absent(monkeypatch):
+    monkeypatch.delenv("CUSTOM_LLM_BASE_URL", raising=False)
     monkeypatch.setattr(llm_router, "_CUSTOM_LLM_URL", "")
     monkeypatch.setattr(llm_router, "_CUSTOM_LLM_KEY", "")
     assert llm_router.custom_route_available() is False
@@ -48,6 +49,7 @@ def test_a_custom_endpoint_gets_the_openai_transport_prefix(custom_env):
 def test_without_a_custom_endpoint_openai_keeps_its_own_prefix(monkeypatch):
     from app.engines.llm_router import LLMConfig, LLMRouter, LLMProvider
 
+    monkeypatch.delenv("CUSTOM_LLM_BASE_URL", raising=False)
     monkeypatch.setattr(llm_router, "_CUSTOM_LLM_URL", "")
     monkeypatch.setattr(llm_router, "_CUSTOM_LLM_KEY", "")
     monkeypatch.setattr(llm_router, "_OPENAI_PROXY_URL", "")
@@ -76,3 +78,42 @@ def test_the_custom_model_survives_a_later_unrelated_call(custom_env):
     routes_game.apply_model_policy(LLMProvider.DEEPSEEK, "deepseek-v4-flash")
     routes_game.apply_model_policy(LLMProvider.OPENAI, "")
     assert routes_game._llm.config.orchestrator_model == "vendor-model-3"
+
+
+def test_a_keyless_endpoint_is_still_a_route(monkeypatch):
+    """A local Ollama or an intranet gateway has no key at all."""
+    monkeypatch.delenv("CUSTOM_LLM_API_KEY", raising=False)
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_URL", "")
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_KEY", "")
+    monkeypatch.setenv("CUSTOM_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+
+    assert llm_router.custom_route_available() is True
+    router = llm_router.LLMRouter(llm_router.LLMConfig())
+    # litellm always attaches a bearer header; empty would send "Bearer ".
+    assert router._get_api_key(llm_router.LLMProvider.OPENAI) == "none"
+
+
+def test_a_route_saved_from_the_settings_panel_is_seen_without_a_restart(monkeypatch):
+    """The panel writes os.environ; the module-level value was frozen at import."""
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_URL", "")
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_KEY", "")
+    monkeypatch.setattr(llm_router, "_CUSTOM_LLM_MODEL", "")
+    monkeypatch.delenv("CUSTOM_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("CUSTOM_LLM_MODEL", raising=False)
+
+    from app.db.credential_store import CredentialStore, apply_credentials
+
+    store = CredentialStore()
+    try:
+        store.put(
+            "custom",
+            api_key="sk-later",
+            base_url="https://vendor.example/v2",
+            model="vendor-model-2",
+        )
+    finally:
+        store.close()
+    apply_credentials()
+
+    assert llm_router.custom_route_available() is True
+    assert llm_router.custom_default_model() == "vendor-model-2"

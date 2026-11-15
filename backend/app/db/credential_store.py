@@ -116,9 +116,28 @@ class CredentialStore:
             "    api_key TEXT NOT NULL DEFAULT '',"
             "    base_url TEXT NOT NULL DEFAULT '',"
             "    model TEXT NOT NULL DEFAULT '',"
+            # Keyless endpoints exist: a local Ollama, an intranet gateway, or a
+            # vendor that authenticates by address. Without this flag such a row
+            # was indistinguishable from an empty one, so "save" silently did
+            # nothing and apply_credentials() restored the start-up key again.
+            "    keyless INTEGER NOT NULL DEFAULT 0,"
             "    updated_at TEXT NOT NULL"
             ")"
         )
+        columns = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(provider_credentials)")
+        }
+        if "keyless" not in columns:
+            # Table created before the flag existed: the difference between
+            # "never saved" and "saved without a key" is exactly a stored URL.
+            self._conn.execute(
+                "ALTER TABLE provider_credentials ADD COLUMN keyless INTEGER NOT NULL DEFAULT 0"
+            )
+            self._conn.execute(
+                "UPDATE provider_credentials SET keyless = 1"
+                " WHERE api_key = '' AND base_url <> ''"
+            )
         self._conn.commit()
 
     def close(self) -> None:
@@ -129,28 +148,48 @@ class CredentialStore:
 
     def rows(self) -> Dict[str, Dict[str, str]]:
         out: Dict[str, Dict[str, str]] = {}
-        for provider, api_key, base_url, model in self._conn.execute(
-            "SELECT provider, api_key, base_url, model FROM provider_credentials"
+        for provider, api_key, base_url, model, keyless in self._conn.execute(
+            "SELECT provider, api_key, base_url, model, keyless FROM provider_credentials"
         ).fetchall():
-            out[provider] = {"api_key": api_key, "base_url": base_url, "model": model}
+            out[provider] = {
+                "api_key": api_key,
+                "base_url": base_url,
+                "model": model,
+                "keyless": bool(keyless),
+            }
         return out
 
     def put(self, provider: str, *, api_key: str | None, base_url: str | None, model: str | None) -> None:
         from datetime import datetime
 
-        current = self.rows().get(provider, {"api_key": "", "base_url": "", "model": ""})
+        current = self.rows().get(
+            provider, {"api_key": "", "base_url": "", "model": "", "keyless": False}
+        )
         merged = {
             "api_key": current["api_key"] if api_key is None else api_key,
             "base_url": current["base_url"] if base_url is None else base_url,
             "model": current["model"] if model is None else model,
         }
+        # A row created by this write without a key is deliberate: the endpoint
+        # does not need one. A later write that supplies a key clears the flag,
+        # so "save an address now, the key tomorrow" converges as expected.
+        keyless = current["keyless"] and api_key is None
+        if api_key is not None and not api_key:
+            keyless = True
         with self._lock:
             self._conn.execute(
-                "INSERT INTO provider_credentials (provider, api_key, base_url, model, updated_at) "
-                "VALUES (?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+                "INSERT INTO provider_credentials (provider, api_key, base_url, model, keyless, updated_at) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET "
                 "api_key=excluded.api_key, base_url=excluded.base_url, "
-                "model=excluded.model, updated_at=excluded.updated_at",
-                (provider, merged["api_key"], merged["base_url"], merged["model"], datetime.utcnow().isoformat()),
+                "model=excluded.model, keyless=excluded.keyless, updated_at=excluded.updated_at",
+                (
+                    provider,
+                    merged["api_key"],
+                    merged["base_url"],
+                    merged["model"],
+                    1 if keyless else 0,
+                    datetime.utcnow().isoformat(),
+                ),
             )
             self._conn.commit()
 
@@ -203,8 +242,14 @@ def apply_credentials() -> None:
             if not env_name:
                 continue
             value = row.get(column) or ""
+            # A saved row owns this variable even when the value is empty: a
+            # keyless endpoint needs the key variable to be *absent*, and
+            # falling back to the start-up value here put a stale key back.
+            owns_variable = bool(row) and (column != "api_key" or row.get("keyless"))
             if value:
                 os.environ[env_name] = value
+            elif owns_variable:
+                os.environ.pop(env_name, None)
             elif env_name in _ENV_AT_STARTUP:
                 os.environ[env_name] = _ENV_AT_STARTUP[env_name]
             else:
@@ -222,6 +267,9 @@ def status() -> list[dict[str, Any]]:
     for provider, spec in PROVIDERS.items():
         row = rows.get(provider, {})
         from_ui = bool(row.get("api_key"))
+        # An address with no key is a complete configuration for a keyless
+        # endpoint; reporting it as "not configured" hid a working setup.
+        keyless = bool(row.get("keyless")) and bool(row.get("base_url"))
         from_env = bool(os.environ.get(spec["env"]))
         out.append(
             {
@@ -229,11 +277,14 @@ def status() -> list[dict[str, Any]]:
                 "label": spec["label"],
                 "help": spec["help"],
                 "env": spec["env"],
-                "configured": from_ui or from_env,
-                "source": "settings" if from_ui else ("env" if from_env else ""),
+                "configured": from_ui or keyless or from_env,
+                "source": (
+                    "settings" if (from_ui or keyless) else ("env" if from_env else "")
+                ),
                 "preview": masked(row.get("api_key", "") or os.environ.get(spec["env"], "")),
                 "base_url": row.get("base_url", ""),
                 "model": row.get("model", ""),
+                "keyless": keyless,
                 "editable_base_url": provider in URL_ENV,
             }
         )

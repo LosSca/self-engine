@@ -379,20 +379,48 @@ async def test_provider(provider: str, req: ProviderTestRequest | None = None):
     if provider not in PROVIDERS:
         raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
     try:
-        from app.engines.llm_router import LLMConfig, LLMRouter, LLMProvider
+        from app.engines.llm_router import (
+            LLMConfig,
+            LLMRouter,
+            LLMProvider,
+            custom_default_model,
+        )
 
         model = (req.model or "").strip() if req else ""
+        # "custom" is a settings-panel entry, not a router provider: the custom
+        # endpoint is reached through the OpenAI transport, exactly as
+        # SettingsPanel does when it saves a route. Without this mapping the
+        # probe answered "'custom' is not a valid LLMProvider" while the route
+        # itself worked.
+        transport = "openai" if provider == "custom" else provider
+        if provider == "custom":
+            model = model or custom_default_model() or ""
+        # A reasoning model spends this budget on thinking before it answers:
+        # 16 tokens left Spark X2 with an empty reply and finish_reason=length.
+        probe_tokens = 512
         config = LLMConfig(
-            primary_provider=LLMProvider(provider),
+            primary_provider=LLMProvider(transport),
             primary_model=model or _llm.config.primary_model,
             temperature=0.0,
-            max_tokens=16,
+            max_tokens=probe_tokens,
         )
         router = LLMRouter(config)
         reply = await router.complete(
             [{"role": "user", "content": "Reply with the single word: ok"}],
-            max_tokens=16,
+            max_tokens=probe_tokens,
         )
-        return {"status": "ok", "reply": (reply or "").strip()[:120]}
+        text = (reply or "").strip()
+        if not text:
+            # The key clearly worked (no exception), but the call produced
+            # nothing. Say so instead of reporting a blank success.
+            return {
+                "status": "error",
+                "error": (
+                    "模型有响应但正文为空：这类推理模型会先花掉 token 思考。"
+                    "把这一行的模型名换成非推理模型，或调大 max_tokens。"
+                ),
+                "reply": "",
+            }
+        return {"status": "ok", "reply": text[:120]}
     except Exception as exc:  # noqa: BLE001 - the message is the whole point
         return {"status": "error", "error": str(exc)[:400]}

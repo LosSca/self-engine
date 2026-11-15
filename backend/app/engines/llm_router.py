@@ -698,19 +698,43 @@ def _local_llm_model() -> str:
 # One custom OpenAI-compatible vendor (see app/config.py). It reuses the OPENAI
 # transport - litellm only needs the model string and api_base - so nothing else
 # in the router has to learn a new provider.
+#
+# The environment is read at call time, not only at import: the settings panel
+# writes these variables when the player enters an endpoint, and a value frozen
+# at import would make a UI-configured provider invisible until a restart.
 _CUSTOM_LLM_URL = (_settings.custom_llm_base_url or os.environ.get("CUSTOM_LLM_BASE_URL", "")).rstrip("/")
 _CUSTOM_LLM_KEY = _settings.custom_llm_api_key or os.environ.get("CUSTOM_LLM_API_KEY", "")
 _CUSTOM_LLM_MODEL = _settings.custom_llm_model or os.environ.get("CUSTOM_LLM_MODEL", "")
 
 
+def _custom_llm_url() -> str:
+    # os.environ first, module values after: the settings panel writes the
+    # environment at runtime, and tests pin the module attribute.
+    return (_settings.custom_llm_base_url or os.environ.get("CUSTOM_LLM_BASE_URL", "") or _CUSTOM_LLM_URL or "").rstrip("/")
+
+
+def _custom_llm_key() -> str:
+    return _settings.custom_llm_api_key or os.environ.get("CUSTOM_LLM_API_KEY", "") or _CUSTOM_LLM_KEY
+
+
+def _custom_llm_model() -> str:
+    return _settings.custom_llm_model or os.environ.get("CUSTOM_LLM_MODEL", "") or _CUSTOM_LLM_MODEL
+
+
 def custom_route_available() -> bool:
-    """True when a custom OpenAI-compatible endpoint is configured."""
-    return bool(_CUSTOM_LLM_URL and _CUSTOM_LLM_KEY)
+    """True when a custom OpenAI-compatible endpoint is configured.
+
+    The key is optional on purpose: a local Ollama, an intranet gateway or a
+    vendor that authenticates by address are all reachable without one. A key
+    still wins when present — litellm needs a bearer string, so keyless routes
+    send a placeholder.
+    """
+    return bool(_custom_llm_url())
 
 
 def custom_default_model() -> str | None:
     """The model a custom endpoint was configured with, if any."""
-    return _CUSTOM_LLM_MODEL or None
+    return _custom_llm_model() or None
 
 
 _LOCAL_CONTEXT_WINDOW = int(
@@ -745,7 +769,7 @@ class LLMRouter:
         if provider == LLMProvider.LOCAL:
             return _local_llm_url() or None
         if provider == LLMProvider.OPENAI and not _OPENAI_PROXY_URL and custom_route_available():
-            return _CUSTOM_LLM_URL
+            return _custom_llm_url()
         return None
 
     def _get_api_key(self, provider: LLMProvider) -> str | None:
@@ -754,7 +778,9 @@ class LLMRouter:
         if provider == LLMProvider.OPENAI and _OPENAI_PROXY_URL:
             return _OPENAI_PROXY_KEY
         if provider == LLMProvider.OPENAI and not _OPENAI_PROXY_URL and custom_route_available():
-            return _CUSTOM_LLM_KEY
+            # Keyless endpoints are real; litellm still wants a value here, and
+            # an empty string would be sent as "Authorization: Bearer ".
+            return _custom_llm_key() or "none"
         if provider == LLMProvider.LOCAL:
             if not _local_llm_key():
                 raise RuntimeError(
