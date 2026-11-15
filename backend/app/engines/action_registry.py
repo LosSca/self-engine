@@ -182,8 +182,9 @@ register_action(
         description="Let world time pass without doing anything else.",
         minutes=None,
         verbs=(
-            "等待", "等一下", "等一下", "等一会", "等一会儿", "等一下再走",
-            "等着", "歇一会", "休息一会", "稍等", "wait", "rest",
+            "等待", "等一下", "等一会", "等一会儿", "等一下再走",
+            "等着", "歇一会", "歇一会儿", "休息一会", "休息一会儿",
+            "休息一下", "坐下休息", "坐下", "稍等", "wait", "rest",
         ),
         verb_priority=95,
     )
@@ -207,7 +208,10 @@ register_action(
         minutes=0,
         target="optional",
         description="Speak to someone here.",
-        verbs=("交谈", "对话", "说话", "说说", "问", "说", "talk", "speak", "ask"),
+        verbs=(
+            "交谈", "对话", "说话", "说说", "问", "说", "问好", "打招呼", "问候",
+            "talk", "speak", "ask", "greet",
+        ),
         verb_priority=70,
     )
 )
@@ -219,7 +223,8 @@ register_action(
         minutes=10,
         target="required",
         description="Walk through an exit to a neighbouring location.",
-        verbs=("前往", "移动到", "走到", "进入", "回到", "去往", "去", "go to", "head to",
+        verbs=("前往", "移动到", "走到", "走向", "走过", "进入", "回到", "去往", "去",
+               "返回", "动身", "赶去", "赶赴", "go to", "head to",
                "travel to", "move to", "walk to", "enter"),
         verb_priority=80,
     )
@@ -359,7 +364,11 @@ register_action(
         minutes=0,
         target="none",
         description="Describe the current location, its items, doors and exits.",
-        verbs=("观察", "环顾", "看看", "看", "look", "observe", "survey"),
+        # "打量" used to fall through to the rule catalogue's improvise verb,
+        # so every "Study X and watch their reaction" button was recorded as an
+        # attempt that changed nothing - including the NPC's reaction the
+        # player was promised. It belongs with the other inspection verbs.
+        verbs=("观察", "环顾", "看看", "看", "打量", "look", "observe", "survey"),
         verb_priority=90,
     )
 )

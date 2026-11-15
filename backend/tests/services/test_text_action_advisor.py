@@ -191,10 +191,11 @@ def test_a_rule_that_already_answered_is_not_sent_to_the_model(service, monkeypa
     advisor = _FakeAdvisor(action="take", fragment="iron key")
     service.advisor = advisor
 
-    # "look iron_key" is a real rule with an impossible target: the rule engine
-    # answers it, so asking a model what it means would spend money to learn
-    # nothing.
-    out = asyncio.run(service.execute("camp-1", "look iron_key"))
+    # "investigate nonexistent" is a real rule with an unresolvable target: the
+    # rule engine answers it, so asking a model what it means would spend money
+    # to learn nothing. (It used to be "look iron_key", back when a targeted
+    # look was still a refusal; that sentence now investigates the key.)
+    out = asyncio.run(service.execute("camp-1", "investigate nonexistent"))
 
     assert out["status"] == "rejected"
     assert advisor.calls == []

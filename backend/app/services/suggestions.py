@@ -128,18 +128,31 @@ def build_suggestions(
     key_ids: Sequence[str] = (),
     here_items: Sequence[str] = (),
     here_item_ids: Sequence[str] = (),
+    hostiles: Sequence[str] = (),
+    hostile_ids: Sequence[str] = (),
+    in_combat: bool = False,
+    fight_target: str = "",
+    talked_to: Sequence[str] = (),
+    quest: Sequence[str] = (),
+    quest_id: str = "",
+    back_exits: Sequence[str] = (),
 ) -> list[Suggestion]:
     """Three next-step options built only from names the state already knows.
 
-    Ordered by what actually moves the turn forward *right now*: the key that
-    opens a locked door on the only way out, a shut door you can open, an item
-    lying within reach, somewhere concrete to walk, then a person to address,
-    then a small act that always works. Whatever the world lacks is skipped;
-    generic lines fill the gap so the player always gets three buttons.
+    Ordered by what actually moves the turn forward *right now*: a fight you
+    are already in, the quest step this room can satisfy, the key that opens a
+    locked door on the only way out, a shut door you can open, an item lying
+    within reach, a hostile creature, somewhere concrete to walk, then a person
+    to address, then a small act that always works. Whatever the world lacks is
+    skipped; generic lines fill the gap so the player always gets three
+    buttons.
 
     ``exits`` must already be limited to ways the rules would let the player
     walk; a locked exit is passed through ``doors`` instead, and its key
     through ``keys`` when it is in this room or already carried.
+    ``back_exits`` are the exits on ``exits`` that lead straight back to
+    where the player just came from: still offered, but last, so the screen is
+    not a treadmill between two rooms.
     """
     zh = not language or language.lower().startswith("zh")
     # A shut door and a blocking key lead: "walk to X" behind a locked door is
@@ -153,6 +166,14 @@ def build_suggestions(
     reachable_ids = [_text(x) for x in here_item_ids][:2]
     people = [n for n in (_text(x) for x in characters) if n][:3]
     things = [n for n in (_text(x) for x in items) if n][:2]
+    enemies = [n for n in (_text(x) for x in hostiles) if n][:1]
+    enemy_id = _text(hostile_ids[0]) if len(hostile_ids) else ""
+    # Only exits that are not the way back: a forward exit is a real choice,
+    # the room behind is a retreat.
+    forward = [n for n in places if n not in set(_text(x) for x in back_exits)] or places
+    back = [n for n in places if n in set(_text(x) for x in back_exits)][:1]
+    done_talking = {n.casefold() for n in (_text(x) for x in talked_to) if n}
+    goal = [n for n in (_text(x) for x in quest) if n][:1]
     # The first character's entity id lets a click address them directly
     # instead of relying on the name being parsed back out of the prose.
     person_id = _text(character_ids[0]) if len(character_ids) else ""
@@ -164,7 +185,36 @@ def build_suggestions(
 
     candidates: list[Suggestion] = []
 
-    # The key first: it is the step that makes the locked exit a real choice.
+    # A fight in progress is the whole screen. Offering "pick up the key" to
+    # someone being clawed at reads as if the game had not noticed; the rules
+    # also refuse a move while combat is active, so every walk option would be
+    # a rejection.
+    if in_combat and enemies:
+        enemy = enemies[0]
+        # Prefer the entity the running fight is actually against.
+        hint = pointed(fight_target or enemy_id)
+        if zh:
+            candidates.append({"action": f"攻击{enemy}", "speech": "", "target": enemy, **hint})
+            candidates.append({"action": "防御，稳住架势", "speech": "", "target": enemy, **hint})
+            candidates.append({"action": "撤出战斗", "speech": "", "target": enemy, **hint})
+        else:
+            candidates.append({"action": f"Attack {enemy}", "speech": "", "target": enemy, **hint})
+            candidates.append({"action": "Raise your guard and hold", "speech": "", "target": enemy, **hint})
+            candidates.append({"action": "Break off and retreat", "speech": "", "target": enemy, **hint})
+        return _fill(candidates, zh=zh)
+
+    # The quest the campaign is about, but only the step this room can satisfy.
+    # A goal two rooms away is a compass, not a button.
+    if goal:
+        step = goal[0]
+        if zh:
+            verb = "走向" if step in set(forward) | set(back) else "前往"
+            candidates.append({"action": f"{verb}{step}", "speech": "", "target": step})
+        else:
+            verb = "head to" if step in set(forward) | set(back) else "go to"
+            candidates.append({"action": f"{verb} {step}", "speech": "", "target": step})
+
+    # The key next: it is the step that makes the locked exit a real choice.
     if open_keys:
         key = open_keys[0]
         hint = pointed(open_key_ids[0] if open_key_ids else "")
@@ -189,18 +239,39 @@ def build_suggestions(
         else:
             candidates.append({"action": f"Pick up the {item}", "speech": "", "target": item, **hint})
 
-    if places:
+    # A creature that would fight back is never someone to ask what happened
+    # here; it leads to the two moves the rules accept against it.
+    if enemies and not in_combat:
+        enemy = enemies[0]
+        hint = pointed(enemy_id)
+        if zh:
+            candidates.append({"action": f"攻击{enemy}", "speech": "", "target": enemy, **hint})
+            candidates.append({"action": f"拉开距离，防备{enemy}扑过来", "speech": "", "target": enemy, **hint})
+        else:
+            candidates.append({"action": f"Attack {enemy}", "speech": "", "target": enemy, **hint})
+            candidates.append({"action": f"Back away and keep clear of {enemy}", "speech": "", "target": enemy, **hint})
+
+    if forward:
         verb = _MOVE_VERBS_ZH[0] if zh else _MOVE_VERBS_EN[0]
-        action = f"{verb}{places[0]}" if zh else f"{verb} {places[0]}"
-        candidates.append({"action": action, "speech": "", "target": places[0]})
+        action = f"{verb}{forward[0]}" if zh else f"{verb} {forward[0]}"
+        candidates.append({"action": action, "speech": "", "target": forward[0]})
 
     if people:
         person = people[0]
+        # The next screen after a conversation should not open with the same
+        # question again: that is what made the buttons look frozen. A person
+        # already spoken to this scene gets a different way in.
         if zh:
-            candidates.append({"action": "", "speech": f"向{person}开口，问这里发生了什么", "target": person, "target_id": person_id})
+            if person.casefold() in done_talking:
+                candidates.append({"action": f"接着问{person}，刚才那句话是什么意思", "speech": "", "target": person, "target_id": person_id})
+            else:
+                candidates.append({"action": "", "speech": f"向{person}开口，问这里发生了什么", "target": person, "target_id": person_id})
             candidates.append({"action": f"打量{person}，留意对方的反应", "speech": "", "target": person, "target_id": person_id})
         else:
-            candidates.append({"action": "", "speech": f"Ask {person} what happened here", "target": person, "target_id": person_id})
+            if person.casefold() in done_talking:
+                candidates.append({"action": f"Ask {person} what they meant by that", "speech": "", "target": person, "target_id": person_id})
+            else:
+                candidates.append({"action": "", "speech": f"Ask {person} what happened here", "target": person, "target_id": person_id})
             candidates.append({"action": f"Study {person} and watch how they react", "speech": "", "target": person, "target_id": person_id})
 
     if things:
@@ -210,9 +281,9 @@ def build_suggestions(
         else:
             candidates.append({"action": f"Take out the {item} and check it", "speech": "", "target": item})
 
-    if places[1:]:
+    if forward[1:]:
         verb = _MOVE_VERBS_ZH[1] if zh else _MOVE_VERBS_EN[1]
-        for place in places[1:]:
+        for place in forward[1:]:
             action = f"{verb}{place}" if zh else f"{verb} {place}"
             candidates.append({"action": action, "speech": "", "target": place})
 
@@ -232,7 +303,25 @@ def build_suggestions(
             candidates.append({"action": f"Look around {location}", "speech": ""})
         candidates.append({"action": "Take a careful look around", "speech": ""})
 
+    # The room behind is still walkable, but it is a retreat, not a lead: it
+    # goes after every forward option so a two-room world stops offering the
+    # same doorway three screens in a row.
+    if back:
+        verb = _MOVE_VERBS_ZH[2] if zh else _MOVE_VERBS_EN[2]
+        action = f"{verb}{back[0]}" if zh else f"{verb} {back[0]}"
+        candidates.append({"action": action, "speech": "", "target": back[0]})
+
+    return _fill(candidates, zh=zh)
+
+
+def _fill(candidates: list[Suggestion], *, zh: bool) -> list[Suggestion]:
+    """Cut the candidates to exactly three, never inventing a name."""
     picks = _dedupe(candidates)
+    # Acts that always parse still sit behind anything concrete: a retreat or a
+    # question beats being told to "look down at your feet".
+    concrete = [p for p in picks if p.get("speech") or p.get("target")]
+    fillers = [p for p in picks if not (p.get("speech") or p.get("target"))]
+    picks = concrete + fillers
     # A sparse world (no cast, no exits) can still leave fewer than three; the
     # UI promises three buttons, so fill the tail with neutral acts.
     # Same rule for the tail: only acts the engine accepts without a target.
@@ -304,6 +393,117 @@ def _names(items: Any, attr: str = "name") -> list[str]:
     return [n for n in (_text(getattr(x, attr, None)) for x in (items or [])) if n]
 
 
+def _field(record: Any, key: str, default: Any = None) -> Any:
+    """Read one field from a model record or a plain dict of the same shape.
+
+    A turn result carries ``state`` as a dict dump while the store hands out
+    models; reading only attributes made every dict record look like an empty
+    one, so a finished quest step was offered again.
+    """
+    if isinstance(record, Mapping):
+        return record.get(key, default)
+    return getattr(record, key, default)
+
+
+def _quest_goal(
+    world: Any,
+    state: Mapping[str, Any] | Any,
+    *,
+    here_id: str,
+    inventory: Mapping[Any, Any],
+    item_at: Mapping[Any, Any],
+    door_state: Mapping[Any, Any],
+    items: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    """The next concrete step of an active quest that this room can satisfy.
+
+    A quest says what the campaign is about; the buttons said nothing about it,
+    so a player holding the key, standing at the door and being asked to
+    "stabilise the reactor" was never told to walk to the reactor. Only
+    objectives whose target can be named *and* reached from here are returned:
+    a step that is two rooms away is a compass, not a next move.
+    """
+    names: list[str] = []
+    quest_ids: list[str] = []
+    try:
+        # Callers hand in either a GameState model or its dict dump; reading
+        # only one of the two silently dropped the quest progress of the other.
+        progress = _field(state, "quests", None) or {}
+        if not isinstance(progress, Mapping) or not progress:
+            return names, quest_ids
+        locations = {getattr(loc, "id", ""): loc for loc in (getattr(world, "locations", []) or [])}
+        for quest in getattr(world, "quests", []) or []:
+            quest_id = _text(getattr(quest, "id", ""))
+            record = progress.get(quest_id)
+            # The progress record is read the same way whether it is a
+            # QuestProgress model or the plain dict a turn dump carries.
+            status = _text(_field(record, "status", "active")) if record is not None else "active"
+            if not quest_id or status not in ("", "active"):
+                continue
+            for objective in getattr(quest, "objectives", []) or []:
+                oid = _text(getattr(objective, "id", ""))
+                done = 0
+                if record is not None:
+                    counts = _field(record, "objectives", {}) or {}
+                    done = counts.get(oid, 0) if isinstance(counts, Mapping) else 0
+                required = getattr(objective, "required_count", 1) or 1
+                if isinstance(done, (int, float)) and done >= required:
+                    continue
+                target = _text(getattr(objective, "target", ""))
+                kind = _text(getattr(objective, "kind", ""))
+                if kind == "obtain_item" and target:
+                    item = items.get(target)
+                    held = bool(inventory.get(target))
+                    reachable = item_at.get(target) == here_id
+                    if item is not None and reachable and not held:
+                        return [_text(getattr(item, "name", ""))], [quest_id]
+                if kind == "open_door" and target:
+                    door = next(
+                        (d for d in (getattr(world, "doors", []) or [])
+                         if _text(getattr(d, "id", "")) == target), None,
+                    )
+                    if door is None or _text(getattr(door, "location_id", "")) != here_id:
+                        continue
+                    if not door_state.get(target):
+                        return [_text(getattr(door, "name", ""))], [quest_id]
+                if kind == "reach_location" and target:
+                    place = locations.get(target)
+                    if place is not None and target not in locations:
+                        continue
+                    if place is not None and here_id != target:
+                        return [_text(getattr(place, "name", ""))], [quest_id]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return [], []
+    return names, quest_ids
+
+
+def _in_combat(state: Mapping[str, Any]) -> bool:
+    """Whether a fight is running, read the same way the rules read it.
+
+    The rule lane refuses a move while either marker is set (see
+    rules_engine._move), so a screen that still offers walks is a screen whose
+    every click bounces back.
+    """
+    combat = state.get("combat")
+    if isinstance(combat, Mapping) and combat.get("active"):
+        return True
+    flags = state.get("flags")
+    return bool(flags.get("combat_active")) if isinstance(flags, Mapping) else False
+
+
+def _fight_target(state: Mapping[str, Any]) -> str:
+    """The entity id the running fight is against, if the state names one."""
+    combat = state.get("combat")
+    if isinstance(combat, Mapping):
+        target = _text(combat.get("target_id"))
+        if target:
+            return target
+    flags = state.get("flags")
+    if isinstance(flags, Mapping):
+        return _text(flags.get("combat_target"))
+    return ""
+
+
 def _room_facts(
     world: Any,
     state: Mapping[str, Any] | None,
@@ -318,21 +518,35 @@ def _room_facts(
     that is about to be shown to the player.
 
     * exits      -- neighbour rooms the rules would let them walk to,
+    * back_exits -- the subset that only leads back where the player came from,
     * doors      -- doors in this room that are still shut,
     * door_ids   -- the ids of those doors,
     * keys       -- keys for those doors that are here or already carried,
     * key_ids    -- the ids of those keys,
     * here_items -- items lying within reach,
     * here_item_ids -- their ids,
-    * characters -- people actually in this room, not the whole cast.
+    * characters -- people actually in this room, not the whole cast,
+    * hostiles   -- creatures here that would fight back,
+    * talked_to  -- characters this scene has already been talking to,
+    * quest      -- what the active quest still wants that is reachable here,
+    * quest_id   -- the quest that goal belongs to.
+
+    Everything is a plain list so a caller can render it without knowing which
+    model produced the state (GameState, a dict dump or a test stub).
     """
     facts: dict[str, list[str]] = {
-        "exits": [], "doors": [], "door_ids": [], "keys": [], "key_ids": [],
-        "here_items": [], "here_item_ids": [], "characters": [], "_here_name": [],
+        "exits": [], "back_exits": [], "doors": [], "door_ids": [], "keys": [],
+        "key_ids": [], "here_items": [], "here_item_ids": [], "characters": [],
+        "hostiles": [], "hostile_ids": [], "talked_to": [], "quest": [],
+        "quest_id": [], "_here_name": [],
     }
     if world is None:
         return facts
-    state = state if isinstance(state, Mapping) else {}
+    # Callers hand in either a GameState model or its dict dump; normalise
+    # once, so nothing below silently reads an empty state.
+    if not isinstance(state, Mapping):
+        dump = getattr(state, "model_dump", None)
+        state = dump() if callable(dump) else {}
     locations = {
         getattr(loc, "id", ""): loc for loc in (getattr(world, "locations", []) or [])
     }
@@ -357,6 +571,20 @@ def _room_facts(
     item_at = state.get("item_locations") if isinstance(state.get("item_locations"), Mapping) else {}
     doors = {_text(getattr(d, "id", "")): d for d in (getattr(world, "doors", []) or [])}
     items = {_text(getattr(i, "id", "")): i for i in (getattr(world, "items", []) or [])}
+    # Where the player came from. Only a property of the state, so a campaign
+    # that never moved keeps an empty list and every exit stays "forward".
+    try:
+        trail = [str(x) for x in (state.get("story_nodes") or [])]
+    except TypeError:
+        trail = []
+    previous = _text((state.get("flags") or {}).get("last_from")) if isinstance(
+        state.get("flags"), Mapping
+    ) else ""
+    if not previous and len(trail) >= 2:
+        # The trail records rooms, so the entry before this one is the room the
+        # player just left. Only an id the world actually defines counts: a
+        # trail entry naming somewhere else must not mark a real exit as "back".
+        previous = trail[-2] if trail[-2] in locations else ""
 
     def door_is_open(door: Any) -> bool:
         door_id = _text(getattr(door, "id", ""))
@@ -399,6 +627,9 @@ def _room_facts(
             continue
         if name:
             facts["exits"].append(name)
+            target_id = _text(getattr(exit_def, "target_id", "")) or _text(getattr(target, "id", ""))
+            if previous and target_id == previous:
+                facts["back_exits"].append(name)
 
     room_items = set(getattr(here, "item_ids", []) or [])
     for item_id, item in items.items():
@@ -418,10 +649,23 @@ def _room_facts(
             facts["here_item_ids"].append(item_id)
 
     live = state.get("entities") if isinstance(state.get("entities"), Mapping) else {}
+    dead = set()
+    for key, record in live.items():
+        alive = getattr(record, "alive", None)
+        hp = getattr(record, "hp", None)
+        if isinstance(record, Mapping):
+            alive = record.get("alive", alive)
+            hp = record.get("hp", hp)
+        if alive is False or (isinstance(hp, (int, float)) and hp <= 0):
+            dead.add(_text(key))
     for entity in getattr(world, "entities", []) or []:
         if getattr(entity, "kind", "npc") == "object":
             continue
         entity_id = _text(getattr(entity, "id", ""))
+        if entity_id in dead:
+            # A corpse on the floor is not someone to greet, and not a reason
+            # to keep describing the room as dangerous.
+            continue
         record = live.get(entity_id)
         if isinstance(record, Mapping):
             # A plain-dict record (e.g. a model_dump) keeps its place under the
@@ -439,9 +683,28 @@ def _room_facts(
         # Where they are *now* wins. The room's npc_ids list is authored and is
         # never rewritten when someone walks off, so trusting it would keep
         # offering "talk to X" to an empty room.
-        if place == here_id:
-            facts["characters"].append(_text(getattr(entity, "name", "")))
+        if place != here_id:
+            continue
+        name = _text(getattr(entity, "name", ""))
+        # A creature, or anything authored as hostile, is something to fight or
+        # leave - never someone to ask what happened here.
+        if getattr(entity, "kind", "npc") == "creature" or getattr(entity, "hostile", False):
+            facts["hostiles"].append(name)
+            facts["hostile_ids"].append(entity_id)
+            if getattr(entity, "hostile", False):
+                continue
+        facts["characters"].append(name)
 
+    # What the scene has already spent a turn on: re-offering "ask X" on the
+    # very next screen is what made the three buttons look frozen.
+    for entry in trail[-8:]:
+        if entry.startswith("talk:"):
+            facts["talked_to"].append(entry[5:])
+
+    facts["quest"], facts["quest_id"] = _quest_goal(
+        world, state, here_id=here_id, inventory=inventory,
+        item_at=item_at, door_state=door_state, items=items,
+    )
     facts["_here_name"] = [_text(getattr(here, "name", ""))] if _text(getattr(here, "name", "")) else []
     return facts
 
@@ -507,11 +770,20 @@ def suggestions_for_result(
         key_ids=facts["key_ids"],
         here_items=facts["here_items"],
         here_item_ids=facts["here_item_ids"],
+        hostiles=facts["hostiles"],
+        hostile_ids=facts["hostile_ids"],
+        in_combat=_in_combat(state),
+        talked_to=facts["talked_to"],
+        fight_target=_fight_target(state),
+        quest=facts["quest"],
+        quest_id=(facts["quest_id"] or [""])[0],
+        back_exits=facts["back_exits"],
         characters=[name for name, _ in people],
         character_ids=[entity_id for _, entity_id in people],
         items=item_names,
         language=language,
     )
+
 
 def hints_from_state(
     *,
@@ -523,6 +795,9 @@ def hints_from_state(
     doors: Mapping[str, Any] | None = None,
     item_locations: Mapping[str, str] | None = None,
     entities: Mapping[str, Any] | None = None,
+    combat: Mapping[str, Any] | None = None,
+    flags: Mapping[str, Any] | None = None,
+    story_nodes: Iterable[str] = (),
 ) -> list[Suggestion]:
     """Three options for the state a campaign is in *right now*.
 
@@ -544,6 +819,12 @@ def hints_from_state(
         view["doors"] = dict(doors)
     if isinstance(item_locations, Mapping):
         view["item_locations"] = dict(item_locations)
+    if isinstance(combat, Mapping):
+        view["combat"] = dict(combat)
+    if isinstance(flags, Mapping):
+        view["flags"] = dict(flags)
+    if story_nodes:
+        view["story_nodes"] = [_text(x) for x in story_nodes if x and _text(x)]
     if isinstance(entities, Mapping):
         view["entities"] = {}
         for key, record in entities.items():
@@ -571,6 +852,14 @@ def hints_from_state(
         key_ids=facts["key_ids"],
         here_items=facts["here_items"],
         here_item_ids=facts["here_item_ids"],
+        hostiles=facts["hostiles"],
+        hostile_ids=facts["hostile_ids"],
+        in_combat=_in_combat(view),
+        fight_target=_fight_target(view),
+        talked_to=facts["talked_to"],
+        quest=facts["quest"],
+        quest_id=(facts["quest_id"] or [""])[0],
+        back_exits=facts["back_exits"],
         characters=[name for name, _ in people],
         character_ids=[entity_id for _, entity_id in people],
         items=item_names,

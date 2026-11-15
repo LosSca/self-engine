@@ -116,8 +116,60 @@ _WORD_FOR_HINT: Dict[str, Tuple[str, ...]] = {
     "mine": ("矿", "矿井", "矿洞", "mine"),
     "library": ("图书馆", "藏书", "library", "archive"),
 }
+#: How long a shared character run has to be before a near-miss counts as the
+#: same place. Two characters ("广场") is already the distinctive part of a
+#: name; one character matches almost anything and would move the player.
+_LOOSE_NAME_MIN_RUN = 2
+
+
+def _shared_run(left: str, right: str) -> int:
+    """Longest common substring length, for near-miss place names."""
+    a, b = (left or "").strip(), (right or "").strip()
+    if not a or not b:
+        return 0
+    best = 0
+    previous = [0] * (len(b) + 1)
+    for ch in a:
+        current = [0] * (len(b) + 1)
+        for index, other in enumerate(b, start=1):
+            if ch == other:
+                current[index] = previous[index - 1] + 1
+                if current[index] > best:
+                    best = current[index]
+        previous = current
+    return best
+
+
+#: Words that end a name in running text: 向守卫开口问 has the name 守卫
+#: followed by the verb of speaking. Cutting there keeps the comparison to the
+#: name instead of to the rest of the sentence.
+_NAME_STOP_WORDS = (
+    "开口", "问起", "问道", "说话", "交谈", "对话", "打听", "聊", "问", "说",
+    "打招呼", "问候", "致意",
+    " ", "，", ",", "。", ".", "、", "：", ":", "的",
+)
+
 _ENVELOPE = re.compile(r"^\[([A-Z]+)\]\s*", re.IGNORECASE)
 _PARSE_FAILURES = {"missing_target", "ambiguous", "no_target"}
+
+#: Phrasing that means "I want to talk to X" without using the verb table's
+#: words. "向旅人开口" names a person with the verb inside a compound (开口), so
+#: the verb table finds nothing and the target was silently dropped. These are
+#: *frames*: the person is still resolved against the real world, so a frame
+#: can never invent a target.
+_ADDRESS_FRAMES = (
+    "向", "朝", "对", "跟", "和", "与", "冲",
+    "turn to", "say to", "speak to", "speak with", "talk to", "talk with",
+    "ask", "tell",
+)
+#: Openers that only mean "I start speaking"; they are never a target.
+#: Order matters: the verb words come first so "问主管" keeps its verb, and the
+#: list is only ever applied at the start of an utterance.
+_ADDRESS_PARTICLES = (
+    "向", "朝", "对着", "对于", "跟", "和", "与", "冲",
+    "开口", "问起", "问道",
+    "turn to", "say to", "speak to", "speak with", "talk to", "talk with",
+)
 
 
 @dataclass
@@ -190,6 +242,27 @@ def _clean_target(text: str) -> str:
         if value.startswith(suffix):
             value = value[len(suffix):]
     return value.strip()
+
+
+def _strip_address_particles(text: str, leading: int = 2) -> str:
+    """Drop a leading "向/对/跟…开口" scaffold, keeping the verb that follows."""
+    value = (text or '').strip()
+    # Only a couple of rounds: the scaffold is at the front, and stripping
+    # deeper would eat the verb itself ("问主管" must stay "问主管").
+    for _ in range(max(0, leading)):
+        stripped = False
+        for particle in _ADDRESS_PARTICLES:
+            if not particle or not value.startswith(particle):
+                continue
+            rest = value[len(particle):].strip().lstrip('，,、:：')
+            if not rest or rest == value:
+                continue
+            value = rest
+            stripped = True
+            break
+        if not stripped:
+            break
+    return value
 
 
 def _aliases(names: Sequence[str]) -> List[str]:
@@ -270,7 +343,34 @@ class TextActionParser:
         for suffix in _TRAILING:
             if suffix and lowered.endswith(suffix):
                 lowered = lowered[: -len(suffix)].strip()
+        if mode == "SAY":
+            # Speech may lead with the listener and put the verb inside a
+            # compound ("向旅人开口，问…"). Dropping the address particles here
+            # leaves either a bare verb ("问…") or a bare listener ("旅人…"),
+            # both of which the tables below can read.
+            lowered = _strip_address_particles(lowered)
         action, fragment = self._split_verb(lowered)
+        if action is None and mode == "DO":
+            # "向旅人问好": the frame was leading, so the verb sits behind the
+            # listener instead of in front of it. Reading the sentence again
+            # with the frame removed finds it; without this, plainly worded
+            # speech is filed as an improvised attempt.
+            bare = _strip_address_particles(lowered)
+            if bare and bare != lowered:
+                # Two readings of the same sentence: the verb may be bare
+                # ("问旅人好") or the listener may lead ("旅人问好"). The
+                # second only counts when the name really is a world entity,
+                # otherwise "问旅人好" would be read as talking to "旅人好".
+                bare_action, bare_fragment = self._split_verb(bare)
+                if bare_action != "talk":
+                    split_action, listener, bare_fragment = self._split_address_verb(bare)
+                    if split_action == "talk" and self._names_world_entity(listener, world):
+                        bare_action = "talk"
+                if bare_action == "talk":
+                    # Keep the listener in the fragment: the talk branch below
+                    # resolves it, and "旅人问好" names the listener more
+                    # clearly than the leftover "好" does.
+                    action, fragment = bare_action, bare
         if mode == "SAY" and action not in (None, "talk"):
             return None
         #: True when a rule did read this sentence and found it impossible
@@ -294,7 +394,7 @@ class TextActionParser:
                 # "老板，这块铁怎么卖？" is speech. The rule for talking needs
                 # somebody here, and it says who is - the same answer the
                 # advisor would give, without paying for a model call.
-                return self._addressable(state, world, "talk", raw)
+                return self._addressable(state, world, "talk", raw, lowered)
             if mode == "DO" and improvise and not explained and self._improvise_allowed(lowered):
                 return self._improvise(lowered, world, state)
             return None
@@ -319,34 +419,182 @@ class TextActionParser:
             note=f"could not resolve a target from '{fragment}'",
         )
 
-    @staticmethod
+    @classmethod
     def _addressable(
-        state: GameState, world: WorldDefinition, action: str, text: str
+        cls,
+        state: GameState,
+        world: WorldDefinition,
+        action: str,
+        text: str,
+        lowered: str = '',
     ) -> Optional[ParsedAction]:
-        """The only sensible target of `talk` when nobody was named.
+        """Who the speech was addressed to, or an honest "nobody heard it".
 
         A player who types speech expects the person in front of them to hear
-        it; the rule then answers with who is actually here, which is exactly
-        the hint a rejection would have given.
+        it. Two things used to go wrong here: the name in the sentence was
+        never resolved, so the rule saw a talk with no target and only listed
+        who was around; and when nobody was around, speech came back as a plain
+        rejection, as if the player had typed nonsense. Naming a listener is
+        resolving a target like any other verb's, so it goes through the same
+        candidate table, and a listener who is named but not here says so
+        instead of being silently dropped.
         """
-        from app.engines.event_engine import entity_location
-
-        here = [
-            entity
-            for entity in world.entities
-            if entity_location(state, world, entity.id) == state.location_id
-        ]
-        if not here:
+        named = cls._addressed_entity(lowered or _norm(text), world, state)
+        if named is not None:
             return ParsedAction(
-                action="talk",
+                action=action,
+                target_id=named.id,
+                matched_name=cls._display(named, world, action),
+                confidence="exact",
+                note="spoke to the listener in the sentence",
+            )
+        here = cls._talk_candidates(world, state)
+        if not here:
+            absent = cls._named_but_absent(lowered or _norm(text), world, state)
+            if absent is not None:
+                # Naming a real person who is elsewhere is a different answer
+                # from an empty room, and the player deserves the one that is
+                # true: the rule layer says they are not here.
+                return ParsedAction(
+                    action=action,
+                    target_id=absent.id,
+                    matched_name=cls._display(absent, world, action),
+                    confidence="exact",
+                    note="the listener named is somewhere else",
+                )
+            return ParsedAction(
+                action=action,
                 confidence="missing_target",
                 note="nobody is here to hear it",
+            )
+        if len(here) == 1:
+            return ParsedAction(
+                action=action,
+                target_id=here[0].id,
+                matched_name=cls._display(here[0], world, action),
+                confidence="spoken",
+                note="the only person here hears it",
             )
         return ParsedAction(
             action=action,
             confidence="spoken",
             note="said it out loud here",
+            candidates=[candidate.id for candidate in here],
         )
+
+    @classmethod
+    def _addressed_entity(
+        cls, text: str, world: WorldDefinition, state: GameState
+    ) -> Optional["_Candidate"]:
+        """The person named right after an address frame, if the world has one.
+
+        The frame matters: a place mentioned elsewhere in the same sentence
+        ("去指挥中心问主管") must not be mistaken for the listener. Only a name
+        that sits immediately after the frame counts, and it must resolve to a
+        real, living entity - a speech frame can never invent one.
+        """
+        lowered = (text or '').lower().replace('_', ' ')
+        here = cls._talk_candidates(world, state)
+        # Two readings, and the frame is the better evidence: a name right
+        # after an address frame ("向旅人", "ask the traveler") is the listener.
+        # Inside speech, naming a person at all usually means speaking to them
+        # ("问主管…"), so a mention counts only when the room has one person
+        # and the sentence does not frame somebody else.
+        best = None
+        best_span = -1
+        for frame in _ADDRESS_FRAMES:
+            start = lowered.find(frame)
+            while start >= 0:
+                after = start + len(frame)
+                for candidate in here:
+                    name = cls._name_after(lowered, after, candidate)
+                    if name is not None and len(name) > best_span:
+                        best, best_span = candidate, len(name)
+                start = lowered.find(frame, start + 1)
+        if best is not None:
+            return best
+        # Falling back to *any* entity would resolve to people who are not in
+        # the room; then the rule refuses with "not here" for someone the
+        # player never doubted was present. A missing listener is still worth
+        # reporting, so the absent-named branch below looks at all of them.
+        return cls._only_named_person(lowered, here)
+
+    @classmethod
+    def _named_but_absent(
+        cls, text: str, world: WorldDefinition, state: GameState
+    ) -> Optional["_Candidate"]:
+        """A person the sentence names who is real but is not in this room."""
+        everywhere = cls._talk_candidates(world, state, anywhere=True)
+        if not everywhere:
+            return None
+        lowered = (text or '').lower().replace('_', ' ')
+        for frame in _ADDRESS_FRAMES:
+            start = lowered.find(frame)
+            while start >= 0:
+                after = start + len(frame)
+                for candidate in everywhere:
+                    if cls._name_after(lowered, after, candidate) is not None:
+                        return candidate
+                start = lowered.find(frame, start + 1)
+        return cls._only_named_person(lowered, everywhere)
+
+    @staticmethod
+    def _only_named_person(
+        text: str, candidates: Sequence["_Candidate"]
+    ) -> Optional["_Candidate"]:
+        """The single person the sentence names, when it names exactly one."""
+        named = [c for c in candidates if c.match(text) >= 200]
+        if len(named) <= 1:
+            return named[0] if named else None
+        # More than one name in the sentence: pick the one it names most
+        # precisely (a full name beats a shared prefix), and only if that is
+        # unambiguous. Two genuinely different people means the sentence did
+        # not choose, so it stays unresolved.
+        ranked = sorted(named, key=lambda c: c.match(text), reverse=True)
+        first, second = ranked[0].match(text), ranked[1].match(text)
+        first_id, second_id = ranked[0].id, ranked[1].id
+        del first_id, second_id
+        return ranked[0] if first > second else None
+
+    @staticmethod
+    def _name_after(
+        text: str, offset: int, candidate: "_Candidate"
+    ) -> Optional[str]:
+        """The candidate's name starting right after `offset`.
+
+        A player who writes 守卫 for 守林人 has named a real person with the
+        wrong word - the same word the game itself would use loosely. Refusing
+        it as "there is nothing by that name" is technically true and useless,
+        so a window that shares enough characters with a name resolves to it.
+        The threshold is deliberately high: two shared characters, and the
+        candidate must be the closest one, or an off-hand word could decide
+        who the player is talking to.
+        """
+        window = text[offset: offset + 24].lstrip('，,、 \t')
+        if not window:
+            return None
+        for name in candidate.names:
+            if window.startswith(name):
+                return name
+        # Cut the window at the first verb or particle: 向守卫开口 has the name
+        # 守卫 followed by 开口, and comparing the whole window would compare
+        # the verb too.
+        head = window
+        for stop in _NAME_STOP_WORDS:
+            cut = head.find(stop)
+            if 0 < cut < len(head):
+                head = head[:cut]
+        head = head.strip()
+        if not head:
+            return None
+        best_name, best_run = None, 0
+        for name in candidate.names:
+            run = _shared_run(head, name)
+            if run > best_run:
+                best_name, best_run = name, run
+        if best_name is not None and best_run >= _LOOSE_NAME_MIN_RUN:
+            return head[: len(head)]
+        return None
 
     @staticmethod
     def _improvise_allowed(lowered: str) -> bool:
@@ -461,6 +709,16 @@ class TextActionParser:
                 if name in haystack:
                     scored.append((1000 + len(name), location.id))
                     break
+                # A place the player half-remembers: the same place said with
+                # one different character ("村子广场" for "村口广场") is not a
+                # name match, but it is the same intent, and rejecting it
+                # tells the player their words were wrong when they were not.
+                # Only a unique, high-overlap hit counts, so two places that
+                # both look similar stay a rejection.
+                overlap = _shared_run(name, location.name)
+                if overlap >= _LOOSE_NAME_MIN_RUN:
+                    scored.append((500 + overlap, location.id))
+                    break
                 # The player's own word for a place ("铁匠铺") is not in its
                 # English name, so the Chinese description an author wrote is
                 # part of the evidence. Without it a translated world would
@@ -502,6 +760,64 @@ class TextActionParser:
                 if _verb_prefix(text, verb):
                     return action, _clean_target(text[len(verb):])
         return None, text
+
+    @staticmethod
+    def _named_anywhere(
+        name: str, world: WorldDefinition
+    ) -> Optional["_Candidate"]:
+        """The person a bare name refers to, wherever they are standing."""
+        needle = (name or "").strip().lower()
+        if not needle:
+            return None
+        for entity in world.entities:
+            if needle in (entity.name.lower(), entity.id.lower()):
+                if entity.kind == "object":
+                    return None
+                return _Candidate(entity.id, [entity.name, entity.id], entity.kind)
+        return None
+
+    @staticmethod
+    def _names_world_entity(text: str, world: WorldDefinition) -> bool:
+        """Whether a word is actually a name in this world (not just any word)."""
+        needle = (text or "").strip().lower()
+        if not needle:
+            return False
+        for entity in world.entities:
+            if needle in (entity.name.lower(), entity.id.lower()):
+                return True
+        for location in world.locations:
+            if needle in (location.name.lower(), location.id.lower()):
+                return True
+        return False
+
+    @staticmethod
+    def _split_address_verb(
+        text: str,
+    ) -> Tuple[Optional[str], str, str]:
+        """Split "listener + talk verb" ("旅人问好") into its two parts.
+
+        Speech puts the listener first more often than a verb table allows
+        for, and the verb then sits *after* a name the parser only learns
+        about from the world. Only talk-shaped verbs take this reading, and
+        the word before the verb has to be a name in this world - otherwise
+        "问旅人好" would be read as listener "问" talking to "旅人好".
+        """
+        for action, verbs in _VERBS:
+            if action != "talk":
+                continue
+            for verb in verbs:
+                verb = verb.rstrip()
+                if not verb:
+                    continue
+                index = text.find(verb)
+                if index <= 0:
+                    continue
+                listener = text[:index].strip()
+                if not listener:
+                    continue
+                rest = _clean_target(text[index + len(verb):])
+                return action, listener, rest
+        return None, "", text
 
     # -- world-authored actions --------------------------------------------
     @staticmethod
@@ -641,6 +957,24 @@ class TextActionParser:
         if action == "look":
             if fragment in ("", "around", "周围", "四周"):
                 return ParsedAction(action="look", confidence="verb_only")
+            # Looking *at* something is not looking around: a named target has
+            # to reach the rule layer as an inspection, otherwise the NPC/item
+            # is silently dropped, the room is described instead, and the
+            # player is told nothing about what they asked about.
+            candidates = (
+                self._entity_candidates(world, state)
+                + self._item_candidates(world, state)
+                + self._door_candidates(world, state)
+            )
+            matched = self._best(fragment, candidates)
+            if matched is not None:
+                return ParsedAction(
+                    action="investigate",
+                    target_id=matched.id,
+                    matched_name=self._display(matched, world, "investigate"),
+                    confidence="exact",
+                    note=f"looking at {matched.id} from '{fragment}'",
+                )
             return ParsedAction(action="look", target_id=fragment)
         if action == "flee":
             return ParsedAction(action="flee", confidence="verb_only")
@@ -715,6 +1049,56 @@ class TextActionParser:
             )
         if action == "talk" and not fragment:
             return ParsedAction(action="talk", confidence="verb_only")
+        if action == "talk":
+            # "旅人问好": no frame at all, just a name and the verb. The name
+            # is world knowledge, so this reading is tried against every
+            # person in the world - but the resolved id still reaches the
+            # rule layer, which is what decides whether they are here.
+            bare_action, bare_listener, _bare_rest = self._split_address_verb(
+                fragment
+            )
+            if bare_action == "talk" and self._names_world_entity(
+                bare_listener, world
+            ):
+                speaker = self._named_anywhere(bare_listener, world)
+                if speaker is not None:
+                    return ParsedAction(
+                        action="talk",
+                        target_id=speaker.id,
+                        matched_name=self._display(speaker, world, action),
+                        confidence="exact",
+                        note="the listener led the sentence",
+                    )
+            # whatever the remainder names. Resolving it here keeps speech on
+            # the same candidate table as every other verb instead of falling
+            # through to a nameless talk.
+            #
+            # The listener may also come first ("向旅人问好"), where the verb
+            # sits behind the address frame rather than in front of it. Strip
+            # the frame and try both readings, so either word order resolves.
+            listener = self._addressed_entity(fragment, world, state)
+            if listener is None:
+                bare = _strip_address_particles(fragment)
+                if bare and bare != fragment:
+                    listener = self._addressed_entity(bare, world, state)
+            if listener is None:
+                # "旅人问好": the verb sat inside the sentence, so the address
+                # frame is gone and only a bare name leads. Still a listener,
+                # and still only if this world actually has that name.
+                action_word, listener_name, _rest = self._split_address_verb(
+                    fragment
+                )
+                if action_word == "talk" and self._names_world_entity(
+                    listener_name, world
+                ):
+                    listener = self._addressed_entity(listener_name, world, state)
+            if listener is not None:
+                return ParsedAction(
+                    action="talk",
+                    target_id=listener.id,
+                    matched_name=self._display(listener, world, action),
+                    confidence="exact",
+                )
         if action == "wait":
             # Waiting has no target: the duration lives in params so the rule
             # never has to parse prose.
@@ -863,6 +1247,14 @@ class TextActionParser:
             target = locations.get(exit_def.target_id)
             if target is not None:
                 candidates.append(_Candidate(target.id, [target.name, target.id, exit_def.label], "location"))
+        # The room the player is standing in is a real destination too: "去村子
+        # 广场" while already in the square is the player naming where they are,
+        # and no exit points back at its own source. Offering it here lets the
+        # rule answer "you are already there" instead of "I could not match
+        # that to anything", which blamed the player for a correct place name.
+        candidates.append(
+            _Candidate(state.location_id, [here.name, here.id], "location")
+        )
         return candidates
 
     @staticmethod
@@ -929,6 +1321,40 @@ class TextActionParser:
             and condition_holds(state, world, Condition(kind="entity_alive", target=entity.id))
         ]
 
+    @staticmethod
+    def _all_entity_candidates(world: WorldDefinition) -> List[_Candidate]:
+        """Every living entity in the world, wherever it is standing."""
+        return [
+            _Candidate(entity.id, [entity.name, entity.id], entity.kind)
+            for entity in world.entities
+            if entity.kind != "object"
+        ]
+
+    @staticmethod
+    def _living_candidates(
+        world: WorldDefinition, state: GameState, anywhere: bool
+    ) -> List[_Candidate]:
+        """Every entity that still exists, optionally restricted to this room.
+
+        The room filter used to be an id comparison on EntityDef.location_id,
+        which is only the *starting* position. An NPC who walked away still
+        looked present, so "talk to the one who is here" offered someone who
+        had left - and the rule then refused with "not here" for a person the
+        player was told was standing in front of them.
+        """
+        out: List[_Candidate] = []
+        for entity in world.entities:
+            if entity.kind == "object":
+                continue
+            if not condition_holds(
+                state, world, Condition(kind="entity_alive", target=entity.id)
+            ):
+                continue
+            if not anywhere and entity_location(state, world, entity.id) != state.location_id:
+                continue
+            out.append(_Candidate(entity.id, [entity.name, entity.id], entity.kind))
+        return out
+
     @classmethod
     def _enemy_candidates(cls, world: WorldDefinition, state: GameState) -> List[_Candidate]:
         eligible = {
@@ -940,16 +1366,26 @@ class TextActionParser:
         return [c for c in cls._entity_candidates(world, state) if c.id in eligible]
 
     @classmethod
-    def _talk_candidates(cls, world: WorldDefinition, state: GameState) -> List[_Candidate]:
-        candidates = [
-            candidate for candidate in cls._entity_candidates(world, state)
-            if candidate.kind != "object"
-        ]
-        known = {entity.id for entity in world.entities}
-        location = next((loc for loc in world.locations if loc.id == state.location_id), None)
-        for npc_id in getattr(location, "npc_ids", []) if location else []:
-            if npc_id not in known:
-                candidates.append(_Candidate(npc_id, [npc_id], "entity"))
+    def _talk_candidates(
+        cls, world: WorldDefinition, state: GameState, anywhere: bool = False
+    ) -> List[_Candidate]:
+        """People the player can address, by default only those in this room.
+
+        The room filter has to be optional: resolving a listener who is named
+        but elsewhere is how "not here" gets reported, instead of being
+        flattened into "nobody here" and blaming the wrong thing.
+        """
+        candidates = cls._living_candidates(world, state, anywhere)
+        # A room may list an id the world never defined. Such a person cannot
+        # be located, so they are only assumed present where they are listed.
+        if not anywhere:
+            known = {entity.id for entity in world.entities}
+            location = next(
+                (loc for loc in world.locations if loc.id == state.location_id), None
+            )
+            for npc_id in getattr(location, "npc_ids", []) if location else []:
+                if npc_id not in known:
+                    candidates.append(_Candidate(npc_id, [npc_id], "entity"))
         return candidates
 
 

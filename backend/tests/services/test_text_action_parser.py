@@ -119,23 +119,29 @@ async def test_unsupported_sentences_and_envelopes_do_not_mutate(service, text):
 
 @pytest.mark.parametrize("text", ["sneak past guard", "[DO] sneak past guard"])
 async def test_a_sentence_with_no_known_verb_is_an_attempt(service, text):
-    """Free text is the form's whole point: record the try, change nothing else."""
+    """Free text is the form's whole point: record the try, and be seen trying.
+
+    The attempt may not do what the player imagined - sneak past a guard is
+    not a verb the world defines - but it must leave the world a little
+    different, or the whole input form is decorative. It stays safe: nobody
+    moves, nothing enters the inventory, the guard simply notices.
+    """
     store = service.game_store
     result = await service.execute("camp-1", text, narrate=False)
     assert result["status"] == "applied", result
     assert result["parsed"]["action"] == "improvise"
     assert result["result"]["code"] == "improvised"
     # The engine seeds any entity that exists only in the authored world
-    # (lazy materialisation), so the attempt itself adds no other effect.
+    # (lazy materialisation), so the attempt itself adds no other effect here.
     self_effects = [
         effect
         for effect in result["result"]["effects_applied"]
-        if effect["kind"] != "seed_entity"
+        if effect["kind"] not in {"seed_entity", "adjust_alert"}
     ]
     assert self_effects == []
     after = store.get_state("camp-1")
     assert after.location_id == "village_square"
-    assert after.inventory == {}
+    assert after.inventory == {}, "自由文本不能凭空拿到东西"
 
 
 async def test_a_wish_that_names_no_verb_is_recorded_as_written(service):
@@ -170,10 +176,23 @@ def test_investigate_resolves_a_present_target(text, target):
     assert parsed.target_id == target
 
 
-@pytest.mark.parametrize("text", ["look Chest", "look iron_key", "look nonexistent"])
-async def test_targeted_look_is_explicitly_unsupported(service, text):
-    before = service.game_store.get_state("camp-1").model_dump_json()
+@pytest.mark.parametrize("text, target", [("look Chest", "chest"), ("look iron_key", "iron_key")])
+async def test_a_targeted_look_becomes_a_real_investigation(service, text, target):
+    """Looking AT something is examining it, not an impossible bare glance.
+
+    This used to be rejected as "unsupported_target" because look took no
+    target at all. The rule lane has investigate; a sentence with a subject in
+    it belongs there, so the turn does something instead of scoring a refusal.
+    """
     result = await service.execute("camp-1", text, narrate=False)
+    assert result["status"] == "applied"
+    assert result["parsed"]["action"] == "investigate"
+    assert result["parsed"]["target_id"] == target
+
+
+async def test_looking_at_an_absent_thing_is_still_a_rejection(service):
+    before = service.game_store.get_state("camp-1").model_dump_json()
+    result = await service.execute("camp-1", "look nonexistent", narrate=False)
     assert result["status"] == "rejected"
     assert result["result"]["code"] == "unsupported_target"
     assert result["parsed"]["target_id"]

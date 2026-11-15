@@ -2140,6 +2140,12 @@ def _current_hints(campaign_id: str) -> list[Dict[str, Any]]:
             doors=getattr(state, "doors", None),
             item_locations=getattr(state, "item_locations", None),
             entities=getattr(state, "entities", None),
+            # A running fight, the scene trail and the quest progress decide
+            # whether the screen leads with a fight, repeats a question or
+            # walks back the way the player came.
+            combat=getattr(state, "combat", None),
+            flags=getattr(state, "flags", None),
+            story_nodes=getattr(state, "story_nodes", None),
         )
     except Exception:  # noqa: BLE001 - hints must never break a screen
         logger.debug("hints unavailable for %s", campaign_id, exc_info=True)
