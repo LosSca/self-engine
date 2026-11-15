@@ -27,7 +27,7 @@ const git = (args, env) => execFileSync('git', args, {
 
 ## 目录布局
 
-仓库根目录下 `backend/`（FastAPI + SQLite）、`frontend/`（React + Vite）、`desktop/`（Tauri 壳）、`scripts/`、`docs/`。下面的 `<repo>` 指仓库根目录。
+仓库根目录下 `backend/`（FastAPI + SQLite）、`frontend/`（React + Vite）、`desktop/`（Tauri 2 壳：`src-tauri/` 是 Rust 壳，`npm run build` 出安装包；不要换成别的壳，打包那条路只有它有）、`scripts/`、`docs/`。下面的 `<repo>` 指仓库根目录。
 
 ## 测试
 

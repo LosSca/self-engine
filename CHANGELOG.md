@@ -54,13 +54,15 @@
 
 ### Added
 
-- **桌面窗口（最小可用版）**：`python launch.py --app` 现在会把构建好的界面和后端放在**同一个
-  端口**上，再用 Electron 打开一个独立窗口。之前窗口需要"前端 5173 + 后端 8000 + 一条反代规则"，
-  这三样只要有一处不同步就是白屏；现在只有一个进程在回答两边，`/api` 与界面同源，没有第二套
-  地址要维护。静态托管是**可选开关**（`SELF_ENGINE_DESKTOP_DIST`），普通启动完全不受影响：
-  前端路由（`/studio`）回落到 `index.html`，静态资源按真实 MIME 返回，路径穿越读不到构建目录
-  之外的任何文件。渲染进程保持 `contextIsolation` + `sandbox`，页面拿不到 Node；关窗即停服务。
-  还没有安装包、自动更新与签名——那是"发给别人直接装"才需要的一层。
+- **单端口窗口**：`python launch.py --app` 会把构建好的界面和后端放在**同一个端口**上，再用
+  浏览器的 app 模式打开一个无地址栏的窗口。之前窗口需要"前端 5173 + 后端 8000 + 一条反代规则"，
+  这三样只要有一处不同步就是白屏；现在只有一个进程在回答两边，`/api` 与界面同源。静态托管是
+  **可选开关**（`SELF_ENGINE_DESKTOP_DIST`），普通启动完全不受影响：前端路由（`/studio`）
+  回落到 `index.html`，静态资源按真实 MIME 返回，路径穿越读不到构建目录之外的任何文件。
+  打包成安装程序仍然走 `desktop/` 的 Tauri 壳（`npm run build`），这条路径没有改动。
+  顺带修掉一个会让 Tauri 窗口空转的缺陷：`launch.py` 起后端时从不设置 `LUNAR_CORS_ORIGINS`，
+  而 Tauri 页面来自 `tauri://localhost`，跨端口请求会整片死在 CORS 上；现在启动器在子进程环境里
+  追加这几个来源（用户自己的 `LUNAR_CORS_ORIGINS` 照旧保留）。
 - **混合式世界模拟 · Phase 5（小镇压力测试与修出来的缺陷）**：一座 5 地点、6 名 NPC 的小镇
   （`tests/fixtures/hollowmere_world.json`）作为端到端验证世界：`tests/api/test_town_simulation.py`
   用 9 条测试跑通「自由行动 → NPC 自主 → 世界时间 → 调度触发 → 7 日连贯 → 同输入同状态」。

@@ -574,7 +574,7 @@ start.bat           # Windows
 | 命令 | 前端 | 端口 | 适合 |
 |------|------|------|------|
 | `start.bat` / `python launch.py` | vite dev（热更新） | 5173（被占用则顺延到 5174、5175…） | 改前端代码时 |
-| `python launch.py --app` | 后端同时托管 `frontend/dist`，Electron 窗口开在同端口的 `/` | 8000 | 想要一个独立窗口 |
+| `python launch.py --app` | 后端同时托管 `frontend/dist`，窗口开在同端口的 `/` | 8000 | 想要一个独立窗口（不用 Tauri 打包） |
 | `start.bat --prod` | `npm run build` + 自带静态服务器托管 `frontend/dist` | 4173 | 演示、桌面快捷方式 |
 
 > **端口被占用时不再打开别人的页面**：启动器会先确认 5173 上是不是本项目的页面，
@@ -603,31 +603,36 @@ start.bat           # Windows
 CORS 挡不住这种情况——它只约束浏览器，而任何脚本都能直接发请求。
 启动器在 `--host 0.0.0.0` 且未设 `API_TOKEN` 时会打印警告。
 
-### 桌面窗口（可选）
+### 桌面端（可选）
 
-想要"双击一个图标，开一个独立窗口"，而不是开浏览器标签页：
+`desktop/` 是一个 Tauri 2 壳：原生窗口里跑的就是上面这套前端，后端由启动器拉起，关窗即停。
+需要 Rust stable + Node 18+。
 
 ```bash
-cd frontend && npm install && npm run build     # 界面构建产物
-cd ../desktop && npm install                    # Electron 壳（首次会下载约 100 MB 的运行时）
-cd .. && python launch.py --app                 # 起后端 + 打开窗口
+cd frontend && npm install && npm run build
+cd ../desktop && npm install
+npm run build        # 产物在 desktop/src-tauri/target/release/bundle/
 ```
 
-`--app` 与平时启动的区别只有一处：后端自己把 `frontend/dist` 托管在同一个端口上。
-**一个端口、一个来源**——窗口加载 `http://127.0.0.1:8000/`，`/api` 同源直达，不需要
-第二个端口，也不需要一条得跟着改的反代规则。那三样东西只要有一处不同步，窗口里就是白屏；
-现在是同一个进程在回答两边。
+开发期想直接看窗口（带热更新）：`cd desktop && npm run dev`。
 
-- 窗口是普通的 Electron 窗口：渲染进程保持 `contextIsolation` + `sandbox`，页面拿不到 Node；
-  站外链接交给系统浏览器打开。
-- 关掉窗口就等于停止服务，不用再单独关终端。
-- 本轮是**最小可用版**：没有安装包、没有自动更新、没有代码签名。要发给别人直接装，还需要
-  打包与签名的一套流程。
-- 国内网络下载 Electron 二进制失败时，先设镜像再装：
-  `$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'`。
-- 细节与边界见 [`desktop/README.md`](desktop/README.md)。
+> Windows 上**必须用 MSVC 工具链**（`rustup default stable-x86_64-pc-windows-msvc` + Visual Studio
+> "使用 C++ 的桌面开发"）。MinGW 能编译通过，但 WebView2 创建窗口时会返回
+> `HRESULT 0x8000FFFF`——这是 Tauri 的限制，不是本壳的 bug。
 
-不想装 Electron 的话，`start.bat --prod` + Chrome「创建快捷方式（以窗口形式打开）」也是同一效果。
+想在一个窗口里前端后端**只占一个端口**（不用 Tauri 的生产打包，用于自测或做快捷方式）：
+
+```bash
+cd frontend && npm install && npm run build
+python launch.py --app     # 后端同时托管 frontend/dist，窗口开在 8000 端口
+```
+
+`--app` 与平时启动的区别只有一处：后端自己把 `frontend/dist` 托管在 `/` 上，窗口加载
+`http://127.0.0.1:8000/`，`/api` 同源直达——没有第二个端口，也没有一条得跟着改的反代规则。
+那三样东西只要有一处不同步，窗口里就是白屏；现在是同一个进程在回答两边。静态托管是可选
+开关（`SELF_ENGINE_DESKTOP_DIST`），普通启动完全不受影响。
+
+不想装 Rust 的话，`start.bat --prod` + Chrome「创建快捷方式（以窗口形式打开）」也是同一效果。
 
 ---
 

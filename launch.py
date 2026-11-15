@@ -68,7 +68,7 @@ HEALTH_URL = "http://127.0.0.1:%d/api/health" % BACKEND_PORT
 CREATE_NEW_CONSOLE = 0x00000010
 
 #: 桌面壳（desktop/）：一个 Electron 载体，窗口里只有本机后端的地址。
-DESKTOP = ROOT / "desktop"
+DESKTOP = ROOT / "desktop"  # Tauri 壳：desktop/src-tauri，打包走 desktop/ 里的 npm run build
 
 LABELS = {"backend": "后端", "frontend": "前端"}
 LOG_NAMES = {"backend": "backend.log", "frontend": "frontend.log"}
@@ -230,6 +230,12 @@ def wait_until(predicate, timeout: float, interval: float = 0.5) -> bool:
     return False
 
 
+#: Origins a desktop webview uses for its own pages. A Tauri window loads
+#: tauri://localhost, so its fetches to 127.0.0.1:8000 are cross-origin and the
+#: backend has to name that origin explicitly or every request dies at CORS.
+DESKTOP_ORIGINS = ("tauri://localhost", "http://tauri.localhost", "https://tauri.localhost")
+
+
 def child_env(debug: bool) -> dict[str, str]:
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
@@ -237,6 +243,12 @@ def child_env(debug: bool) -> dict[str, str]:
     env["PYTHONUNBUFFERED"] = "1"
     if debug:
         env["LUNAR_DUMP_LLM_CALLS"] = "1"
+    # Appended, never replaced: a user's own LUNAR_CORS_ORIGINS must survive.
+    existing = [o.strip() for o in env.get("LUNAR_CORS_ORIGINS", "").split(",") if o.strip()]
+    for origin in DESKTOP_ORIGINS:
+        if origin not in existing:
+            existing.append(origin)
+    env["LUNAR_CORS_ORIGINS"] = ",".join(existing)
     return env
 
 
@@ -332,52 +344,80 @@ def desktop_app_url() -> str:
     return "http://127.0.0.1:%d/" % BACKEND_PORT
 
 
-def desktop_electron() -> Path | None:
-    """Electron 的可执行文件；装在 desktop/node_modules 里，不污染前端依赖。"""
+#: What a browser window has to pass to look like an app: no tabs, no address
+#: bar, its own size. Chromium and Edge both accept these.
+_APP_WINDOW_FLAGS = ["--app=%s", "--window-size=1440,900"]
+
+
+def app_window_browser() -> tuple[str, str] | None:
+    """A Chromium-family browser usable in app mode, plus the name to show.
+
+    The repository's own desktop shell is Tauri (`desktop/src-tauri`, see
+    `npm run build`) and that stays the packaging path. This fallback exists so
+    `--app` still gives you a window on a machine without the Rust toolchain:
+    any Chromium browser can show one page without browser chrome.
+    """
+    candidates: list[tuple[str, str]] = []
     if os.name == "nt":
-        binary = DESKTOP / "node_modules" / "electron" / "dist" / "electron.exe"
+        for name in ("chrome", "msedge"):
+            found = shutil.which(name)
+            if found:
+                candidates.append((found, "Chrome" if name == "chrome" else "Edge"))
+        roots = [
+            os.environ.get("PROGRAMFILES", ""),
+            os.environ.get("PROGRAMFILES(X86)", ""),
+            os.environ.get("LOCALAPPDATA", ""),
+        ]
+        for root in [r for r in roots if r]:
+            candidates.append(
+                (str(Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"), "Chrome")
+            )
+            candidates.append(
+                (str(Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"), "Edge")
+            )
     elif sys.platform == "darwin":
-        binary = (
-            DESKTOP
-            / "node_modules"
-            / "electron"
-            / "dist"
-            / "Electron.app"
-            / "Contents"
-            / "MacOS"
-            / "Electron"
-        )
+        candidates = [
+            ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "Chrome"),
+            ("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "Edge"),
+        ]
     else:
-        binary = DESKTOP / "node_modules" / "electron" / "dist" / "electron"
-    return binary if binary.is_file() else None
+        for name in ("google-chrome", "chromium", "chromium-browser", "microsoft-edge"):
+            found = shutil.which(name)
+            if found:
+                candidates.append((found, name))
+    for path, label in candidates:
+        if path and Path(path).is_file():
+            return path, label
+    return None
 
 
 def open_desktop_window(url: str) -> int:
-    """把已经就绪的后端地址交给桌面壳。窗口关闭即退出，服务由外面的看门狗回收。"""
-    electron = desktop_electron()
-    if electron is None:
-        say("[错误] 找不到桌面壳运行时：%s" % (DESKTOP / "node_modules" / "electron"))
-        say("       先执行  cd desktop ^&^& npm install")
+    """把已经就绪的地址开成一个窗口。进程退出即窗口关闭，服务由外面的看门狗回收。"""
+    found = app_window_browser()
+    if found is None:
+        say("[错误] 没找到可用的 Chromium 内核浏览器（Chrome / Edge）。")
+        say("       这条路径只是不装 Rust 时的退路：直接打开 %s 即可。" % url)
         return 1
-    env = dict(os.environ)
-    env["LUNAR_APP_URL"] = url
-    env["LUNAR_BACKEND_PORT"] = str(BACKEND_PORT)
-    say("[窗口] 打开桌面窗口: %s" % url)
-    proc = subprocess.Popen([str(electron), str(DESKTOP)], cwd=str(DESKTOP), env=env)
+    binary, label = found
+    say("[窗口] 用 %s 的窗口模式打开: %s" % (label, url))
+    flags = [flag % url if "%s" in flag else flag for flag in _APP_WINDOW_FLAGS]
+    proc = subprocess.Popen([binary, *flags], cwd=str(ROOT))
     return proc.wait()
 
 
 def run_desktop(py: str, host: str, debug: bool) -> int:
-    """--app：一个进程里起后端，后端自己托管 dist，然后开窗口。
+    """--app：一个进程里起后端，后端自己托管 dist，然后开一个窗口。
 
     与本地开发的区别只有一个：前端不再单独起，构建产物由后端在同一个端口上
-    提供，于是窗口里只有一种来源，不存在跨端口代理与 CORS 的偶发失败。
+    提供，于是窗口里只有一种来源，不存在跨端口代理与 CORS 的偶发失败。窗口本体
+    用浏览器的 app 模式（无地址栏、无标签页）；要真正的安装程序，用 Tauri 壳。
     """
     if not (DIST / "index.html").is_file():
         say("[错误] 桌面模式需要 frontend/dist：先执行  npm --prefix frontend run build")
         return 1
-    if desktop_electron() is None:
-        say("[错误] 桌面壳还没安装：先执行  cd desktop ^&^& npm install")
+    if app_window_browser() is None:
+        say("[错误] 没找到 Chrome / Edge：这条路径靠它们的窗口模式显示界面。")
+        say("       打包成安装程序请用 desktop/ 里的 Tauri 壳（cd desktop ^&^& npm run build）。")
         return 1
     if port_open(BACKEND_PORT) and not http_ok(HEALTH_URL):
         say("[错误] 端口 %d 已被其他进程占用，但它不是本项目的后端。" % BACKEND_PORT)
@@ -404,7 +444,7 @@ def run_desktop(py: str, host: str, debug: bool) -> int:
             return 1
         say("[2/2] 打开窗口")
         say()
-        say("关闭窗口即停止服务。")
+        say("关闭窗口即停止服务（地址 %s 仍可在浏览器里打开）。" % desktop_app_url())
         return open_desktop_window(desktop_app_url())
     finally:
         if child is not None:
@@ -447,6 +487,11 @@ def spawn_service(
         relaunch.append("--prod")
     if debug:
         relaunch.append("--debug")
+    if extra_env:
+        # The relaunched child rebuilds its own environment from scratch, so
+        # anything spawn_service was told to add has to ride along as flags.
+        for name in sorted(extra_env):
+            relaunch += ["--set-env", "%s=%s" % (name, extra_env[name])]
     say("  · %s -> 独立窗口「自指引擎 - %s」" % (label, label))
     return subprocess.Popen(relaunch, cwd=str(ROOT), env=env, creationflags=CREATE_NEW_CONSOLE)
 
@@ -653,10 +698,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run-frontend", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
+    # Carries spawn_service's extra_env across the self-relaunch seam: the
+    # child process starts from a fresh environment and would otherwise lose
+    # the switch that makes it serve the built app.
+    parser.add_argument("--set-env", action="append", default=[], metavar="K=V", help=argparse.SUPPRESS)
     parser.add_argument(
         "--app",
         action="store_true",
-        help="桌面壳模式：只起后端，并让它直接托管 frontend/dist，随后打开独立窗口。",
+        help="单端口窗口：只起后端，并让它直接托管 frontend/dist，再用浏览器窗口模式打开。"
+        "打包成安装程序请用 desktop/ 里的 Tauri 壳（npm run build）。",
     )
     parser.add_argument(
         "--open-app",
@@ -681,6 +731,11 @@ def main(argv: list[str] | None = None) -> int:
     # 桌面壳的第二步：服务已经就绪，这里只负责把窗口开出来。
     if args.open_app:
         return open_desktop_window(args.open_app)
+
+    for item in args.set_env:
+        name, _, value = item.partition("=")
+        if name:
+            os.environ[name] = value
 
     # 内部模式：本进程就是这个服务（由窗口模式自我重启产生）。
     if args.run_backend:
