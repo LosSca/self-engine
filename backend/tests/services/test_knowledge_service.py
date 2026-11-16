@@ -412,3 +412,84 @@ def test_sorting_does_not_scan_the_whole_entry_list_per_comparison():
     assert len(context.blocks) == 400
     assert elapsed < 2.0, f"assemble took {elapsed:.2f}s for 400 entries"
 
+
+
+# --------------------------------------------------------------- graph 通道
+# 这三条测试钉住的是「图谱通道真的被接上了」这件事：RetrievalService 一直有
+# graph 槽位，但在 build_context 里从来没被填过，线上等于没有多跳关系召回。
+
+
+class _FakeGraphChannel:
+    """一个同步的假图谱通道，返回一条固定的关系事实。"""
+
+    def __init__(self, calls, doc_id="graph:fact"):
+        self._calls = calls
+        self._doc_id = doc_id
+
+    def search(self, query):
+        from app.services.retrieval.models import RetrievedDoc
+
+        self._calls.append(query)
+        return [
+            RetrievedDoc(
+                doc_id=self._doc_id,
+                score=1.0,
+                channel="graph",
+                text="老巴克的铁钥匙在他身上",
+                metadata={},
+                provenance="graph:1hop:2hit",
+            )
+        ]
+
+
+def test_build_context_fills_the_graph_channel_when_a_factory_is_given():
+    entries = [_entry("e1", title="雾港", content="雾港的码头")]
+    calls = []
+    built = []
+
+    def factory(campaign_id, scene_text, names):
+        built.append((campaign_id, scene_text, list(names)))
+        return _FakeGraphChannel(calls)
+
+    context = knowledge_service.build_context(
+        entries,
+        query="雾港",
+        focus=["雾港"],
+        campaign_id="c-1",
+        graph_retriever=factory,
+    )
+
+    # 工厂拿到的是 campaign id、场景文本与在场名单，而不是整段旁白。
+    assert built and built[0][0] == "c-1"
+    assert "雾港" in built[0][1]
+    assert built[0][2] == ["雾港"]
+    # 通道被真的调用过，命中进到了 trace 里（证明它参与了融合，而不是被丢弃）。
+    assert calls
+    assert context.stats.retrieval_channels.get("graph") == 1
+
+
+def test_build_context_without_a_factory_never_touches_the_graph():
+    entries = [_entry("e1", title="雾港", content="雾港的码头")]
+    context = knowledge_service.build_context(entries, query="雾港", campaign_id="c-1")
+
+    # 没有工厂 = 通道缺席；同时也不该被记成「降级」（降级是「配了但坏了」）。
+    assert "graph" not in context.stats.retrieval_channels
+    assert not any(item.startswith("graph") for item in context.stats.retrieval_degraded)
+
+
+def test_a_factory_that_raises_degrades_instead_of_failing_the_turn():
+    entries = [_entry("e1", title="雾港", content="雾港的码头")]
+
+    def factory(campaign_id, scene_text, names):
+        raise RuntimeError("neo4j 掉线")
+
+    context = knowledge_service.build_context(
+        entries,
+        query="雾港",
+        campaign_id="c-1",
+        graph_retriever=factory,
+    )
+
+    # 一个不可达的图数据库退回纯词法检索：知识照样装配，只是通道缺席。
+    assert [block.entry_id for block in context.blocks] == ["e1"]
+    assert "graph" not in context.stats.retrieval_channels

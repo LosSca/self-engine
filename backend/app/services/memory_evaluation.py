@@ -1,17 +1,24 @@
-from __future__ import annotations
+"""Memory evaluation: a dataset and the metrics it is scored with.
 
-"""Memory evaluation: a dataset, a harness, and the metrics the brief asks for.
+**Status: evaluation fixture, not production code.** Nothing on the request
+path imports this module; it is loaded by the memory-upgrade evaluation suite
+(`backend/tests/services/test_memory_evaluation.py`) to replay a fixed corpus
+through the real pipeline and turn quality claims into numbers.
 
 Unit tests prove a function follows its contract. They cannot answer the
-question this upgrade actually has to answer - does the world remember the
-right things, refuse the wrong ones, and keep each character to what it saw.
+question the memory upgrade actually has to answer - does the world remember
+the right things, refuse the wrong ones, and keep each character to what it saw.
 Those are quality questions, and quality needs a corpus: fixed scenarios with
 known-good answers, replayed against whatever the current code does.
 
 The corpus lives here as data, not as prose in a document, so a regression
 shows up as a number that moved. Every case is small on purpose - one claim,
 one query - because a case that fails tells you which guarantee broke.
+
+If this is ever wired into a route, it must stay read-only: scoring a turn must
+never change a campaign.
 """
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field

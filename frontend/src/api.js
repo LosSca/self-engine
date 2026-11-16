@@ -23,32 +23,6 @@ export async function fetchScenarios() {
   return r.json()
 }
 
-export async function createScenario(data) {
-  const r = await fetch(`${BASE}/scenarios/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!r.ok) throw new Error('Failed to create scenario')
-  return r.json()
-}
-
-export async function getStoryCards(scenarioId) {
-  const r = await fetch(`${BASE}/scenarios/${scenarioId}/story-cards`)
-  if (!r.ok) throw new Error('Failed to fetch story cards')
-  return r.json()
-}
-
-export async function addStoryCard(scenarioId, data) {
-  const r = await fetch(`${BASE}/scenarios/${scenarioId}/story-cards`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!r.ok) throw new Error('Failed to add story card')
-  return r.json()
-}
-
 export async function fetchCampaigns(scenarioId) {
   const r = await fetch(`${BASE}/scenarios/${scenarioId}/campaigns`)
   if (!r.ok) throw new Error('Failed to fetch campaigns')
@@ -565,15 +539,6 @@ export async function fetchCharactersByScenario(scenarioId) {
   return jsonOrThrow(r, '读取角色包失败')
 }
 
-export async function createCharacter(scenarioId, data) {
-  const r = await fetch(`${BASE}/scenarios/${scenarioId}/characters`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  return jsonOrThrow(r, '创建角色失败')
-}
-
 export async function updateCharacter(characterId, patch) {
   const r = await fetch(`${BASE}/characters/${characterId}`, {
     method: 'PATCH',
@@ -812,11 +777,17 @@ export async function fetchCampaignStory(campaignId) {
 const ENGINE_V1 = '/api/v1'
 
 /** A fresh request id: the engine treats a repeated id as a replay, not a retry. */
-export function newRequestId() {
+function newRequestId() {
   try {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
   } catch { /* optional */ }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+async function fetchEngineState(campaignId) {
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/state`)
+  if (!r.ok) throw new Error('Failed to fetch engine state')
+  return r.json()
 }
 
 /** Which lane should answer this campaign? 'engine' once a world is bound. */
@@ -834,23 +805,6 @@ export async function fetchEngineAvailability(campaignId) {
   } catch (err) {
     return { bound: false, state: null, error: String(err) }
   }
-}
-
-/** Bind a world to this campaign (the moment a campaign becomes rule-driven). */
-export async function bindCampaignToWorld(campaignId, worldId, reset = false) {
-  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/world`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ world_id: worldId, reset }),
-  })
-  if (!r.ok) throw new Error(await r.text())
-  return r.json()
-}
-
-export async function fetchEngineState(campaignId) {
-  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/state`)
-  if (!r.ok) throw new Error('Failed to fetch engine state')
-  return r.json()
 }
 
 /**
@@ -943,15 +897,6 @@ export async function fetchWorks() {
   return jsonOrThrow(r, '读取作品库失败')
 }
 
-export async function resolveWork(title, { presetId = '', allowModel = true } = {}) {
-  const r = await fetch(`${V1}/works/resolve`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, preset_id: presetId, allow_model: allowModel }),
-  })
-  return jsonOrThrow(r, '解析作品失败')
-}
-
 export async function enterWork({
   workTitle,
   characterName,
@@ -989,24 +934,6 @@ export async function createWorld(definition) {
     body: JSON.stringify(definition),
   })
   return jsonOrThrow(r, '创建世界失败')
-}
-
-export async function replaceWorld(worldId, definition) {
-  const r = await fetch(`${V1}/worlds/${worldId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(definition),
-  })
-  return jsonOrThrow(r, '保存世界失败')
-}
-
-export async function validateWorld(definition) {
-  const r = await fetch(`${V1}/worlds/validate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(definition),
-  })
-  return jsonOrThrow(r, '校验世界失败')
 }
 
 export async function fetchWorldMap(worldId) {
@@ -1300,20 +1227,6 @@ export async function fetchDomainEvents(campaignId, { limit = 100, afterVersion 
   return jsonOrThrow(r, '读取事件记录失败')
 }
 
-/**
- * The narration capture for one stored event row.
- *
- * `narrator.response` and `narrative.failed` both carry a `diagnostics`
- * payload; this normalises the shape so the panel never has to guess.
- */
-export function narrativeDiagnosticsOf(row) {
-  const payload = row?.payload
-  if (!payload || typeof payload !== 'object') return null
-  const diag = payload.diagnostics
-  if (!diag || typeof diag !== 'object') return null
-  return diag
-}
-
 /** The turns this campaign has recorded, newest first (index form). */
 export async function fetchCampaignRequests(campaignId, limit = 50) {
   const r = await fetch(`${V1}/campaigns/${campaignId}/requests?limit=${limit}`)
@@ -1362,19 +1275,6 @@ export async function planRoom(worldId, campaignId = '') {
   const qs = campaignId ? `?campaign_id=${encodeURIComponent(campaignId)}` : ''
   const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/plan${qs}`, { method: 'POST' })
   return jsonOrThrow(r, '规划行动失败')
-}
-
-/**
- * Simulate a short chain of actions without writing anything.
- * Stops at the first step the rules reject.
- */
-export async function previewActions(worldId, steps, campaignId = '') {
-  const r = await fetch(`${V1}/worlds/${encodeURIComponent(worldId)}/preview-actions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ campaign_id: campaignId, steps }),
-  })
-  return jsonOrThrow(r, '预演行动失败')
 }
 
 /** Explain why an action is blocked and how the requirement could be met. */

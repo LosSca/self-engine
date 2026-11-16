@@ -9,7 +9,7 @@ reports to docs/fase3b_ab/{corpus}/audited_after.jsonl.
 Key acceptance check: prod idx16 (the context-blind electricity excision) must no longer
 drop the established ability.
 
-Run:  cd backend && CORPUS=both PYTHONPATH=. python scripts/revalidate_3b.py
+Run:  cd backend && CORPUS=both PYTHONPATH=. python ../docs/archive/revalidate_3b.py
 """
 from __future__ import annotations
 

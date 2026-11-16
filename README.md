@@ -36,7 +36,7 @@
 - 当前版本：**0.5.0**（`backend/app/main.py`、`frontend/package.json`、`desktop/src-tauri/tauri.conf.json` 一致）
 - 运行时：Python 3.10+ / FastAPI 后端，React 19 + Vite 7 + Tailwind 3 前端，SQLite 存储
 - 语言：界面与内容中文优先；**叙事语言跟随世界文档的 `language` 字段**，未声明时为英文
-- 规模：**130 条 API 路径**（166 个操作）。其中 `/api/v1` 规则链路 73 条，旧聊天链路 `/api/game` 24 条，
+- 规模：**131 条 API 路径**（167 个操作）。其中 `/api/v1` 规则链路 73 条，旧聊天链路 `/api/game` 24 条，
   情景与作者工具 `/api/scenarios` 12 条，记忆 `/api/memory` 7 条，角色库 `/api/characters` 6 条，
   供应商 `/api/providers` 3 条，健康检查 2 条，全局设置 `/api/settings`、偏好 `/api/prefs`、
   战役角色 `/api/campaigns` 各 1 条
@@ -703,14 +703,13 @@ self-engine/
 ├── scripts/serve-dist.mjs       # --prod 的前端静态托管 + /api 反代
 ├── scripts/start.sh             # macOS / Linux 启动入口（调用 launch.py）
 ├── scripts/start-dev.ps1        # PowerShell 开发启动脚本
-├── scripts/fix-fragment-calls.mjs # 构建后把误拆的 fragment 调用拼回去
 ├── scripts/neo4j_tool.py        # --neo4j 的实现：状态检查 / 起停容器 / 改密码
 ├── install.bat / install.sh     # 一键安装（Python venv + 运行与测试依赖 + 前端依赖）
 ├── desktop/                     # Tauri 桌面壳（不重写界面，只包一层窗口 + 拉起后端）
 ├── proxy/                       # 可选的 CLIProxyAPI 订阅代理（外部二进制的壳，见 proxy/README.md）
 ├── .env.example                 # 环境变量样例，安装脚本会复制为 .env
 ├── AGENTS.md / README.md / CHANGELOG.md
-├── docs/
+├── docs/                        # 48 篇；按阅读时机分组的索引见 README 的「文档索引」一节
 │   ├── review-2026-11-15.md     # 全量审查：结论、P0–P3 清单、逐条修复状态与回归测试名
 │   ├── review-overview.md       # 运行时结构、13 项验收矩阵、风险登记
 │   ├── delivery_review.md       # 七条需求与 14 条验收的交付审查
@@ -727,8 +726,10 @@ self-engine/
 │   ├── app/
 │   │   ├── main.py              # FastAPI 入口、CORS、令牌门、/api/settings 与 /api/prefs
 │   │   ├── config.py            # pydantic-settings，读取 .env
-│   │   ├── api/                 # routes_engine / routes_knowledge / routes_works
-│   │   │                        # routes_game / routes_scenarios / routes_characters
+│   │   ├── api/                 # routes_engine（facade）+ routes_engine_state / _actions /
+│   │   │                        # _campaigns / _authoring 等 9 个分组模块
+│   │   │                        # routes_knowledge / routes_works / routes_game /
+│   │   │                        # routes_scenarios / routes_characters
 │   │   ├── db/                  # scenario_store / game_state_store / event_store /
 │   │   │                        # trace_store / prefs_store / credential_store
 │   │   │                        # （prefs 与 credentials 复用 scenarios.db 连接）
@@ -772,7 +773,7 @@ self-engine/
 
 ## API 概览
 
-全部接口挂在 `/api` 下，共 **130 条路径 / 166 个操作**；设置 `API_TOKEN` 后除健康检查外都要求
+全部接口挂在 `/api` 下，共 **131 条路径 / 167 个操作**；设置 `API_TOKEN` 后除健康检查外都要求
 `Authorization: Bearer <token>` 或 `X-API-Token`。完整清单与请求/响应结构见 <http://127.0.0.1:8000/docs>，
 `/api/v1` 的每条路由都有类型化响应模型，并由 `backend/tests/api/test_routes_contracts.py` 守住。
 
@@ -780,14 +781,14 @@ self-engine/
 |------|--------|------|
 | `/api/v1` | 73 | 规则链路、知识、预设、AI 生成、作品库、世界编辑 |
 | `/api/game` | 24 | 旧聊天链路（流式 SSE） |
-| `/api/scenarios` | 12 | 情景、战役、故事卡、作者草稿、联网取材 |
+| `/api/scenarios` | 13 | 情景、战役、故事卡、作者草稿、联网取材 |
 | `/api/memory` | 7 | 结构化事实、混合检索、NPC 视角 |
 | `/api/characters` | 6 | 角色卡与外观 |
 | `/api/providers` | 3 | 供应商密钥的写入 / 删除 / 连通性测试 |
 | `/api/health` | 2 | 存活探针与 Neo4j 连通性 |
 | `/api/settings`、`/api/prefs`、`/api/campaigns` | 各 1 | 全局设置、跨设备偏好、战役角色 |
 
-> 上表由 `app.openapi()` 实测得出（`130` 条路径 / `166` 个操作）；
+> 上表由 `app.openapi()` 实测得出（`131` 条路径 / `167` 个操作）；
 > `/api/v1` 是 `routes_engine`、`routes_knowledge`、`routes_works` 三个模块叠加的前缀，
 > 所以按模块数并不等于按前缀数。
 
@@ -925,7 +926,7 @@ TEMP="$PWD/.tmp" TMP="$PWD/.tmp" \
   backend/.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider \
   backend/tests/api/test_acceptance_story.py
 
-# 前端：静态检查 + 构建（build = check-hook-order.mjs && vite build && fix-fragment-calls.mjs）
+# 前端：静态检查 + 构建（build = check-hook-order.mjs && vite build）
 cd frontend && npx eslint src && npm run build
 ```
 
@@ -947,7 +948,7 @@ cd frontend && npx eslint src && npm run build
 - 前端静态检查接在构建链里：`npm --prefix frontend run check:hooks`（hook 顺序）与
   `check:agents`（调试台与演化面板的接线，防止「静默无数据」）。
 - 前端构建先执行 `frontend/scripts/check-hook-order.mjs`，防止 `useCallback` 未声明就进依赖数组；
-  构建完再跑 `scripts/fix-fragment-calls.mjs`；页面全部懒加载，产物在 `frontend/dist`。
+  页面全部懒加载，产物在 `frontend/dist`。
 - 数据层：`scenarios.db`（情景、知识、剧情线、预设、角色、偏好、供应商密钥）、`game_state.db`、
   `events.db`、`memory.db`、`traces.db`。前四个的 `SCHEMA_VERSION` 为 **13 / 5 / 2 / 1**（`traces.db`
   无版本表），打开旧库时按版本增量迁移；路径分别可用 `SCENARIO_DB_PATH` / `GAME_STATE_DB_PATH` /
@@ -1025,6 +1026,87 @@ cd frontend && npx eslint src && npm run build
 - **CLIProxyAPI** —— Anthropic / OpenAI 兼容订阅代理
 - **Inner-Self** —— NPC 内心与人格系统的灵感来源
 - **AI Dungeon** —— 交互式 AI 小说与故事卡的先驱
+
+---
+
+## 文档索引
+
+`docs/` 下 48 篇文档，按读的时机分五组。组内顺序即建议阅读顺序。
+
+**想先看懂它是什么**
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/review-overview.md`](docs/review-overview.md) | 运行时结构、13 项验收矩阵、风险登记 |
+| [`docs/delivery_review.md`](docs/delivery_review.md) | 需求 ①–⑦ 的交付审查：代码库里现在是什么，含没做到的部分 |
+| [`docs/review-2026-11-15.md`](docs/review-2026-11-15.md) | 全量审查：结论、P0–P3 清单、逐条修复状态与回归测试名 |
+| [`docs/hybrid-world-simulation.md`](docs/hybrid-world-simulation.md) | 架构准入原则：新模块必须逐条回答的问题 |
+
+**要跑起来 / 接模型**
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/launch.md`](docs/launch.md) | 启动器的端口探测、三条启动路径、--prod 与日志行为 |
+| [`docs/local_model_ninfer.md`](docs/local_model_ninfer.md) | 把本机 NInfer 当 `local` provider 接入 |
+| [`docs/custom_llm_provider.md`](docs/custom_llm_provider.md) | 设置面板里的「自定义兼容接口」：任何 OpenAI chat-completions 方言 |
+| [`docs/phase1_agent_routing.md`](docs/phase1_agent_routing.md) | 三个模型角色与 `AGENTS_<ROLE>_*` 环境变量路由 |
+| [`docs/postgres-migration.md`](docs/postgres-migration.md) | SQLite → PostgreSQL 的一次性数据迁移导出（运行时仍是 SQLite） |
+| [`docs/phase5_game_clock.md`](docs/phase5_game_clock.md) | GameClock：世界只在玩家行动时前进 |
+
+**要写世界（作者视角）**
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/entity_runtime_state.md`](docs/entity_runtime_state.md) | 世界文档写「从哪里开始」，GameState 写「现在在哪里」 |
+| [`docs/items_configurable.md`](docs/items_configurable.md) | 物品的拾取条件与使用效果，都是校验过的 `Condition` / `Effect` |
+| [`docs/custom_actions.md`](docs/custom_actions.md) | 世界自定义行动：条件 + 效果，绝不执行任意代码 |
+| [`docs/quest_gating.md`](docs/quest_gating.md) | 任务的前置、接受条件与失败条件 |
+| [`docs/stage10_scenario_author.md`](docs/stage10_scenario_author.md) | 一条提示词 → 一份可玩的剧本 |
+| [`docs/stage11_quest_editor.md`](docs/stage11_quest_editor.md) | 任务在编辑器里的增删改与手动推进 |
+| [`docs/stage15_conversational_authoring.md`](docs/stage15_conversational_authoring.md) | 对话式补全世界：这条通道能改什么、不能改什么 |
+| [`docs/stage3_story_event_packs.md`](docs/stage3_story_event_packs.md) | 故事线的小事件包结构 |
+| [`docs/stage3_story_template_and_locking.md`](docs/stage3_story_template_and_locking.md) | 故事线默认模板与锁定语义 |
+| [`docs/stage7_starter_world_presets.md`](docs/stage7_starter_world_presets.md) | 四种起步世界预设与别名解析 |
+| [`docs/stage5_starter_worlds.md`](docs/stage5_starter_worlds.md) | 无世界战役的自动绑定与起步世界生成 |
+| [`docs/stage9_world_crossover.md`](docs/stage9_world_crossover.md) | 世界穿越器与作品角色库 |
+| [`docs/phase3_world_evolution.md`](docs/phase3_world_evolution.md) | 玩家的一句话如何经提案变成世界的一部分 |
+| [`docs/plan_ai_opening_and_interpolation.md`](docs/plan_ai_opening_and_interpolation.md) | 计划稿：AI 生成开场序列 + 变量插值 |
+
+**要改引擎（实现视角）**
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/knowledge_and_history.md`](docs/knowledge_and_history.md) | 叙事能看到什么：两条互不混合的上下文通道 |
+| [`docs/stage4_narration_degradation.md`](docs/stage4_narration_degradation.md) | 叙事降级与模型输出校验：叙事失败不影响事实 |
+| [`docs/intent_advisor.md`](docs/intent_advisor.md) | 意图建议器：确定性解析器兜不住时才问模型，且只读 |
+| [`docs/stage6_api_contracts.md`](docs/stage6_api_contracts.md) | 引擎响应契约：从 `Dict[str, Any]` 到具名模型 |
+| [`docs/stage6_effect_registry.md`](docs/stage6_effect_registry.md) | 效果注册表：`apply_effect` 从分支链变成查表 |
+| [`docs/stage3_combat_rules.md`](docs/stage3_combat_rules.md) | 战斗规则化：规则引擎判定、LLM 只描述 |
+| [`docs/stage3_action_preview.md`](docs/stage3_action_preview.md) | 行动目录与干运行预演 |
+| [`docs/stage2_world_editor.md`](docs/stage2_world_editor.md) | 世界工坊与读接口 |
+| [`docs/stage4_map_editing.md`](docs/stage4_map_editing.md) / [`docs/stage5_map_editor.md`](docs/stage5_map_editor.md) | 地图的坐标持久化与可视化编辑 |
+| [`docs/phase4_memory_provenance.md`](docs/phase4_memory_provenance.md) | 四层记忆晶体 + 记忆来源记录 |
+| [`docs/phase6_integration_review.md`](docs/phase6_integration_review.md) / [`docs/phase7_completeness_review.md`](docs/phase7_completeness_review.md) | 升级后的集成审查与完整性审查 |
+| [`docs/stage8_content_policy.md`](docs/stage8_content_policy.md) | 内容策略与本地模型路由（NSFW 模式） |
+| [`docs/stage12_narrative_diagnostics.md`](docs/stage12_narrative_diagnostics.md) / [`docs/stage13_narrative_debug_console.md`](docs/stage13_narrative_debug_console.md) | 叙事诊断：模型看到了什么、为什么这样说 |
+| [`docs/stage14_world_language.md`](docs/stage14_world_language.md) | 让叙事真的读起来是这个世界 |
+| [`docs/hook_order.md`](docs/hook_order.md) | Hook 依赖数组在渲染期求值带来的顺序 bug |
+| [`docs/frontend_bundling.md`](docs/frontend_bundling.md) | 前端代码分割策略 |
+
+**记忆系统的一次完整改造（审计 → 计划 → 报告）**
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/memory-upgrade-audit.md`](docs/memory-upgrade-audit.md) | 源码审计：记忆与知识系统当时的问题 |
+| [`docs/memory-upgrade-plan.md`](docs/memory-upgrade-plan.md) | 改造计划与从现有代码继承的设计原则 |
+| [`docs/memory-upgrade-report.md`](docs/memory-upgrade-report.md) | 实施报告：P0–P4 落地了什么、验收证据、未完成事项 |
+
+**阶段沿革与历史（按时间读）**
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/phase0_audit.md`](docs/phase0_audit.md) | Phase 0 现状审计：结论来自读代码与跑测试 |
+| [`docs/fase0_baseline.md`](docs/fase0_baseline.md) | FASE 0 基线度量（葡语，FASES 1–3 改造前的固定标尺） |
 
 ---
 

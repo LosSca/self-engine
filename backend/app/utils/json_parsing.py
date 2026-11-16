@@ -7,7 +7,19 @@ from typing import Any
 _CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 
 
-def parse_json_payload(raw: Any) -> dict | list | None:
+def parse_json_dict(raw: Any) -> dict | None:
+    """The JSON object in an LLM reply, or None if there is not one."""
+    parsed = _extract_json(raw)
+    return parsed if isinstance(parsed, dict) else None
+
+
+def parse_json_list(raw: Any) -> list | None:
+    """The JSON array in an LLM reply, or None if there is not one."""
+    parsed = _extract_json(raw)
+    return parsed if isinstance(parsed, list) else None
+
+
+def _extract_json(raw: Any) -> dict | list | None:
     """
     Parse JSON payloads from LLM text output.
 
@@ -32,16 +44,6 @@ def parse_json_payload(raw: Any) -> dict | list | None:
             continue
 
     return None
-
-
-def parse_json_dict(raw: Any) -> dict | None:
-    parsed = parse_json_payload(raw)
-    return parsed if isinstance(parsed, dict) else None
-
-
-def parse_json_list(raw: Any) -> list | None:
-    parsed = parse_json_payload(raw)
-    return parsed if isinstance(parsed, list) else None
 
 
 def _candidate_json_strings(text: str) -> list[str]:

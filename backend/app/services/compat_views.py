@@ -1,24 +1,36 @@
 """Compatibility views over the authoritative rules state.
 
-`/api/game` no longer owns game state: every campaign plays through the rules
-engine (`ActionService`). What survives of the old surface are *read* shapes the
-frontend panels already speak - journal entries, crystal cards, inventory rows,
-NPC mind dossiers and map edges. Those panels should keep working, so this
-module projects the authoritative state into the shapes they expect instead of
-reading the retired in-memory `GameSession`.
+**Status: transitional layer, not a feature.** This module exists only because
+the frontend panels were written against the retired `/api/game` shapes and
+have not been moved to `/api/v1` yet. It is a read-only projection: nothing is
+stored here and nothing here is a source of truth.
 
-Three rules keep the bridge honest:
+What it is:
 
-* nothing here writes state; a projection cannot change the game;
-* a projection is labelled `source="rules"`, and anything genuinely produced by
-  the retired lane keeps `source="legacy"`, so a panel can tell them apart;
-* a store that cannot answer degrades to an empty projection and reports the
-  reason, rather than raising into a panel.
+* `/api/game` no longer owns game state - every campaign plays through the
+  rules engine (`ActionService`). What survives of the old surface are the
+  *read* shapes the panels already speak: journal entries, crystal cards,
+  inventory rows, NPC mind dossiers and map edges.
+* Every projection is labelled `source="rules"`; anything still genuinely
+  produced by the retired lane keeps `source="legacy"`, so a panel can tell
+  them apart.
+* A store that cannot answer degrades to an empty projection and reports the
+  reason instead of raising into a panel.
 
-The legacy *lanes* are what is being retired, not the URLs. Migrating the data
-itself is the next step and needs a human decision per campaign: old chat prose
-is not verified game fact, so it is never imported as authoritative state.
+Four rules keep the bridge honest:
+
+1. nothing here writes state; a projection cannot change the game;
+2. no new panel may be built against this module - use the `/api/v1` shapes;
+3. when a panel learns to read `/api/v1` directly, delete its projection here
+   in the same change, so this file only ever shrinks;
+4. the legacy *lanes* are what is being retired, not the URLs. Migrating the
+   stored data itself needs a human decision per campaign: old chat prose is
+   not verified game fact, so it is never imported as authoritative state.
+
+Consumers today: `backend/app/api/routes_game.py` only (grep `compat_views`).
+Tests: `backend/tests/services/test_compat_views.py`.
 """
+
 from __future__ import annotations
 
 import logging

@@ -38,4 +38,4 @@ TEMP='<repo>/.tmp' TMP='<repo>/.tmp' .venv/Scripts/python.exe -m pytest -q -p no
 
 - 必须设置 `TEMP`/`TMP`（正斜杠），否则 pytest 会报 `FileNotFoundError: No usable temporary directory found`。
 - 加 `-p no:cacheprovider`，`.pytest_cache` 写入会被沙箱拒绝。
-- 前端构建走 `npm --prefix frontend run build`（= `check-hook-order.mjs` && `vite build` && `fix-fragment-calls.mjs`），在普通终端里可以正常跑通，不需要再退回 esbuild 只查语法。
+- 前端构建走 `npm --prefix frontend run build`（= `check-hook-order.mjs` && `vite build`），在普通终端里可以正常跑通，不需要再退回 esbuild 只查语法。

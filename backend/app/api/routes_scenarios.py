@@ -22,6 +22,7 @@ from app.engines.opening_generator import (
     generate_opening,
     synthesize_sample_answers,
 )
+from app.services.scenario_service import ScenarioService
 from app.services.draft_generator import DRAFT_KINDS, expand_draft, generate_draft
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,14 @@ class PlayConfigData(BaseModel):
     model_preset_id: str = ""
 
 
+class ExtractStoryCardsRequest(BaseModel):
+    """Lore text to mine for entities; the language hint keeps names intact."""
+
+    lore_text: str = Field(default="", max_length=20000)
+    language: str = "en"
+
+
+
 class ImportScenarioRequest(BaseModel):
     version: str
     scenario: CreateScenarioRequest
@@ -205,6 +214,34 @@ def create_scenario(req: CreateScenarioRequest):
             ),
         )
     return scenario.__dict__
+
+
+@router.post("/{scenario_id}/story-cards/extract")
+async def extract_story_cards(scenario_id: str, req: ExtractStoryCardsRequest):
+    """Turn a block of world lore into story cards.
+
+    This is the only path that buys `ScenarioService.extract_lore_to_cards`: the
+    card shapes the builder already stores (`NPC` / `LOCATION` / `FACTION` /
+    `ITEM`) are exactly what the extractor produces, so the author can paste a
+    paragraph and get typed cards instead of retyping them one at a time.
+    Without a model the service returns no cards, and the caller is told so.
+    """
+    router_ = LLMRouter(LLMConfig())
+    with _get_store() as store:
+        if store.get_scenario(scenario_id) is None:
+            raise HTTPException(status_code=404, detail="scenario not found")
+        service = ScenarioService(store=store, llm=router_)
+        try:
+            cards = await service.extract_lore_to_cards(
+                scenario_id=scenario_id,
+                lore_text=req.lore_text,
+                language=req.language,
+            )
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
+            logger.warning("lore extraction failed for %s: %s", scenario_id, exc)
+            raise HTTPException(status_code=502, detail="抽取失败：模型不可用或返回无法解析") from exc
+    return {"cards": [card.__dict__ for card in cards], "created": len(cards)}
+
 
 
 @router.post("/draft")

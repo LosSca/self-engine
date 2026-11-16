@@ -17,7 +17,7 @@ Env:
   CORPUS=stress|prod|both  (default both)
   LIMIT=<int>              (default all inputs; use 1 for a smoke test)
 
-Run:  cd backend && PYTHONPATH=. python scripts/ab_auditor.py
+Run:  cd backend && PYTHONPATH=. python ../docs/archive/ab_auditor.py
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ try:
         count_metrics, count_rule_of_three, count_em_dash_interruptive,
     )
 except ImportError:
-    from scripts.tic_harness import (
+    from scripts.tic_harness import (  # 仍在 backend/scripts/ 下
         NEW_RULES, OLD_RULES, PLAYER_INPUTS, load_scenario_context,
         count_metrics, count_rule_of_three, count_em_dash_interruptive,
     )

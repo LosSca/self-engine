@@ -5,6 +5,8 @@ exist to prove three things: every hand-built route declares a real model
 rather than Dict[str, Any], the published OpenAPI schema matches what the
 routes actually return, and a contract break is impossible to ship silently.
 """
+import importlib
+import inspect
 import sys
 
 import pytest
@@ -92,19 +94,34 @@ def test_every_listed_route_publishes_a_shape():
             assert target.get("properties"), f"{method.upper()} {path} has an untyped body"
 
 
-def test_no_engine_route_still_declares_a_bare_dict():
-    """The 22 Dict[str, Any] handlers from the audit are gone."""
-    import inspect
+def _engine_module_names() -> list:
+    """Every module the engine routes are split across, facade included."""
     from app.api import routes_engine
 
-    source = inspect.getsource(routes_engine)
-    declarations = [
-        line for line in source.splitlines() if "response_model=" in line
-    ]
+    names = {"routes_engine"}
+    for module in inspect.getmembers(routes_engine, inspect.ismodule):
+        name = module[1].__name__.rsplit(".", 1)[-1]
+        if name.startswith("routes_engine"):
+            names.add(name)
+    assert len(names) > 1, "the engine routes are expected to be split up"
+    return sorted(names)
+
+
+def test_no_engine_route_still_declares_a_bare_dict():
+    """The 22 Dict[str, Any] handlers from the audit are gone."""
+    declarations = []
+    for name in _engine_module_names():
+        module = importlib.import_module(f"app.api.{name}")
+        source = inspect.getsource(module)
+        declarations += [
+            line
+            for line in source.splitlines()
+            if "response_model=" in line and not line.lstrip().startswith("#")
+        ]
     assert declarations
     offenders = [line.strip() for line in declarations if "Dict[str, Any]" in line]
     # Only catalogue-style projections may stay open-ended, and there are none
-    # left in this module: every handler now names its contract.
+    # left in the engine: every handler now names its contract.
     assert offenders == []
 
 

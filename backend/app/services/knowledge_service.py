@@ -18,6 +18,7 @@ separate, explicit step, so tests can assert exactly what the model would see.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
@@ -40,6 +41,8 @@ from app.models.knowledge import (
     Storyline,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MAX_DEPTH = 9
 
 #: The lexical channel is a plug: BM25 today, anything else later. Ranking is
@@ -54,6 +57,13 @@ _LEXICAL_RETRIEVER = "bm25"
 VectorRetrieverFactory = Callable[
     [Sequence[str], Sequence[str]], Optional[object]
 ]
+
+
+#: Builds the graph channel for one scene. Takes the campaign id, the scene text
+#: and the names already on stage, and returns anything with a synchronous
+#: `search(query) -> Sequence[RetrievedDoc]`. Injected for the same reason as the
+#: vector channel: this module must not import neo4j, graphiti or a driver.
+GraphRetrieverFactory = Callable[[str, str, Sequence[str]], Optional[object]]
 
 
 def default_vector_retriever_factory(
@@ -100,6 +110,8 @@ def build_context(
     budget_chars: int = 0,
     query: str = "",
     vector_retriever: Optional[VectorRetrieverFactory] = None,
+    graph_retriever: Optional[GraphRetrieverFactory] = None,
+    campaign_id: str = "",
 ) -> KnowledgeContext:
     """Select and order the knowledge entries visible for one turn.
 
@@ -208,6 +220,16 @@ def build_context(
                 for entry_id in ranked_ids
             ],
         )
+    # The graph channel is offered on the same terms as the semantic one: None
+    # whenever no temporal graph is reachable, and a channel that fails lands in
+    # `trace.degraded` instead of failing the turn.
+    graph_channel = None
+    if graph_retriever is not None and campaign_id and documents:
+        try:
+            graph_channel = graph_retriever(campaign_id, scene_query.text(), focus_names)
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError, ImportError):
+            logger.warning("graph channel could not be built", exc_info=True)
+            graph_channel = None
     fused, trace = RetrievalService().retrieve(
         documents,
         ranked_ids,
@@ -219,6 +241,7 @@ def build_context(
             layer_rank={block.entry_id: _layer_rank(block.layer) for block in blocks},
         ),
         vector=vector_channel,
+        graph=graph_channel,
         final_limit=max(1, len(ranked_ids)),
     )
     retriever = fused

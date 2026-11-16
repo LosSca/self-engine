@@ -268,6 +268,11 @@ def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
         except (ValueError, TypeError, KeyError, AttributeError) as exc:  # focus is advisory
             logger.info("knowledge focus unavailable: %s", exc)
             focus = []
+        # The graph lane is offered, not assumed: it needs a live Graphiti, a
+        # campaign id and a scene to reduce to entities. Without them the
+        # pipeline runs lexically and records nothing. The scene text here is
+        # the focus roster (place + entities on stage), which is exactly what
+        # the graph indexes on.
         context = build_context(
             entries,
             mode=config.mode,
@@ -275,6 +280,8 @@ def _load_knowledge_context_for_campaign(campaign_id: str) -> str:
             scenario_id=scenario_id,
             focus=focus or None,
             budget_chars=config.context_budget_chars,
+            campaign_id=campaign_id,
+            graph_retriever=build_graph_channel if focus else None,
         )
         blocks = context.prompt_blocks()
         if not blocks:
@@ -474,6 +481,30 @@ def _get_graphiti_engine():
     except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         logger.info("Graphiti not available, running without temporal graph: %s", exc)
         return None
+
+
+def build_graph_channel(campaign_id: str, scene_text: str, known_names):
+    """The graph retrieval channel for one scene, or None.
+
+    This is the caller the retrieval pipeline was missing: `RetrievalService`
+    has always had a `graph` slot, but nothing ever filled it, so the multi-hop
+    relationship channel was dead code on the live path. It is injected rather
+    than imported by `knowledge_service` so that module keeps importing neither
+    Neo4j nor an async driver.
+
+    Returns None when there is no graph to ask - an unconfigured Graphiti, an
+    empty campaign id - so `build_context` simply runs lexically.
+    """
+    if not campaign_id or not str(scene_text or "").strip():
+        return None
+    engine = _get_graphiti_engine()
+    if engine is None:
+        return None
+    from app.services.retrieval.graph_query import build_graph_query
+    from app.services.retrieval.graph_retriever import GraphRetriever, SyncGraphAdapter
+
+    query = build_graph_query(scene_text, list(known_names or ()))
+    return SyncGraphAdapter(GraphRetriever(engine, campaign_id, known_names=list(known_names or ())), query)
 
 
 async def _fallback_graph_search(campaign_id: str, query: str, limit: int = 10) -> list[dict]:
