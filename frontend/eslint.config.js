@@ -28,4 +28,13 @@ export default defineConfig([
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]' }],
     },
   },
+  {
+    // 构建期工具链跑在 Node 里，不是跑在浏览器里。
+    // 只让 src 用 globals.browser 的话，vite.config.js（读 process.env）和
+    // tailwind.config.js（require 插件）会在 lint 里被当成"未定义全局变量"报错。
+    files: ['*.config.js', 'scripts/**/*.mjs'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 ])
