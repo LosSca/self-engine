@@ -67,8 +67,9 @@ HEALTH_URL = "http://127.0.0.1:%d/api/health" % BACKEND_PORT
 
 CREATE_NEW_CONSOLE = 0x00000010
 
-#: 桌面壳（desktop/）：一个 Electron 载体，窗口里只有本机后端的地址。
-DESKTOP = ROOT / "desktop"  # Tauri 壳：desktop/src-tauri，打包走 desktop/ 里的 npm run build
+#: 桌面壳目录。壳本体是 Tauri（desktop/src-tauri），只有它产出安装程序；
+#: python launch.py --app 是另一条路：不开 Tauri，用浏览器的 --app 模式预览单端口构建产物。
+DESKTOP = ROOT / "desktop"  # 打包走 desktop/ 里的 npm run build（= stage-web + tauri build）
 
 LABELS = {"backend": "后端", "frontend": "前端"}
 LOG_NAMES = {"backend": "backend.log", "frontend": "frontend.log"}
@@ -705,8 +706,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--app",
         action="store_true",
-        help="单端口窗口：只起后端，并让它直接托管 frontend/dist，再用浏览器窗口模式打开。"
-        "打包成安装程序请用 desktop/ 里的 Tauri 壳（npm run build）。",
+        help="单端口窗口（预览用，不出安装包）：只起后端，并让它直接托管 frontend/dist，"
+        "再用浏览器窗口模式打开。打包成安装程序请用 desktop/ 里的 Tauri 壳（npm run build）。",
     )
     parser.add_argument(
         "--open-app",

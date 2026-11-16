@@ -15,6 +15,7 @@ REM   start.bat --frontend-only     frontend only
 REM   start.bat --debug             backend --reload + LLM call dump
 REM   start.bat --mobile            LAN / phone access (--host 0.0.0.0)
 REM   start.bat --prod              preview the built frontend/dist
+REM   start.bat --app               single port: backend serves dist, opens a chrome window
 REM   start.bat --no-window         both services in this console, logs to .logs/
 REM   start.bat --help              all options (printed in Chinese by launch.py)
 setlocal
@@ -42,7 +43,7 @@ set "RC=0"
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     echo.
-    echo [launcher exited with code %RC%] see docslaunch.md
+    echo [launcher exited with code %RC%] see docs\launch.md
     pause
 )
 endlocal & exit /b %RC%

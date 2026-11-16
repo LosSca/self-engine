@@ -89,7 +89,8 @@
   这三样只要有一处不同步就是白屏；现在只有一个进程在回答两边，`/api` 与界面同源。静态托管是
   **可选开关**（`SELF_ENGINE_DESKTOP_DIST`），普通启动完全不受影响：前端路由（`/studio`）
   回落到 `index.html`，静态资源按真实 MIME 返回，路径穿越读不到构建目录之外的任何文件。
-  打包成安装程序仍然走 `desktop/` 的 Tauri 壳（`npm run build`），这条路径没有改动。
+  打包成安装程序仍然走 `desktop/` 的 Tauri 壳（`npm run build`），这条路径没有改动——
+  `--app` 是「没有 Rust 工具链时的单端口预览」，不是它的替代品，也不产出安装包。
   顺带修掉一个会让 Tauri 窗口空转的缺陷：`launch.py` 起后端时从不设置 `LUNAR_CORS_ORIGINS`，
   而 Tauri 页面来自 `tauri://localhost`，跨端口请求会整片死在 CORS 上；现在启动器在子进程环境里
   追加这几个来源（用户自己的 `LUNAR_CORS_ORIGINS` 照旧保留）。
@@ -183,7 +184,8 @@
   不依赖 `vite preview` 的中间件顺序，托管时过滤掉构建产物里残留的
   `<script type="module" src="/src/main.jsx">`（它会让浏览器把源码当模块再拉一次而白屏）。
 - **桌面快捷方式默认 `--prod`**：受限环境里 `vite dev` 无法预打包依赖，裸导入 404 → 白屏；
-  构建产物是一份打包好的 js，在任何环境下都能渲染。想热更新时加 `--dev`。
+  构建产物是一份打包好的 js，在任何环境下都能渲染。想热更新就把快捷方式里的 `--prod` 去掉
+  （`launch.py` 没有 `--dev` 参数，不带 `--prod` 就是开发模式）。
 - `launch.py` 的 `_temp_dir()` / `log_path()` 回退链、前端端口按模式取 4173 或 5173、
   `--prod` 只要求 node 而不要求 `frontend/node_modules`。
 

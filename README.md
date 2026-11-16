@@ -583,7 +583,18 @@ start.bat           # Windows
 
 **桌面快捷方式默认走 `--prod`**：某些受限环境里 vite dev 无法在浏览器端预打包依赖，
 裸导入会 404 导致白屏；`--prod` 交付的是一份已经打包好的 js，在任何环境下都能渲染。
-想回到热更新就照上表左列直接用 `launch.py`（不加 `--prod`）。细节见 [`docs/launch.md`](docs/launch.md)。
+要热更新就照上表直接跑 `launch.py`（不加 `--prod`）。细节见 [`docs/launch.md`](docs/launch.md)。
+
+> **三条启动路径各管一件事，别混着用**：
+>
+> | 路径 | 定位 | 依赖 | 出安装包 |
+> |------|------|------|----------|
+> | `desktop/` 的 Tauri 壳 | **唯一的分发路径**，也是唯一的「双击即用窗口」 | Rust + Node + 本机 Python 与后端依赖 | ✅ NSIS / MSI / dmg / deb |
+> | `python launch.py --app` | **没有 Rust 工具链时的预览**：同端口单进程 + 一个 Chromium 窗口 | Node + 本机 Python + 已构建的 `frontend/dist`（不依赖 Rust） | ❌ |
+> | `start.bat --prod` | **开发期预览构建产物**（4173 + `serve-dist.mjs` 反代） | 只要 Node | ❌ |
+>
+> 三者里只有 `--app` 把界面和后端放在同一个端口上；Tauri 壳走的是 `tauri://localhost` +
+> `127.0.0.1:8000` 两个来源，所以它依赖启动器注入的 CORS 来源与 API 地址（见下一节）。
 
 常用参数（传给 `launch.py`，`--help` 有完整列表）：
 
@@ -607,21 +618,24 @@ CORS 挡不住这种情况——它只约束浏览器，而任何脚本都能直
 ### 桌面端（可选）
 
 `desktop/` 是一个 Tauri 2 壳：原生窗口里跑的就是上面这套前端，后端由启动器拉起，关窗即停。
-需要 Rust stable + Node 18+。
+它同时是仓库里**唯一能产出安装程序**的路径（上表第 1 行）。需要 Rust stable + Node 18+，
+运行时仍然要求本机有 Python 与后端依赖（见 [`desktop/README.md`](desktop/README.md#已知限制)）。
 
 ```bash
-cd frontend && npm install && npm run build
-cd ../desktop && npm install
-npm run build        # 产物在 desktop/src-tauri/target/release/bundle/
+cd frontend && npm install && npm run build   # 先产出 dist
+cd ../desktop && npm install                  # 装 Tauri CLI
+npm run dev                                   # 开发：起后端 + 原生窗口
+npm run build                                 # 出安装包，产物在 desktop/src-tauri/target/release/bundle/
 ```
 
-开发期想直接看窗口（带热更新）：`cd desktop && npm run dev`。
+两个脚本都会先跑 `scripts/stage-web.mjs`，把 `frontend/dist` 复制成 `desktop/web`
+（Tauri 的 `frontendDist`），所以**改完前端必须重新 `npm run build`**，壳才不会拿旧产物。
 
 > Windows 上**必须用 MSVC 工具链**（`rustup default stable-x86_64-pc-windows-msvc` + Visual Studio
 > "使用 C++ 的桌面开发"）。MinGW 能编译通过，但 WebView2 创建窗口时会返回
 > `HRESULT 0x8000FFFF`——这是 Tauri 的限制，不是本壳的 bug。
 
-想在一个窗口里前端后端**只占一个端口**（不用 Tauri 的生产打包，用于自测或做快捷方式）：
+想在一个窗口里前端后端**只占一个端口**（没有 Rust 工具链，或只想自测/做快捷方式）：
 
 ```bash
 cd frontend && npm install && npm run build
@@ -633,7 +647,9 @@ python launch.py --app     # 后端同时托管 frontend/dist，窗口开在 800
 那三样东西只要有一处不同步，窗口里就是白屏；现在是同一个进程在回答两边。静态托管是可选
 开关（`SELF_ENGINE_DESKTOP_DIST`），普通启动完全不受影响。
 
-不想装 Rust 的话，`start.bat --prod` + Chrome「创建快捷方式（以窗口形式打开）」也是同一效果。
+这条路径**不出安装包**：窗口本体是 Chrome / Edge 的 `--app` 模式，展示的是页面而不是一个应用。
+要分发给别人，用上面的 Tauri 壳；`--app` 是「没有 Rust 工具链时先看到一个真窗口」的退路，
+两者不是同一条流水线的两个实现。
 
 ---
 

@@ -9,7 +9,17 @@
 
 ---
 
-## 一、三种用法
+## 一、用法
+
+三条启动路径各管一件事，选错了会白屏或者拿不到安装包：
+
+| 路径 | 定位 | 依赖 | 出安装包 |
+|------|------|------|----------|
+| `desktop/` 的 Tauri 壳（`npm run build`） | 唯一的分发路径 | Rust + Node + 本机 Python 与后端依赖 | ✅ NSIS / MSI / dmg / deb |
+| `launch.py --app` | 没有 Rust 工具链时的单端口预览 | Node + 本机 Python + 已构建的 `dist` | ❌ |
+| `start.bat` / `start.bat --prod` | 开发与预览构建产物 | Python(+Node) | ❌ |
+
+下面按这三种输入展开。
 
 ### 1. 本地开发（默认）
 
@@ -62,12 +72,26 @@
 ### 4. 桌面快捷方式
 
 桌面上的 `Self-Reference Engine` 指向仓库根目录的 `start.bat`，并且**默认带 `--prod`**
-（理由见上一节）。想临时回到 vite dev 就在快捷方式的参数里加 `--dev`：
-
-    "Self-Reference Engine.bat" --dev
+（理由见上一节）。`launch.py` 没有 `--dev` 参数，想临时回到 vite dev 就把快捷方式里的
+`--prod` **删掉**（`start.bat` 把参数原样透传给 `launch.py`，不带 `--prod` 就是开发模式）。
 
 `Self-Reference Engine (debug)` 同样默认 `--prod`，额外加 `--no-browser` 并保留控制台
 窗口（退出后打印退出码并等待按键），用来在页面出问题时看启动输出。
+
+> 这两个快捷方式指向的是**仓库**不是安装包，所以只在开发机上成立。分发给别人用
+> `desktop/` 的 Tauri 壳。
+
+### 5. 单端口窗口（`--app`）
+
+    python launch.py --app
+
+后端自己把 `frontend/dist` 托管在 `/` 上，窗口加载 `http://127.0.0.1:8000/`，`/api` 同源直达。
+没有第二个端口，也没有一条得跟着改的反代规则。它需要先 `npm --prefix frontend run build`，
+并依赖本机的 Chrome / Edge（用它们的 `--app` 模式去掉地址栏）。
+
+这条路径**不出安装包**，是「没有 Rust 工具链时先看到一个真窗口」的退路；要分发仍走
+`desktop/` 的 Tauri 壳。
+
 ---
 
 ## 二、参数表
@@ -148,8 +172,9 @@
 常见原因：
 
 - `frontend/node_modules` 不存在 → `cd frontend && npm install`；
-- 端口被别的进程占用（launch.py 用 `--strictPort`，占用了就启动失败而不是悄悄换端口；
-  dev 是 5173，`--prod` 是 4173）：
+- 端口被别的进程占用。dev（5173，被占用时顺延到 5174、5175…）与 `--prod`（4173，同样顺延）
+  都会先确认端口上是不是本项目的页面，不是就换下一个空闲端口；`--app` 只认 8000，
+  被别的程序占用时直接报错退出：
 
       netstat -ano | findstr :5173
       taskkill /PID <PID> /T /F
