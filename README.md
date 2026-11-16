@@ -40,7 +40,7 @@
   情景与作者工具 `/api/scenarios` 12 条，记忆 `/api/memory` 7 条，角色库 `/api/characters` 6 条，
   供应商 `/api/providers` 3 条，健康检查 2 条，全局设置 `/api/settings`、偏好 `/api/prefs`、
   战役角色 `/api/campaigns` 各 1 条
-- 代码：后端 112 个 Python 模块、162 个测试文件；前端 29 个组件，全部按路由懒加载
+- 代码：后端 112 个 Python 模块、152 个测试文件；前端 29 个组件，全部按路由懒加载
 - 模型：**不配置任何密钥也能完整游玩**——确定性叙事器按世界语言产出文本
 
 ### 一句话能做的事
@@ -939,7 +939,7 @@ cd frontend && npx eslint src && npm run build
 - 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 个用例），覆盖 14 条验收：
   建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/
   叙事失败不回滚/非法事件配置/模拟只读/中文世界读中文。
-- 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层（162 个测试文件），
+- 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层（152 个测试文件），
   包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放、内容策略与本地回退、
   角色路由与降级、NPC 档案的知识隔离、演化提案的「未写入不叫已采纳」、游戏时钟暂停即冻结等。
 - 架构场景跑成测试：`backend/tests/services/test_architecture_acceptance.py`（10 个用例）——

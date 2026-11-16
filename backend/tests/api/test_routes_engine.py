@@ -1,4 +1,6 @@
 """HTTP surface of the rule-driven engine (/api/v1)."""
+import inspect
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -481,6 +483,128 @@ def test_campaign_export_and_import_roundtrip(client):
     ).status_code == 400
 
 
+def test_world_presets_are_listed_with_typed_contract(client):
+    response = client.get(f"{API}/world-presets")
+    assert response.status_code == 200
+    payload = response.json()
+    keys = [entry["world_type"] for entry in payload]
+    assert keys == ["fantasy", "fog_town", "orbital_station", "wild_camp"]
+    station = next(entry for entry in payload if entry["world_type"] == "orbital_station")
+    assert station["name"] == "Orbital Station Incident"
+    assert station["locations"] == 4
+    assert station["doors"] == 2
+    assert station["quests"] == 1
+
+
+def test_world_presets_are_read_only(client):
+    from app.api import routes_engine
+
+    store = routes_engine._get_store()
+    try:
+        before = len(store.list_worlds())
+    finally:
+        store.close()
+    assert client.get(f"{API}/world-presets").status_code == 200
+    store = routes_engine._get_store()
+    try:
+        assert len(store.list_worlds()) == before
+    finally:
+        store.close()
+
+
+def test_deleting_a_world_removes_the_definition_only(client):
+    assert _create_world(client).status_code == 200
+    assert client.post(
+        f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"},
+    ).status_code == 200
+
+    deleted = client.delete(f"{API}/worlds/demo_village")
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"deleted": "demo_village"}
+    assert client.get(f"{API}/worlds/demo_village").status_code == 404
+    assert client.delete(f"{API}/worlds/demo_village").status_code == 404
+
+    # Committed campaign history outlives the definition it was played in.
+    state = client.get(f"{API}/campaigns/camp-1/state")
+    assert state.status_code == 200, state.text
+    assert state.json()["world_id"] == "demo_village"
+
+
+def test_deleting_a_world_keeps_snapshots_readable(client):
+    assert _create_world(client).status_code == 200
+    assert client.post(
+        f"{API}/campaigns/camp-1/world", json={"world_id": "demo_village"},
+    ).status_code == 200
+    assert client.post(
+        f"{API}/campaigns/camp-1/actions",
+        json={"campaign_id": "camp-1", "request_id": "req-look", "action": "look"},
+    ).status_code == 200
+
+    assert client.delete(f"{API}/worlds/demo_village").status_code == 200
+    snapshots = client.get(f"{API}/campaigns/camp-1/snapshots")
+    assert snapshots.status_code == 200, snapshots.text
+    payload = snapshots.json()
+    rows = payload["snapshots"] if isinstance(payload, dict) else payload
+    assert 1 in [item["version"] for item in rows]
+
+
+def test_action_types_lists_every_registered_action(client):
+    from app.engines.action_registry import action_names
+
+    response = client.get(f"{API}/action-types")
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["name"] for item in payload] == list(action_names())
+    look = next(item for item in payload if item["name"] == "look")
+    assert look["target"] == "none"
+    assert look["label"] == "观察"
+    take = next(item for item in payload if item["name"] == "take")
+    assert take["target"] == "required"
+    assert "拿" in take["verbs"]
+
+
+@pytest.mark.asyncio
+async def test_local_model_status_reports_an_unreachable_server(monkeypatch):
+    from app.api import routes_engine
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "local_llm_base_url", "http://127.0.0.1:1/v1")
+    monkeypatch.setattr(settings, "local_llm_api_key", "")
+    status = await routes_engine.local_model_status()
+    assert status.configured is True
+    assert status.reachable is False
+    assert status.detail  # a readable failure, never an exception
+
+
+@pytest.mark.asyncio
+async def test_local_model_status_handles_missing_configuration(monkeypatch):
+    from app.api import routes_engine
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "local_llm_base_url", "")
+    status = await routes_engine.local_model_status()
+    assert status.configured is False
+    assert status.reachable is False
+    assert "LOCAL_LLM_BASE_URL" in status.detail
+
+
+def test_the_game_lane_builds_an_intent_advisor(monkeypatch):
+    """The switch has to sit on the lane the client actually calls.
+
+    ENGINE_INTENT_ADVISOR used to be injected only into the engine lane while
+    frontend/src/api.js calls /api/game/action: configured, switched on, and
+    the sentence was still refused.
+    """
+    from app.api import routes_game
+
+    source = inspect.getsource(routes_game._unified_service)
+    assert "advisor=_build_advisor()" in source
+    # Off by default and never fatal: a turn must not fail because advice is
+    # unavailable.
+    advisor = routes_game._build_advisor()
+    assert advisor is None or hasattr(advisor, "suggest")
+
+
 def test_ai_world_generation_saves_a_validated_world(client, monkeypatch):
     import json
 
@@ -634,3 +758,112 @@ def test_repair_cannot_silently_overwrite_a_concurrent_turn(client, monkeypatch)
     state = client.get(f"{API}/campaigns/camp-1/state").json()
     assert state["version"] == 1
     assert "repaired" not in state["flags"]
+
+
+# --- scenario authoring: the draft really lands in the chosen scenario -----
+
+WORLD = {
+    "name": "雾港",
+    "description": "一座被雾笼罩的港口小城。",
+    "start_location_id": "harbor",
+    "locations": [
+        {
+            "id": "harbor",
+            "name": "港口",
+            "description": "栈桥尽头有一盏灯。",
+            "region": "海岸",
+            "door_ids": ["warehouse_door"],
+            "item_ids": ["brass_key"],
+            "npc_ids": ["keeper"],
+            "exits": [{"target_id": "warehouse", "label": "走向仓库", "door_id": "warehouse_door"}],
+        },
+        {
+            "id": "warehouse",
+            "name": "仓库",
+            "description": "货箱堆到屋顶。",
+            "region": "海岸",
+            "exits": [{"target_id": "harbor", "label": "回到港口"}],
+        },
+    ],
+    "items": [
+        {"id": "brass_key", "name": "铜钥匙", "description": "刻着货号。", "tags": ["key"]}
+    ],
+    "doors": [
+        {
+            "id": "warehouse_door",
+            "name": "仓库铁门",
+            "location_id": "harbor",
+            "locked": True,
+            "key_item_id": "brass_key",
+        }
+    ],
+    "entities": [
+        {"id": "keeper", "name": "守夜人", "description": "他不看海。", "location_id": "harbor", "kind": "npc"}
+    ],
+    "quests": [],
+    "events": [],
+}
+
+DRAFT = {"world": WORLD, "knowledge": [], "storyline": None, "warnings": ["第 2 条知识未通过校验"]}
+
+
+def test_author_saves_the_draft_into_the_chosen_scenario(client, tmp_path, monkeypatch):
+    from app.api import routes_engine
+    from app.db.game_state_store import GameStateStore
+    from app.db.scenario_store import ScenarioStore
+    from app.services import ai_generator, scenario_author, world_service
+
+    scenario_store = ScenarioStore(str(tmp_path / "scenarios.db"))
+    scenario = scenario_store.create_scenario(title="雾港剧本")
+    scenario_store.close()
+
+    game = GameStateStore(str(tmp_path / "game_state.db"))
+    world = world_service.WorldDefinition.model_validate(
+        dict(WORLD, world_id="ai_1", scenario_id=scenario.id)
+    )
+    package = {
+        "world": world,
+        "knowledge": [],
+        "storyline": None,
+        "warnings": ["第 2 条知识未通过校验"],
+    }
+
+    async def fake_author(router, prompt, world_id, scenario_id, language="中文", location_count=6):
+        assert scenario_id == scenario.id
+        return package
+
+    monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: object())
+    monkeypatch.setattr(routes_engine, "ai_generator", ai_generator, raising=False)
+    monkeypatch.setattr(scenario_author, "author_scenario", fake_author)
+
+    res = client.post(
+        "/api/v1/scenarios/author",
+        json={"prompt": "雾中的港口", "scenario_id": scenario.id},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "saved"
+    assert body["world_saved"] is True
+    assert body["counts"]["locations"] == 2
+    assert body["warnings"] == ["第 2 条知识未通过校验"]
+
+    # The world really is readable from the store the API wrote to.
+    game.close()
+    stored = GameStateStore(str(tmp_path / "game_state.db"))
+    try:
+        loaded = stored.get_world("ai_1")
+        assert loaded is not None
+        assert loaded.scenario_id == scenario.id
+    finally:
+        stored.close()
+
+
+def test_author_rejects_an_unknown_scenario(client, monkeypatch):
+    from app.services import ai_generator
+
+    monkeypatch.setattr(ai_generator, "router_for", lambda preset=None: object())
+    res = client.post(
+        "/api/v1/scenarios/author",
+        json={"prompt": "雾中的港口", "scenario_id": "nope"},
+    )
+    assert res.status_code == 404

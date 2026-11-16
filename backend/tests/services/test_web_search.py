@@ -70,3 +70,24 @@ def test_format_untrusted_notes_stays_bounded():
     notes = ws.format_untrusted_notes(hits, chars=120)
     # The fence is paid for on top of the character budget, not out of it.
     assert len(notes) == 120 + len(ws.UNTRUSTED_OPEN) + len(ws.UNTRUSTED_CLOSE) + 2
+
+
+def test_proxy_env_normalisation_drops_ipv6_literals(monkeypatch):
+    """httpx dies on NO_PROXY entries like "::1" / "[::1]" (InvalidURL)."""
+    import os
+
+    from app.services import web_search
+
+    original = "172.29.79.110,localhost,127.0.0.1,::1,[::1]"
+    monkeypatch.setenv("NO_PROXY", original)
+    saved = web_search._clean_proxy_env()
+    try:
+        value = os.environ["NO_PROXY"]
+        assert "::1" not in value
+        assert "127.0.0.1" in value
+        assert "localhost" in value
+    finally:
+        for key, value in saved.items():
+            os.environ[key] = value
+        # The caller's value comes back untouched once the call is over.
+        assert os.environ["NO_PROXY"] == original

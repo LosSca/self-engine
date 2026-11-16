@@ -225,3 +225,61 @@ def test_world_graph_survives_an_offline_graph_server(client):
     assert response.status_code == 200
     assert response.json() == {"nodes": [], "links": []}
 
+
+
+# --- the wizard asks once, and traces of an unknown campaign are empty ------
+
+def _scenario_with_question(client):
+    from tests.conftest import make_scenario
+
+    return make_scenario(
+        client,
+        title="初始化一次就够",
+        setup_questions=[
+            {"id": "q1", "var_name": "who", "prompt": "你是谁？", "type": "text", "required": True},
+        ],
+    )
+
+
+def _campaign(client, scenario_id):
+    campaign = client.post(
+        f"/api/scenarios/{scenario_id}/campaigns", json={"player_name": "旅人"},
+    ).json()
+    return campaign.get("id") or campaign.get("campaign_id")
+
+
+def test_setup_state_stops_asking_once_answers_are_saved(client):
+    """Both wizard bugs were "the answer was not saved"; the backend half of the
+    contract is that a non-empty answer set ends the initialization."""
+    campaign_id = _campaign(client, _scenario_with_question(client)["id"])
+
+    assert client.get(f"/api/game/{campaign_id}/setup-state").json()["needs_setup"] is True
+
+    saved = client.post(
+        f"/api/game/{campaign_id}/setup-answers",
+        json={"answers": {"who": {"var_name": "who", "type": "text", "value": "抄书人"}}},
+    )
+    assert saved.status_code == 200
+
+    after = client.get(f"/api/game/{campaign_id}/setup-state").json()
+    assert after["needs_setup"] is False
+    assert after["answers"]["who"]["value"] == "抄书人"
+
+
+def test_an_empty_answer_set_keeps_the_wizard_open(client):
+    """Storing {} is the same as storing nothing: a refresh must ask again."""
+    campaign_id = _campaign(client, _scenario_with_question(client)["id"])
+    client.post(f"/api/game/{campaign_id}/setup-answers", json={"answers": {}})
+    assert client.get(f"/api/game/{campaign_id}/setup-state").json()["needs_setup"] is True
+
+
+def test_traces_of_an_unknown_campaign_are_an_empty_list(client):
+    r = client.get("/api/game/does-not-exist/traces")
+    assert r.status_code == 200
+    assert r.json() == {"traces": []}
+
+
+def test_deleting_traces_of_an_unknown_campaign_deletes_nothing(client):
+    r = client.delete("/api/game/does-not-exist/traces")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 0

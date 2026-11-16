@@ -318,3 +318,53 @@ async def test_engine_prose_never_carries_a_legacy_item_tag():
     assert result.status == "ok", result.error
     assert "ITEM_LOSE" not in result.text
     assert result.text == "You listen. Nothing moves."
+
+
+# --- fallback prose ---------------------------------------------------------
+#
+# The fallback narration runs when the model is unavailable. It must carry what
+# the rules already decided: a talk turn that loses the NPC's line reads as if
+# nothing happened.
+
+def _talk_world():
+    from app.models.game import EntityDef, LocationDef, WorldDefinition
+
+    return WorldDefinition(
+        world_id="w1",
+        name="环形站",
+        language="zh",
+        start_location_id="corridor",
+        locations=[LocationDef(id="corridor", name="环形走廊", npc_ids=["traveler"])],
+        entities=[
+            EntityDef(
+                id="traveler",
+                name="旅人",
+                location_id="corridor",
+                dialogue=["这里以前是观星台。"],
+            ),
+        ],
+    )
+
+
+def test_talking_produces_a_line_in_the_fallback_narration():
+    from app.engines.rules_engine import RulesEngine
+    from app.services.narrative_service import render_fallback
+
+    world = _talk_world()
+    state = GameState(campaign_id="c1", world_id="w1", location_id="corridor")
+    outcome = RulesEngine()._talk(world, state, "traveler", {})
+    text = render_fallback(world, state, outcome, [])
+    assert "观星台" in text, text
+    assert "Nothing changes" not in text
+
+
+def test_a_silent_person_still_gets_a_sentence():
+    from app.engines.rules_engine import RulesEngine
+    from app.services.narrative_service import render_fallback
+
+    world = _talk_world()
+    world.entities[0].dialogue = []
+    state = GameState(campaign_id="c1", world_id="w1", location_id="corridor")
+    outcome = RulesEngine()._talk(world, state, "traveler", {})
+    text = render_fallback(world, state, outcome, [])
+    assert "旅人" in text
