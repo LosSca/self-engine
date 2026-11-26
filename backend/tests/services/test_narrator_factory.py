@@ -19,6 +19,18 @@ def _clean_env(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(narrator_factory.settings, "local_llm_api_key", "", raising=False)
+    # A custom vendor endpoint (CUSTOM_LLM_*) counts as a configured model too,
+    # so "nothing configured" has to mean no route either: another test in the
+    # suite writes these variables through apply_credentials(), which sets
+    # os.environ directly and outlives its own monkeypatch.
+    from app.engines import llm_router
+
+    for name in ("CUSTOM_LLM_BASE_URL", "CUSTOM_LLM_API_KEY", "CUSTOM_LLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("_CUSTOM_LLM_URL", "_CUSTOM_LLM_KEY", "_CUSTOM_LLM_MODEL"):
+        monkeypatch.setattr(llm_router, name, "", raising=False)
+    for name in ("custom_llm_base_url", "custom_llm_api_key", "custom_llm_model"):
+        monkeypatch.setattr(narrator_factory.settings, name, "", raising=False)
     for provider in ("deepseek", "openai", "anthropic"):
         for suffix in ("api_key", "proxy_url", "proxy_key"):
             name = f"{provider}_{suffix}"

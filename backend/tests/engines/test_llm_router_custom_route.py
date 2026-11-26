@@ -125,7 +125,20 @@ def test_a_route_saved_from_the_settings_panel_is_seen_without_a_restart(monkeyp
         )
     finally:
         store.close()
-    apply_credentials()
+    # apply_credentials() writes os.environ itself, which monkeypatch cannot
+    # undo: without this, the route would stay "configured" for every test that
+    # runs after this one and asks whether a model is available at all.
+    import os
 
-    assert llm_router.custom_route_available() is True
-    assert llm_router.custom_default_model() == "vendor-model-2"
+    names = ("CUSTOM_LLM_BASE_URL", "CUSTOM_LLM_API_KEY", "CUSTOM_LLM_MODEL")
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        apply_credentials()
+        assert llm_router.custom_route_available() is True
+        assert llm_router.custom_default_model() == "vendor-model-2"
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
