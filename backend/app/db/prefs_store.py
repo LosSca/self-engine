@@ -44,6 +44,22 @@ ALLOWED_KEYS = (
     "top_p",
     "presence_penalty",
     "frequency_penalty",
+    #: 叙事层的模型参数：留空则沿用世界/预设自带的值，填了就地覆盖。
+    "narrator_max_tokens",
+    "narrator_temperature",
+    "narrator_timeout",
+    "narrator_history_turns",
+    #: 自由文本的额外写作要求，拼在风格说明之后。
+    "narrator_extra_rules",
+    #: 选项层（三条可点选项）的生成参数与风格开关。
+    "suggestions_count",
+    "suggestions_temperature",
+    "suggestions_max_tokens",
+    "suggestions_timeout",
+    "suggestions_extra_rules",
+    "suggestions_allow_speech",
+    "suggestions_allow_investigate",
+    "suggestions_use_story",
 )
 
 

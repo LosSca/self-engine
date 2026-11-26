@@ -380,10 +380,12 @@ def _reasoning_kwargs(provider: LLMProvider, reasoning: bool, model: str = "") -
         return {}
     if _is_spark_model(model):
         # Spark's thinking defaults to enabled and is billed against
-        # max_completion_tokens; reasoning_effort is silently ignored there, so
-        # sending it left every narrator call paying for reasoning it never used.
-        # thinking.type is the vendor's own switch (enabled / disabled / auto).
-        return {"thinking": {"type": "disabled"}}
+        # max_completion_tokens; reasoning_effort is silently ignored there.
+        # A top-level `thinking` kwarg is dropped by litellm for the OpenAI
+        # protocol ("openai does not support thinking"), which silently kept
+        # reasoning on. Only extra_body reaches the vendor: with it the first
+        # prose frame arrives in ~1.7s instead of waiting ~13s of reasoning.
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
     return {"reasoning_effort": "none"}
 
 
@@ -1109,7 +1111,18 @@ class LLMRouter:
         # The block below is the CLIProxyAPI workaround (non-streaming). A local
         # OpenAI-compatible server streams SSE natively, so it falls through to
         # the normal streaming path at the end of this method.
-        if api_base and provider != LLMProvider.LOCAL:
+        # A custom vendor endpoint (Spark and friends) speaks the OpenAI SSE
+        # protocol natively, so it must not take the CLIProxyAPI non-streaming
+        # workaround below. `live_stream` also tells the tail of this method to
+        # forward frames as they arrive instead of buffering the whole answer.
+        live_stream = bool(
+            api_base
+            and provider == LLMProvider.OPENAI
+            and not _OPENAI_PROXY_URL
+            and _custom_llm_url()
+            and api_base.rstrip("/") == _custom_llm_url()
+        )
+        if api_base and provider != LLMProvider.LOCAL and not live_stream:
             # FASE 2: cached-form Anthropic requests go through the anthropic SDK
             # directly. litellm strips content-block cache_control, killing the cache.
             if provider == LLMProvider.ANTHROPIC and _has_cache_control(messages):
@@ -1182,6 +1195,7 @@ class LLMRouter:
             raise
         output_chars = 0
         accumulated = ""
+        first_delta_at: float | None = None
         # Frames are buffered until the end so a refusal that arrives as prose
         # can be replaced by the refusal frame instead of reaching the client as
         # narration. Nothing is lost for a normal answer: the text was never
@@ -1192,15 +1206,23 @@ class LLMRouter:
             if delta:
                 output_chars += len(delta)
                 accumulated += delta
+                if first_delta_at is None:
+                    first_delta_at = time.monotonic() - t0
+                if live_stream:
+                    # The custom vendor is only ever reached through a caller
+                    # that asked for increments, so the frame goes out now. The
+                    # client's final replace still uses the accumulated text.
+                    yield delta
         signal = self.refusal_signal(accumulated)
         if signal is not None:
             logger.warning(
                 "🚫 LLM REFUSAL [%s] model=%s empty=%s - routing decision belongs to the caller",
                 caller, model, not accumulated.strip(),
             )
-            yield signal
-            return
-        if accumulated:
+            if not live_stream:
+                yield signal
+                return
+        if accumulated and not live_stream:
             yield accumulated
         # For streaming, estimate tokens from output chars
         system_chars, total_chars = _count_message_chars(messages)
@@ -1222,9 +1244,9 @@ class LLMRouter:
             entry["output"] = accumulated
         _call_log.append(entry)
         logger.warning(
-            "🔥 LLM CALL [%s] input≈%d output≈%d max=%d time=%.1fs msgs=%d sys_chars=%d",
+            "🔥 LLM CALL [%s] input≈%d output≈%d max=%d time=%.1fs ttft=%.1fs msgs=%d sys_chars=%d",
             entry["caller"], entry["input_tokens"], entry["output_tokens"],
-            max_tokens, entry["elapsed_s"], len(messages), system_chars,
+            max_tokens, entry["elapsed_s"], first_delta_at or 0.0, len(messages), system_chars,
         )
         if not accumulated.strip():
             logger.error(

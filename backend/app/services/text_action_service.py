@@ -16,7 +16,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from app.engines.action_registry import action_names, verb_table
 from app.engines.event_engine import condition_holds, entity_item_count, entity_location
@@ -151,6 +151,9 @@ _NAME_STOP_WORDS = (
 
 _ENVELOPE = re.compile(r"^\[([A-Z]+)\]\s*", re.IGNORECASE)
 _PARSE_FAILURES = {"missing_target", "ambiguous", "no_target"}
+#: Public alias: callers that must tell "the rules refused this" apart from
+#: "the rules read it fine" (e.g. verifying a generated option) use this set.
+PARSE_FAILURES = _PARSE_FAILURES
 
 #: Phrasing that means "I want to talk to X" without using the verb table's
 #: words. "向旅人开口" names a person with the verb inside a compound (开口), so
@@ -194,6 +197,16 @@ class ParsedAction:
             "note": self.note,
             "params": dict(self.params),
         }
+
+
+#: Anything with a CJK ideograph counts as Chinese for the memory key, so a
+#: world taught in Chinese is not queried with an English translation.
+_CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+
+
+def _lang_key(text: str) -> str:
+    """Language bucket of one utterance: only what changes the meaning."""
+    return "zh" if _CJK.search(text or "") else ""
 
 
 def _norm(text: str) -> str:
@@ -1548,6 +1561,7 @@ class TextActionService:
         text: str,
         request_id: Optional[str] = None,
         narrate: bool = True,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         request_id = request_id or f"txt-{uuid.uuid4().hex}"
         replayed = self.game_store.get_request(request_id)
@@ -1568,11 +1582,17 @@ class TextActionService:
         # happens when the model found nothing either.
         unmapped = parsed is None or not parsed.action
         if unmapped:
-            advised = await self._advise(text, world, state, campaign_id)
-            if advised is not None:
-                parsed = advised
+            # 1) the table the advisor fills: the same sentence in the same world
+            #    is answered without a second model call.
+            learned = self._recall_learned(text, world, state)
+            if learned is not None:
+                parsed = learned
             else:
-                parsed = self.parser.parse(text, world, state)
+                advised = await self._advise(text, world, state, campaign_id)
+                if advised is not None:
+                    parsed = advised
+                else:
+                    parsed = self.parser.parse(text, world, state)
         # 明确写了动词、只是目标不存在：仍然拒绝，并把现场能做什么写进
         # message（见 _reject_parse）。「明确动作不许被猜」这条不变量没变。
         if parsed is None or not parsed.action or parsed.confidence in _PARSE_FAILURES:
@@ -1585,7 +1605,7 @@ class TextActionService:
             params={**parsed.params, "text": text},
             narrate=narrate,
         )
-        result = await self.action_service.execute(request)
+        result = await self.action_service.execute(request, on_delta=on_delta)
         return {
             "request_id": request_id,
             "status": result.status,
@@ -1708,6 +1728,111 @@ class TextActionService:
         parsed.note = (parsed.note + " " if parsed.note else "") + "intent advisor"
         if parsed.confidence not in _PARSE_FAILURES:
             parsed.confidence = "advised"
+            # The model cost a call to read this sentence; the next identical
+            # one in this world is answered from the table instead.
+            self._remember_learned(text, world, suggestion, parsed)
+        return parsed
+
+    # ------------------------------------------------------------ intent memory
+    def _scope_key(self, world: Optional[WorldDefinition]) -> str:
+        """Learnings are shared by every campaign played in one world.
+
+        "推开门" names a different door in a station and in a tavern, so the
+        vocabulary is scoped to the world that taught it - not to the player
+        and not to the campaign.
+        """
+        return str(getattr(world, "world_id", "") or "")
+
+    def _remember_learned(
+        self,
+        text: str,
+        world: Optional[WorldDefinition],
+        suggestion: Any,
+        parsed: ParsedAction,
+    ) -> None:
+        """Write one advisor reading down; never breaks the turn."""
+        scope = self._scope_key(world)
+        if not scope:
+            return
+        action = str(getattr(suggestion, "action", "") or parsed.action or "")
+        if action == "custom":
+            action = parsed.action
+        fragment = str(getattr(suggestion, "fragment", "") or "")
+        try:
+            from app.db.intent_memory_store import IntentMemoryStore
+
+            store = IntentMemoryStore()
+            try:
+                store.remember(
+                    scope,
+                    text,
+                    action,
+                    fragment,
+                    lang=_lang_key(text),
+                    confidence=float(getattr(suggestion, "confidence", 0.0) or 0.0),
+                )
+            finally:
+                store.close()
+        except Exception:  # noqa: BLE001 - learning must never break a turn
+            logger.debug("intent memory write failed", exc_info=True)
+
+    def _recall_learned(
+        self, text: str, world: WorldDefinition, state: GameState
+    ) -> Optional[ParsedAction]:
+        """Answer an utterance from the table the advisor filled.
+
+        Returns None when nothing is stored or the stored row no longer
+        resolves against the current world - a renamed door or a removed item
+        must fall through to the advisor, never echo a stale action.
+        """
+        scope = self._scope_key(world)
+        if not scope:
+            return None
+        try:
+            from app.db.intent_memory_store import IntentMemoryStore
+
+            store = IntentMemoryStore()
+            try:
+                row = store.recall(scope, text, lang=_lang_key(text))
+            finally:
+                store.close()
+        except Exception:  # noqa: BLE001 - a broken table must not block a turn
+            logger.debug("intent memory read failed", exc_info=True)
+            return None
+        if not row:
+            return None
+        parsed = self._parse_learned(row, text, world, state)
+        if parsed is None:
+            logger.info(
+                "learned intent no longer resolves (%s -> %s); asking again",
+                str(row.get("phrase") or "")[:40],
+                row.get("action"),
+            )
+        return parsed
+
+    def _parse_learned(
+        self, row: Dict[str, Any], text: str, world: WorldDefinition, state: GameState
+    ) -> Optional[ParsedAction]:
+        """Re-run the stored reading through the very same parser."""
+        envelope = _ENVELOPE.match((text or "").strip())
+        mode = envelope[1].upper() if envelope else "DO"
+        action = str(row.get("action") or "")
+        if mode == "SAY" and action != "talk":
+            return None
+        primary = _VERBS_PRIMARY.get(action, "")
+        fragment = str(row.get("fragment") or "")
+        candidate = f"{primary} {fragment}".strip() if primary else ""
+        if not candidate:
+            return None
+        parsed = self.parser.parse(candidate, world, state)
+        if parsed is None or not parsed.action or parsed.confidence in _PARSE_FAILURES:
+            return None
+        if action not in ("custom", parsed.action):
+            # The verb table has the last word, exactly as with a fresh advice.
+            logger.info("learned action %s parsed as %s; keeping the parser", action, parsed.action)
+            return None
+        parsed.note = (parsed.note + " " if parsed.note else "") + "intent memory"
+        parsed.confidence = "advised"
         return parsed
 
     async def _reject_parse(

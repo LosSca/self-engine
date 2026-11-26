@@ -6,6 +6,7 @@ import {
   streamAction,
   fetchEngineAvailability,
   submitTextAction,
+  submitTextActionStream,
   submitAction,
   fetchJournal,
   fetchHistory,
@@ -476,7 +477,9 @@ export default function GameCanvas() {
     return () => { cancelled = true }
   }, [activeCampaignId])
 
-  const applyEngineResult = (result) => {
+  // opts.reuseLastMessage: the prose was already painted chunk by chunk, so the
+  // final render replaces that bubble instead of appending a second one.
+  const applyEngineResult = (result, opts = {}) => {
     const narrative = result?.narrative
     const text = narrative?.text?.trim()
     const parts = []
@@ -515,7 +518,9 @@ export default function GameCanvas() {
       }
     }
     if (parts.length === 0) parts.push('（无叙事输出）')
-    appendMessage({ role: 'assistant', content: parts.join('\n\n') })
+    const rendered = parts.join('\n\n')
+    if (opts.reuseLastMessage) replaceLastAssistantMessage(rendered)
+    else appendMessage({ role: 'assistant', content: rendered })
     if (result?.state_version != null) {
       setEngineLane((prev) => ({ ...prev, checked: true, bound: true, version: result.state_version }))
     }
@@ -556,14 +561,21 @@ export default function GameCanvas() {
     setSuggestions([])
     appendMessage({ role: 'user', content: action })
     setStreaming(true)
+    let streamed = false
     try {
       // 规则链路也认 @目标：把「对谁说话」写进行动文本，解析器才能绑定人物。
       const spoken = target?.name && !String(action).includes(`@${target.name}`)
         ? `${action} @${target.name}`
         : action
-      const result = await submitTextAction(activeCampaignId, spoken)
-      applyEngineResult(result)
-      // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
+      // 叙事一边生成一边落字：delta 直接追加到气泡。回合结束时 applyEngineResult
+      // 用清洗过的最终文本覆盖同一个气泡，并照旧刷新状态、事件与三选一。
+      const result = await submitTextActionStream(activeCampaignId, spoken, {
+        onDelta: (chunk) => {
+          streamed = true
+          appendToLastMessage(chunk)
+        },
+      })
+      applyEngineResult(result, { reuseLastMessage: streamed })
       // 规则链路把三选一放在响应体里（SSE 链路走 [SUGGESTIONS] 标签）。
       if (Array.isArray(result?.suggestions) && result.suggestions.length) {
         setSuggestions(result.suggestions)

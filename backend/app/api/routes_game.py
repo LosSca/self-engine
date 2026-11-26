@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -913,18 +914,75 @@ def _load_world_for_campaign(campaign_id: str):
         return None
 
 
+def _sse_lines(text: str, prefix: str = "") -> str:
+    """Encode text as one SSE event, one `data:` line per source line.
+
+    A multi-line payload must keep a `data:` prefix on every line: a bare
+    newline would end the event and the client would silently drop the rest
+    (the frontend re-joins the lines with "\n", so the text survives intact).
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    body = "".join(
+        f"data: {prefix if index == 0 else ''}{line}\n"
+        for index, line in enumerate(lines)
+    )
+    return body + "\n"
+
+
 async def _unified_event_stream(req: PlayerActionRequest, service, scenario_store):
     """SSE adapter: commit first, then describe, then stream one narrative."""
     reset_call_log()
     game_store = service.game_store
     try:
         before = game_store.get_state(req.campaign_id)
+        # The turn commits inside the task; prose reaches the player through the
+        # queue as the model writes it, so the first words arrive while the rest
+        # of the answer is still being generated. Nothing is sent twice: the
+        # final `[TRUNCATE_CLEAN]` event replaces the incremental copy with the
+        # authoritative, cleaned text below.
+        queue: "asyncio.Queue[str]" = asyncio.Queue()
+
+        def on_delta(piece: str) -> None:
+            if piece:
+                queue.put_nowait(piece)
+
+        task = asyncio.create_task(
+            service.execute(req.campaign_id, req.action, on_delta=on_delta)
+        )
+        streamed = 0
         try:
-            payload = await service.execute(req.campaign_id, req.action)
-        except LookupError as exc:
-            yield f"data: 无法继续：{exc}\n\n"
+            while True:
+                getter = asyncio.ensure_future(queue.get())
+                done, _pending = await asyncio.wait(
+                    {getter, task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if getter in done:
+                    piece = getter.result()
+                    streamed += len(piece)
+                    yield _sse_lines(piece)
+                    continue
+                getter.cancel()
+                break
+            # Anything the producer queued just before finishing belongs to the
+            # player too; only then is the result safe to read.
+            while not queue.empty():
+                piece = queue.get_nowait()
+                streamed += len(piece)
+                yield _sse_lines(piece)
+            error = None if task.cancelled() else task.exception()
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if error is None and task.cancelled():
             yield "data: [DONE]\n\n"
             return
+        if isinstance(error, LookupError):
+            yield f"data: 无法继续：{error}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        if error is not None:
+            raise error
+        payload = task.result()
         result = payload.get("result") or {}
         narrative = result.get("narrative") or {}
         text = (narrative.get("text") or "").strip()
@@ -939,10 +997,12 @@ async def _unified_event_stream(req: PlayerActionRequest, service, scenario_stor
                 text = result.get("message") or "这件事没有发生。"
             elif result.get("status") == "duplicate":
                 text = "这条行动之前已经处理过，本次没有产生新的变化。"
-        if text:
-            for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-                yield f"data: {line}\n"
-            yield "\n"
+        if streamed and text:
+            # The incremental copy above was raw model output; this replaces it
+            # with the same cleaned prose a non-streamed turn would have sent.
+            yield _sse_lines(text, prefix="[TRUNCATE_CLEAN]")
+        elif text:
+            yield _sse_lines(text)
         _mirror_unified_turn(req, before, result)
         # The rule lane never asks the model for next steps, so without this the
         # player would sit in front of an empty input box with no options.
@@ -1356,6 +1416,35 @@ async def update_campaign_settings(campaign_id: str, req: CampaignSettingsReques
     return {"status": "ok", "combat_enabled": req.combat_enabled}
 
 
+def _bind_world_for_play(campaign_id: str) -> None:
+    """Answering the wizard is where play starts.
+
+    Bind (or provision) the campaign's world right here, so the play screen
+    opens on the engine lane with a real state - otherwise the first screen is
+    an empty room with no committed item positions, and the player has to make
+    one blind move before anything sensible is offered. When a world is
+    already bound bindable_world returns None and nothing happens.
+    """
+    try:
+        from app.api.routes_engine_state import _get_store as _get_game_store
+        from app.services.text_action_service import TextActionService
+
+        game_store = _get_game_store()
+        try:
+            with ScenarioStore(_scenario_db_path()) as scenario_store:
+                TextActionService(
+                    game_store, scenario_store=scenario_store
+                ).bindable_world(campaign_id)
+        finally:
+            game_store.close()
+    except Exception:  # noqa: BLE001 - a bind failure must not lose the answers
+        logger.warning(
+            "could not bind a world for campaign %s after setup",
+            campaign_id,
+            exc_info=True,
+        )
+
+
 @router.post("/{campaign_id}/setup-answers")
 async def save_setup_answers(campaign_id: str, req: SetupAnswersRequest):
     """Persist the wizard answers and refresh the active session so the
@@ -1367,6 +1456,9 @@ async def save_setup_answers(campaign_id: str, req: SetupAnswersRequest):
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     generated = await _maybe_generate_opening(campaign_id, payload)
+    if payload:
+        # An empty answer set keeps the wizard open, so it must not start play.
+        _bind_world_for_play(campaign_id)
 
     # Drop the cached session so _ensure_session re-reads setup_answers next call.
     _sessions.pop(campaign_id, None)

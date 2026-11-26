@@ -11,6 +11,7 @@ import StoryProgressPanel from './StoryProgressPanel'
 import DevtoolsPanel from './DevtoolsPanel'
 import WorldStudio from './WorldStudio'
 import SettingsPanel from './SettingsPanel'
+import NarrativeStudio from './NarrativeStudio'
 import ActionPreviewPanel from './ActionPreviewPanel'
 
 // 地图看一眼才用到，ForceGraph2D 连同 d3 有 300KB+，不能压在游玩首屏上。
@@ -29,6 +30,7 @@ const TITLES = {
   worldstudio: '世界工坊',
   devtools: 'LLM 调试台',
   settings: '设置',
+  narrative: '叙事与选项',
   preview: '行动预演',
 }
 
@@ -150,6 +152,9 @@ export default function ToolDock({ tool, onClose, campaignId, context }) {
           />
         </div>
       )}
+              {active === 'narrative' && (
+                <NarrativeStudio {...panelProps} campaignId={campaignId} context={context} onClose={closeAll} />
+              )}
               {active === 'preview' && <ActionPreviewPanel {...panelProps} campaignId={campaignId} onClose={closeAll} />}
             </div>
           </div>

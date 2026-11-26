@@ -958,7 +958,11 @@ class RulesEngine:
                     return lead
                 return f"the {door.name} is locked; it needs the {key.name}."
         for quest in world.quests:
-            if not quest.enabled or quest.id in state.quests_completed:
+            # Progress lives in state.quests (QuestProgress.status); there is no
+            # quests_completed field on GameState, and reading one raised
+            # AttributeError on every improvised action.
+            progress = state.quests.get(quest.id)
+            if not quest.enabled or (progress is not None and progress.status in ("completed", "failed")):
                 continue
             for objective in quest.objectives:
                 if self._objective_done(state, objective):

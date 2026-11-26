@@ -23,6 +23,7 @@ from app.api.routes_characters import router as characters_router
 from app.api.routes_knowledge import router as knowledge_router
 from app.api.routes_memory import router as memory_router
 from app.api.routes_works import router as works_router
+from app.api.routes_intent_memory import router as intent_memory_router
 from app.engines.llm_router import POLICY_CHOICES, LLMProvider, custom_route_available
 
 # 用户在设置页填的密钥优先落到 os.environ（litellm 读的就是它），
@@ -62,6 +63,7 @@ app.include_router(characters_router, prefix="/api", tags=["characters"])
 app.include_router(knowledge_router, prefix="/api/v1", tags=["knowledge"])
 app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(works_router, prefix="/api/v1", tags=["works"])
+app.include_router(intent_memory_router, prefix="/api", tags=["intent-memory"])
 
 
 @app.middleware("http")

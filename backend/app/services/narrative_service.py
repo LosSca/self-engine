@@ -13,7 +13,7 @@ import json
 import re
 from collections import deque
 from collections.abc import Mapping
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from app.engines import game_clock
 from app.models.game import (
@@ -956,6 +956,56 @@ class LLMNarrator:
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
+    # Kept back from the player until either more prose proves it is not a
+    # marker or the turn ends: splitting a control tag or a refusal phrase
+    # across frames would show the raw protocol to a reader.
+    _STREAM_HOLDBACK = 24
+
+    async def _stream_complete(
+        self,
+        router,
+        messages: List[dict],
+        on_delta: Callable[[str], None],
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> str:
+        """Narrate through router.stream and report prose as it arrives.
+
+        Returns the whole text, so the caller keeps the identical
+        post-processing path a blocking turn takes. Only the tail
+        (_STREAM_HOLDBACK characters) is withheld while the answer grows.
+        """
+        state = {"accumulated": "", "emitted": 0}
+
+        def release(final: bool = False) -> None:
+            accumulated = state["accumulated"]
+            cut = len(accumulated) if final else max(0, len(accumulated) - self._STREAM_HOLDBACK)
+            if cut > state["emitted"]:
+                piece = accumulated[state["emitted"]:cut]
+                state["emitted"] = cut
+                if piece:
+                    on_delta(piece)
+
+        async def consume() -> None:
+            async for delta in router.stream(messages, **kwargs):
+                if delta:
+                    state["accumulated"] += delta
+                    release()
+
+        # The turn budget is a setting, so a slow local model can be given more
+        # room than a fast cloud one without editing code.
+        budget = float(timeout or self.timeout or 0.0)
+        try:
+            if hasattr(asyncio, "timeout"):
+                async with asyncio.timeout(budget):
+                    await consume()
+            else:  # pragma: no cover - Python < 3.11
+                await asyncio.wait_for(consume(), timeout=budget)
+        finally:
+            if state["accumulated"]:
+                release(final=True)
+        return state["accumulated"]
+
     async def narrate(
         self,
         request: ActionRequest,
@@ -967,6 +1017,7 @@ class LLMNarrator:
         knowledge: Optional[Sequence[dict]] = None,
         options: Optional[dict] = None,
         executions_effects: Optional[Sequence[Effect]] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> NarrativeResult:
         language = (options or {}).get("language")
         language = language.strip() if isinstance(language, str) else None
@@ -979,20 +1030,13 @@ class LLMNarrator:
             player_context=player_context,
         )
         _default_router, _default_provider, _default_model = self._narrative_route(options)
-        diagnostics = capture_diagnostics(
-            knowledge,
-            options,
-            provider=_default_provider,
-            model=_default_model,
-            timeout=self.timeout,
-            default_temperature=self.temperature,
-            default_max_tokens=self.max_tokens,
-            default_language=self.language,
-        )
         max_tokens = self.max_tokens
         temperature = self.temperature
+        turn_timeout: Optional[float] = None
         sampler_kwargs: dict = {}
         if options:
+            if isinstance(options.get("timeout"), (int, float)) and options["timeout"] > 0:
+                turn_timeout = float(options["timeout"])
             if isinstance(options.get("max_tokens"), int) and options["max_tokens"] > 0:
                 max_tokens = options["max_tokens"]
             if isinstance(options.get("temperature"), (int, float)):
@@ -1006,6 +1050,18 @@ class LLMNarrator:
             stop = options.get("stop")
             if isinstance(stop, list) and stop:
                 sampler_kwargs["stop"] = [str(item) for item in stop if str(item)]
+        # Captured after the overrides: the console must show the budget this
+        # turn really used, not the narrator's constructor default.
+        diagnostics = capture_diagnostics(
+            knowledge,
+            options,
+            provider=_default_provider,
+            model=_default_model,
+            timeout=turn_timeout or self.timeout,
+            default_temperature=self.temperature,
+            default_max_tokens=self.max_tokens,
+            default_language=self.language,
+        )
         policy = (options or {}).get("content_policy")
         policy = policy.strip().lower() if isinstance(policy, str) else ""
         if not policy:
@@ -1024,7 +1080,16 @@ class LLMNarrator:
             # below turns that into a failed NarrativeResult, never a NameError.
             text = None
             delay = REFUSAL_RETRY_DELAY
-            use_agents = self.agents is not None and preset_router(options) is None
+            # A streamed turn cannot go through the agent lane: the role
+            # runtime answers with one finished string, so the player would sit
+            # in front of an empty bubble for the whole call. Streaming drops to
+            # the router, which is the same request the agent lane's narrate
+            # role sends anyway.
+            use_agents = (
+                self.agents is not None
+                and preset_router(options) is None
+                and on_delta is None
+            )
             self.last_route = "agent" if use_agents else "router"
             for attempt in (1, 2):
                 try:
@@ -1039,6 +1104,7 @@ class LLMNarrator:
                             max_tokens=max_tokens,
                             temperature=temperature,
                             policy=policy,
+                            reasoning=False,
                         )
                         if reply.ok:
                             text = reply.text
@@ -1049,16 +1115,37 @@ class LLMNarrator:
                                 self.last_route = "degraded:" + ",".join(reply.attempts)
                             break
                         raise RuntimeError(reply.error or "narrative agent failed")
-                    text = await asyncio.wait_for(
-                        router.complete(
+                    if on_delta is not None and not use_agents:
+                        # The player is watching this turn land: hand out prose
+                        # as it arrives, then keep the very same string the
+                        # blocking call would have returned so cleanup,
+                        # verification and the final replace all agree.
+                        text = await self._stream_complete(
+                            router,
                             messages,
+                            on_delta,
                             max_tokens=max_tokens,
                             temperature=temperature,
                             content_policy=policy or None,
+                            # Prose needs no chain of thought: on Spark the
+                            # reasoning tokens are billed against max_tokens,
+                            # so leaving it on spent the whole narration
+                            # budget thinking and streamed back nothing.
+                            reasoning=False,
                             **sampler_kwargs,
-                        ),
-                        timeout=self.timeout,
-                    )
+                        )
+                    else:
+                        text = await asyncio.wait_for(
+                            router.complete(
+                                messages,
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                content_policy=policy or None,
+                                reasoning=False,
+                                **sampler_kwargs,
+                            ),
+                            timeout=self.timeout,
+                        )
                     break
                 except asyncio.TimeoutError:
                     # Two full timeouts on a turn would double the wait the player

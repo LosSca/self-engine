@@ -255,6 +255,7 @@ class AgentRuntime:
         temperature: Optional[float] = None,
         policy: str = "",
         fallback: bool = True,
+        reasoning: bool | None = None,
     ) -> AgentReply:
         """Ask ``role`` (then its degradation chain) and never raise."""
         config = self.config(role)
@@ -296,6 +297,7 @@ class AgentRuntime:
                         else current_config.temperature
                     ),
                     policy=policy,
+                    reasoning=reasoning,
                 )
             except Exception as exc:  # noqa: BLE001 - degrade, never raise
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -360,12 +362,17 @@ async def _complete_with_timeout(
     max_tokens: int,
     temperature: Optional[float],
     policy: str = "",
+    reasoning: bool | None = None,
 ) -> str:
     kwargs: Dict[str, Any] = {"max_tokens": max_tokens}
     if temperature is not None:
         kwargs["temperature"] = float(temperature)
     if policy:
         kwargs["content_policy"] = policy
+    if reasoning is not None:
+        # Roles narrate prose: a model that spends the whole budget thinking
+        # returns an empty string and costs the turn its scene.
+        kwargs["reasoning"] = bool(reasoning)
     return await asyncio.wait_for(router.complete(messages, **kwargs), timeout=timeout)
 
 

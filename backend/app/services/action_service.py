@@ -30,7 +30,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.db.game_state_store import GameStateStore, StateConflictError
 from app.engines.event_engine import (
@@ -151,6 +151,10 @@ def narrator_style_notes(prefs: Optional[Dict[str, Any]] = None) -> List[str]:
     hint = values.get("narrator_language_hint")
     if isinstance(hint, str) and hint.strip():
         notes.append(f"语气参考：{hint.strip()[:200]}")
+    extra = values.get("narrator_extra_rules")
+    if isinstance(extra, str) and extra.strip():
+        # 用户自己写的额外要求排在最后，与内置开关冲突时以它为准。
+        notes.append(f"额外要求：{extra.strip()[:800]}")
     return notes
 
 
@@ -724,7 +728,13 @@ class ActionService:
             )
         if play is None and (state is None or provider is None):
             # Nothing authored and no record to recall: only long-term memory.
-            return blocks, [block["id"] for block in blocks], None
+            # The narrating settings still apply: they are the user's, not the
+            # scenario's, so a world without canon is narrated the same way.
+            return (
+                blocks,
+                [block["id"] for block in blocks],
+                self._apply_sampling_prefs(None),
+            )
         if play is not None:
             try:
                 if play.config.mode == "storyline":
@@ -810,27 +820,59 @@ class ActionService:
             prompt_parts.append("\n".join(style_notes))
         if prompt_parts:
             options = {**(options or {}), "system_prompt": "\n\n".join(prompt_parts)}
-        # 采样参数：设置里填了才覆盖 preset，留空就用世界/预设自带的值。
-        prefs_for_sampling = _prefs() if style_notes else {}
-        for key in ("top_p", "presence_penalty", "frequency_penalty"):
-            value = prefs_for_sampling.get(key)
-            if value is None or value == "":
-                continue
-            try:
-                options = {**(options or {}), key: float(value)}
-            except (TypeError, ValueError):
-                continue
+        options = self._apply_sampling_prefs(options)
         if not blocks:
             # Sampling settings are authored too: they apply even when the
             # scenario has no knowledge entries to hand over.
             return [], [], options
         return blocks, [block["id"] for block in blocks], options
 
+    @staticmethod
+    def _apply_sampling_prefs(options: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Overlay the settings panel's sampling values on the preset's.
+
+        Only keys the user actually set are touched; an empty field keeps the
+        world/preset value, which is why every entry is checked for None and
+        for "" before it is parsed. A value that does not parse is ignored
+        rather than failing a turn.
+        """
+        prefs_for_sampling = _prefs()
+        if not prefs_for_sampling:
+            return options
+        out = dict(options or {})
+        changed = False
+        for key in ("top_p", "presence_penalty", "frequency_penalty"):
+            value = prefs_for_sampling.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                out[key] = float(value)
+                changed = True
+            except (TypeError, ValueError):
+                continue
+        for pref_key, option_key, cast in (
+            ("narrator_temperature", "temperature", float),
+            ("narrator_timeout", "timeout", float),
+            ("narrator_max_tokens", "max_tokens", int),
+        ):
+            value = prefs_for_sampling.get(pref_key)
+            if value is None or value == "":
+                continue
+            try:
+                converted = cast(float(value))
+            except (TypeError, ValueError):
+                continue
+            if converted > 0:
+                out[option_key] = converted
+                changed = True
+        return out if (changed or options is not None) else None
+
     def _narrate_options(
         self,
         knowledge: List[Dict[str, Any]],
         options: Optional[Dict[str, Any]],
         world: Optional[WorldDefinition] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """Pass authored knowledge only to narrators that accept it.
 
@@ -841,7 +883,7 @@ class ActionService:
             # The world decides the prose language, so a scene authored in
             # Chinese reads in Chinese even when no preset sets one.
             options = self._language_option(world, options)
-        if not knowledge and options is None:
+        if not knowledge and options is None and on_delta is None:
             return {}
         try:
             params = inspect.signature(self.narrator.narrate).parameters
@@ -854,6 +896,8 @@ class ActionService:
             extra["knowledge"] = knowledge
         if "options" in params:
             extra["options"] = options
+        if on_delta is not None and "on_delta" in params:
+            extra["on_delta"] = on_delta
         return extra
 
     @staticmethod
@@ -874,7 +918,11 @@ class ActionService:
         return merged
 
     # --------------------------------------------------------------- execute
-    async def execute(self, request: ActionRequest) -> ActionResult:
+    async def execute(
+        self,
+        request: ActionRequest,
+        on_delta: Optional[Callable[[str], None]] = None,
+    ) -> ActionResult:
         payload = self._payload(request)
         duplicate = self._replay(request, payload)
         if duplicate is not None:
@@ -895,7 +943,9 @@ class ActionService:
             world, state, request.action, request.target_id, request.params
         )
         if not outcome.ok:
-            return await self._reject(request, payload, state, world, outcome)
+            return await self._reject(
+                request, payload, state, world, outcome, on_delta=on_delta
+            )
 
         (
             result,
@@ -942,6 +992,7 @@ class ActionService:
             new_state,
             narration_input,
             context_entries=context_entries,
+            on_delta=on_delta,
         )
         # Anything mirroring the turn elsewhere happens after the fact and is
         # not allowed to affect the answer.
@@ -1062,6 +1113,7 @@ class ActionService:
         new_state: GameState,
         narration_input: "_NarrationInput",
         context_entries: Optional[List[str]] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> ActionResult:
         """Write the prose for a turn that is already durable.
 
@@ -1093,6 +1145,7 @@ class ActionService:
                 # The recap written by this very turn must not be handed back
                 # to the narrator as if it were earlier history.
                 summary=narration_input.summary,
+                on_delta=on_delta,
             )
             narrative = self._degrade_story(narrative, outcome, new_state, world, executions)
         except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
@@ -1282,6 +1335,7 @@ class ActionService:
         state: GameState,
         world: WorldDefinition,
         outcome: RuleOutcome,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> ActionResult:
         # A refused action also gets prose, but only as explanation of the
         # refusal: the state it describes is untouched either way.
@@ -1304,7 +1358,7 @@ class ActionService:
                     outcome,
                     state,
                     world,
-                    **self._narrate_options(knowledge, options, world),
+                    **self._narrate_options(knowledge, options, world, on_delta=on_delta),
                 )
             except Exception as exc:  # noqa: BLE001 - prose must never fail a turn
                 narrative = NarrativeResult(
@@ -1434,6 +1488,7 @@ class ActionService:
         active_node: Optional[str],
         armed_packs: Optional[List[str]] = None,
         summary: Optional[str] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
     ) -> tuple[NarrativeResult, List[str]]:
         """Describe a settled turn, never decide it.
 
@@ -1511,7 +1566,7 @@ class ActionService:
                 world,
                 executions,
                 [update.quest_id for update in quest_updates],
-                **self._narrate_options(knowledge, options, world),
+                **self._narrate_options(knowledge, options, world, on_delta=on_delta),
                 executions_effects=event_effects,
             )
         except TypeError as exc:
@@ -1530,7 +1585,7 @@ class ActionService:
                     world,
                     executions,
                     [update.quest_id for update in quest_updates],
-                    **self._narrate_options(knowledge, options, world),
+                    **self._narrate_options(knowledge, options, world, on_delta=on_delta),
                 )
             except Exception as inner:  # noqa: BLE001
                 return (

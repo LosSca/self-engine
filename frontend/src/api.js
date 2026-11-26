@@ -841,6 +841,93 @@ export async function submitTextAction(campaignId, text, options) {
   return result
 }
 
+/**
+ * Same turn as submitTextAction, but delivered while the narrator writes.
+ *
+ * The server answers text/event-stream with JSON frames: {type:'delta',text}
+ * as prose arrives, one {type:'result',payload} carrying the committed state,
+ * then {type:'done'}. A failed turn arrives as {type:'error'}. Resolves with
+ * the same ActionResult submitTextAction returns, so callers can share one
+ * renderer for streamed and non-streamed turns.
+ */
+export async function submitTextActionStream(campaignId, text, options) {
+  const { requestId, narrate = true, onDelta, onResult, signal } =
+    options && typeof options === 'object' ? options : {}
+  const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/text-actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text,
+      request_id: requestId || newRequestId(),
+      narrate,
+      stream: true,
+    }),
+    signal,
+  })
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '')
+    throw new Error(`${r.status} ${detail.slice(0, 300)}`)
+  }
+  if (!r.body || !r.body.getReader) {
+    // No streaming transport (very old browser): fall back to the JSON lane.
+    return submitTextAction(campaignId, text, options)
+  }
+
+  const reader = r.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result = null
+  let failure = null
+
+  const handleFrame = (frame) => {
+    if (!frame || typeof frame !== 'object') return
+    if (frame.type === 'delta') {
+      if (frame.text && onDelta) onDelta(frame.text)
+      return
+    }
+    if (frame.type === 'result') {
+      const payload = frame.payload || {}
+      result = payload.result || payload
+      if (result && !Array.isArray(result.suggestions) && Array.isArray(payload.suggestions)) {
+        result.suggestions = payload.suggestions
+      }
+      if (result && onResult) onResult(result)
+      return
+    }
+    if (frame.type === 'error') {
+      failure = new Error(frame.message || '这一回合没能完成')
+      return
+    }
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let cut = buffer.indexOf('\n\n')
+    while (cut !== -1) {
+      const block = buffer.slice(0, cut)
+      buffer = buffer.slice(cut + 2)
+      const data = block
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).replace(/^ /, ''))
+        .join('\n')
+      if (data) {
+        try {
+          handleFrame(JSON.parse(data))
+        } catch {
+          /* a frame we cannot parse must not kill the turn */
+        }
+      }
+      cut = buffer.indexOf('\n\n')
+    }
+  }
+  if (failure) throw failure
+  if (!result) throw new Error('这一回合没有返回结果')
+  return result
+}
+
 /** Structured action (used by UI affordances that already know the target). */
 export async function submitAction(campaignId, { action, targetId = null, params = {}, requestId, narrate = true }) {
   const r = await fetch(`${ENGINE_V1}/campaigns/${campaignId}/actions`, {
@@ -1202,6 +1289,46 @@ export async function savePrefs(values) {
     body: JSON.stringify(values || {}),
   })
   return jsonOrThrow(r, '保存设置失败')
+}
+
+// ---- 意图学习表（/api/intent）----
+// 顾问模型每读懂一句话就写一行：动作 + 指向目标的原文片段。面板可以列出、
+// 手工补充、纠正和删除；写入后同一句话不再调用模型。
+export async function fetchIntentLearnings(scope = '', limit = 200) {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  params.set('limit', String(limit))
+  const r = await fetch(`${BASE}/intent?${params.toString()}`)
+  const data = await jsonOrThrow(r, '读取学习表失败')
+  return Array.isArray(data?.learnings) ? data.learnings : []
+}
+
+export async function addIntentLearning(body) {
+  const r = await fetch(`${BASE}/intent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  })
+  return jsonOrThrow(r, '新增学习记录失败')
+}
+
+export async function updateIntentLearning(id, patch) {
+  const r = await fetch(`${BASE}/intent/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch || {}),
+  })
+  return jsonOrThrow(r, '修改学习记录失败')
+}
+
+export async function deleteIntentLearning(id) {
+  const r = await fetch(`${BASE}/intent/${id}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '删除学习记录失败')
+}
+
+export async function clearIntentLearnings(scope) {
+  const r = await fetch(`${BASE}/intent?scope=${encodeURIComponent(scope)}`, { method: 'DELETE' })
+  return jsonOrThrow(r, '清空学习表失败')
 }
 
 /** Which model answers each agent role (keys are never sent by the API). */

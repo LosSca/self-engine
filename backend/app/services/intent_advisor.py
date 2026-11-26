@@ -28,8 +28,9 @@ from app.engines.action_registry import action_names
 logger = logging.getLogger(__name__)
 
 #: Default time budget. An advisor that is slower than this is simply skipped:
-#: the deterministic rejection is already a correct answer.
-DEFAULT_TIMEOUT = 3.0
+#: the deterministic rejection is already a correct answer. A non-streaming
+#: round trip to a hosted model takes 3-6s here, so 3s skipped every call.
+DEFAULT_TIMEOUT = 8.0
 
 _TRUTHY = ("1", "true", "yes", "on")
 _FALSY = ("0", "false", "no", "off", "")
@@ -166,7 +167,10 @@ class IntentAdvisor:
         ]
         try:
             reply = await asyncio.wait_for(
-                self.router.complete(messages, temperature=0.0, max_tokens=120),
+                # reasoning=False: the reply is one small JSON object, and a
+                # thinking model otherwise spends the whole 120-token budget
+                # before writing it (observed with spark-x2.6: empty reply).
+                self.router.complete(messages, temperature=0.0, max_tokens=200, reasoning=False),
                 timeout=self.timeout,
             )
         except asyncio.TimeoutError:
@@ -179,5 +183,8 @@ class IntentAdvisor:
         allowed.extend(spec.get("name") for spec in extra_actions)
         suggestion = parse_reply(reply if isinstance(reply, str) else str(reply), allowed)
         if suggestion is None:
-            logger.info("intent advisor returned nothing usable")
+            logger.info(
+                "intent advisor returned nothing usable: %r",
+                (reply if isinstance(reply, str) else str(reply))[:240],
+            )
         return suggestion

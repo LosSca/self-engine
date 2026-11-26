@@ -124,6 +124,10 @@ def _provider_name() -> str:
         return explicit
     if local_llm_reachable():
         return "local"
+    from app.engines.llm_router import custom_route_available
+
+    if custom_route_available():
+        return "openai"
     default = LLMConfig().primary_provider.value
     for name in dict.fromkeys([default, *(p.value for p in LLMProvider)]):
         if _cloud_configured(name):
@@ -143,7 +147,16 @@ def narrator_choice(env_var: str = "ENGINE_NARRATOR") -> str:
     name = _provider_name()
     if name == "default":
         name = LLMConfig().primary_provider.value
-    configured = local_llm_reachable() if name == "local" else _cloud_configured(name)
+    if name == "local":
+        configured = local_llm_reachable()
+    elif name == "openai":
+        from app.engines.llm_router import custom_route_available
+
+        # A custom OpenAI-compatible endpoint (CUSTOM_LLM_*) is a configured
+        # model even when no OPENAI_API_KEY / OPENAI_PROXY_URL exists.
+        configured = _cloud_configured(name) or custom_route_available()
+    else:
+        configured = _cloud_configured(name)
     return "llm" if configured else "template"
 
 
@@ -154,7 +167,13 @@ def prefer_local() -> bool:
 
 def build_router(provider: Optional[str] = None):
     """Build a supported provider's router; unknown names are configuration errors."""
-    from app.engines.llm_router import LLMConfig, LLMProvider, LLMRouter
+    from app.engines.llm_router import (
+        LLMConfig,
+        LLMProvider,
+        LLMRouter,
+        custom_default_model,
+        custom_route_available,
+    )
 
     name = (provider or _provider_name()).strip().lower()
     config = LLMConfig()
@@ -162,7 +181,11 @@ def build_router(provider: Optional[str] = None):
         selected = LLMProvider(name)
         models = {
             LLMProvider.DEEPSEEK: LLMConfig().primary_model,
-            LLMProvider.OPENAI: "gpt-5.6-sol",
+            LLMProvider.OPENAI: (
+                custom_default_model()
+                if custom_route_available() and not _cloud_configured("openai")
+                else "gpt-5.6-sol"
+            ),
             LLMProvider.ANTHROPIC: "claude-sonnet-5",
             LLMProvider.LOCAL: local_llm_model(),
         }

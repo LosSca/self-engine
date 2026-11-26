@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Backpack, Map, Sparkles, Clock, Brain, Gem, BookOpen, Terminal,
-  Globe, Settings, UserRound, PanelLeftClose, PanelLeftOpen, Home, Plus, Power,
+  Globe, Settings, UserRound, PanelLeftClose, PanelLeftOpen, Home, Plus, Power, SlidersHorizontal,
 } from 'lucide-react'
 import { useGameStore } from '../store'
 import OnboardingGuide from './OnboardingGuide'
@@ -32,6 +32,7 @@ const TOOL_GROUPS = [
     items: [
       { id: 'worldstudio', icon: Globe, label: '世界工坊' },
       { id: 'devtools', icon: Terminal, label: 'LLM 调试台' },
+      { id: 'narrative', icon: SlidersHorizontal, label: '叙事与选项' },
       { id: 'settings', icon: Settings, label: '设置' },
     ],
   },

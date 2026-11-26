@@ -608,14 +608,23 @@ def _room_facts(
             key_id = _text(getattr(door, "key_item_id", ""))
             key = items.get(key_id) if key_id else None
             try:
-                reachable = item_at.get(key_id) == here_id
+                placed = item_at.get(key_id)
             except TypeError:
-                reachable = False
+                placed = None
+            if placed is None:
+                # Nothing has committed a position yet (the first screen of a
+                # campaign): the room's authored item list is what makes the
+                # key visible there. Without this fallback the very first three
+                # buttons led with a door that cannot be opened - the key that
+                # opens it was never mentioned.
+                key_here = key_id in (getattr(here, "item_ids", []) or [])
+            else:
+                key_here = placed == here_id
             # Only a key still lying here is something to pick up; a key
             # already carried needs no further step, so it is not offered.
             if (
                 key is not None
-                and reachable
+                and key_here
                 and not inventory.get(key_id)
                 and key_id not in facts["key_ids"]
             ):
@@ -871,3 +880,71 @@ def fingerprint(items: Sequence[Suggestion]) -> str:
     """Stable id for a suggestion set (lets the client dedupe/track picks)."""
     joined = "|".join(f"{s.get('action', '')}~{s.get('speech', '')}" for s in items)
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def room_guidance(
+    world: Any,
+    state: Mapping[str, Any] | None,
+    *,
+    location: str = "",
+    language: str = "zh",
+) -> dict[str, Any]:
+    """What this room offers, as plain name lists.
+
+    This is the guidance handed to a model asked to write the next three
+    options: the exits that are really walkable, the door that still needs
+    opening, the key that opens it, what lies within reach, who is standing
+    here and what would fight back. Anything invented outside these lists is
+    what the rules then refuse, so the caller validates against them before a
+    button is shown.
+    """
+    view = state if isinstance(state, Mapping) else {}
+    facts = _room_facts(world, view, location_id=location or _text(view.get("location_id")))
+    held: list[str] = []
+    inventory = view.get("inventory")
+    if isinstance(inventory, Mapping):
+        try:
+            items = {item.id: _name(item) for item in (getattr(world, "items", None) or [])}
+        except AttributeError:
+            items = {}
+        for item_id in inventory:
+            name = items.get(item_id)
+            if name:
+                held.append(name)
+    return {
+        "location": (facts["_here_name"] or ([location] if location else [""]))[0],
+        "exits": list(facts["exits"]),
+        "back_exits": list(facts["back_exits"]),
+        "doors": list(facts["doors"]),
+        "keys": list(facts["keys"]),
+        "here_items": list(facts["here_items"]),
+        "characters": list(facts["characters"]),
+        "hostiles": list(facts["hostiles"]),
+        "held": held,
+        "quest": list(facts["quest"]),
+        "in_combat": _in_combat(view),
+        "language": language,
+    }
+
+
+def allowed_targets(guidance: Mapping[str, Any]) -> dict[str, str]:
+    """name -> kind, for every name the rules would accept right now."""
+    names: dict[str, str] = {}
+
+    def add(values: Any, kind: str) -> None:
+        for value in values or []:
+            name = _text(value)
+            if name:
+                names.setdefault(name, kind)
+
+    add(guidance.get("characters"), "character")
+    add(guidance.get("hostiles"), "hostile")
+    add(guidance.get("exits"), "exit")
+    add(guidance.get("doors"), "door")
+    add(guidance.get("keys"), "item")
+    add(guidance.get("here_items"), "item")
+    add(guidance.get("held"), "item")
+    location = _text(guidance.get("location"))
+    if location:
+        names.setdefault(location, "exit")
+    return names
