@@ -108,10 +108,9 @@ function Toggle({ label, hint, checked, onChange }) {
   )
 }
 
-export default function NarrativeStudio({ open = true, onClose, campaignId, context }) {
+export default function NarrativeStudio({ open = true, onClose, context }) {
   const [tab, setTab] = useState('narrator')
   const [draft, setDraft] = useState({ ...DEFAULTS })
-  const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -131,7 +130,8 @@ export default function NarrativeStudio({ open = true, onClose, campaignId, cont
   const setField = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }))
 
   useEffect(() => {
-    if (worldId && !scope) setScope(worldId)
+    if (!worldId) return
+    setScope((prev) => prev || worldId)
   }, [worldId])
 
   useEffect(() => {
@@ -143,12 +143,10 @@ export default function NarrativeStudio({ open = true, onClose, campaignId, cont
         const next = { ...DEFAULTS }
         Object.keys(prefs).forEach((key) => { next[key] = prefs[key] })
         setDraft(next)
-        setLoaded(true)
       })
       .catch((err) => {
         if (!alive) return
         setError(String(err?.message || err))
-        setLoaded(true)
       })
     return () => { alive = false }
   }, [])

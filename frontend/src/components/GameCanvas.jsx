@@ -5,7 +5,6 @@ import { useGameStore } from '../store'
 import {
   streamAction,
   fetchEngineAvailability,
-  submitTextAction,
   submitTextActionStream,
   submitAction,
   fetchJournal,

@@ -36,11 +36,11 @@
 - 当前版本：**0.5.0**（`backend/app/main.py`、`frontend/package.json`、`desktop/src-tauri/tauri.conf.json` 一致）
 - 运行时：Python 3.10+ / FastAPI 后端，React 19 + Vite 7 + Tailwind 3 前端，SQLite 存储
 - 语言：界面与内容中文优先；**叙事语言跟随世界文档的 `language` 字段**，未声明时为英文
-- 规模：**131 条 API 路径**（167 个操作）。其中 `/api/v1` 规则链路 73 条，旧聊天链路 `/api/game` 24 条，
-  情景与作者工具 `/api/scenarios` 12 条，记忆 `/api/memory` 7 条，角色库 `/api/characters` 6 条，
-  供应商 `/api/providers` 3 条，健康检查 2 条，全局设置 `/api/settings`、偏好 `/api/prefs`、
-  战役角色 `/api/campaigns` 各 1 条
-- 代码：后端 112 个 Python 模块、152 个测试文件；前端 29 个组件，全部按路由懒加载
+- 规模：**133 条 API 路径**（172 个操作）。其中 `/api/v1` 规则链路 73 条，旧聊天链路 `/api/game` 24 条，
+  情景与作者工具 `/api/scenarios` 13 条，记忆 `/api/memory` 7 条，角色库 `/api/characters` 6 条，
+  供应商 `/api/providers` 3 条，意图学习表 `/api/intent` 2 条，健康检查 2 条，
+  全局设置 `/api/settings`、偏好 `/api/prefs`、战役角色 `/api/campaigns` 各 1 条
+- 代码：后端 115 个 Python 模块、155 个测试文件；前端 30 个组件，全部按路由懒加载
 - 模型：**不配置任何密钥也能完整游玩**——确定性叙事器按世界语言产出文本
 
 ### 一句话能做的事
@@ -51,7 +51,9 @@
 | 借用已有作品的世界与角色 | 世界工坊「作品穿越」页签，六部内置作品，也可让模型补写 | 内置作品不需要 |
 | 从零手做一套世界 | 世界工坊十三个页签：世界地图 / 剧本生成 / 物品 / 门 / 实体 / 事件 / 任务 / 行动 / 调试 / 作品穿越 / 记忆提炼 / 对话补全 / 世界演化 | 不需要 |
 | 让玩家一句话被写进正史 | 世界演化页签：断言 → 提案 → 采纳，校验不过的不进世界 | 不需要 |
-| 输入框旁边永远有三个可点的下一步 | `GET /api/v1/campaigns/{id}/suggestions`；规则链路自己算，不花模型调用 | 不需要 |
+| 输入框旁边永远有三个可点的下一步 | 模型按当前房间的事实写，引擎逐条复检可执行才显示；没配模型时退回规则层，同一组事实算出来 | 可选 |
+| 把叙事和选项调成自己的口味 | 侧栏「叙事与选项」：文风、人称、篇幅、温度、超时、记忆轮数、额外写作要求；选项条数与允许的类型 | 不需要 |
+| 让一句没听懂的话变成真动作，第二次就记住 | `ENGINE_INTENT_ADVISOR=1`，加「叙事与选项 → 学习表」；顾问答对的那次写进表，同句第二次不再问模型 | 需要 |
 | 让作者草稿"长一点" | 角色库 / 情景工坊的「生成」「继续写」按钮；可勾选联网取材 | 需要 |
 | 换个模型只换一个角色 | `AGENTS_NARRATIVE_MODEL` 等环境变量，或调试台「模型调用」页签看路由 | 不需要 |
 | 换一个起步世界 | `GET /api/v1/world-presets`：奇幻村庄、雾镇、轨道站、荒野营地 | 不需要 |
@@ -65,8 +67,8 @@
 |------|------|
 | `backend/app/engines/` | 规则与引擎层：行动目录、规则判定、事件与效果、任务、剧情、战斗、记忆、NPC 心智 |
 | `backend/app/services/` | 编排层：`action_service` 是唯一写入口；另有解析、知识、叙事、世界编辑、AI 生成、作品库、草稿与联网取材 |
-| `backend/app/api/` | 七个路由模块（引擎 / 知识 / 记忆 / 旧链路 / 情景 / 角色 / 作品） |
-| `backend/app/db/` | 六个存储模块：情景、权威状态、事件、调用追踪、偏好、供应商凭据（后两者与情景库同库） |
+| `backend/app/api/` | 八个路由模块（引擎 / 知识 / 记忆 / 旧链路 / 情景 / 角色 / 作品 / 意图学习） |
+| `backend/app/db/` | 八个存储模块：情景、权威状态、事件、调用追踪、偏好、供应商凭据、记忆事实、意图学习（偏好与凭据同情景库） |
 | `backend/tests/` | pytest（数量见「测试与质量」，由 CI 守护），验收走查在 `tests/api/test_acceptance_story.py` |
 | `frontend/src/components/` | 游戏画布、侧边栏与工具坞、各工坊、面板与浮层 |
 | `docs/` | 阶段设计、审阅矩阵、风险登记、交付审查与 `docs/review-2026-11-15.md` 全量审查 |
@@ -274,15 +276,60 @@ DuckDuckGo lite → Bing 的顺序取检索结果（`SEARCH_BASE_URL` 可指向�
 落盘时世界走 `world_service.save_world`，剧情线必须经 `get_play_config → 改 .storyline → set_play_config`
 写回（直接覆盖会重置 mode 与模型预设）。**它从不写权威游戏状态**——只创建配置。
 
-### 下一步建议：不依赖模型的三条出口
+### 下一步建议：模型来写，引擎把关
 
-`backend/app/services/suggestions.py` 从服务端已有的事实算出"现在能做哪三件事"：
-当前地点的出口、在场的角色与物品、背包里一件可以试试的东西。
-`GET /api/v1/campaigns/{id}/suggestions` 返回它，规则链路每次提交后也会把同一组建议塞进
-`ActionResult`。结果是**建议性的**：不提交任何东西、不虚构不存在的名字。
+输入框上方的三个选项现在是**模型现场写的**，但它写不出一个点不动的按钮：
+
+1. **只给它事实**：`suggestions.room_guidance` 把当前房间的出口与配门、可拾取的物品、在场角色与敌对、
+   背包、任务、战斗状态，加上「上一步刚发生」的叙事尾巴与剧情线提示，拼成 `guidance`；
+   同时给出**世界真实存在的目标名单**（`allowed_targets`）与引擎支持的动词表。
+2. **逐条硬校验**：`suggestions_model.check_option` 要求动作以已知动词开头、必需的目标必须点名、
+   目标类别要对（开门得是门、说话得是活人、攻击得是在场敌对），中文世界里还得是中文动词；
+   对话选项的目标只能是人物。
+3. **再复检一次可执行**：`routes_engine_actions._executable_options` 把每个选项按前端点击的形态
+   （`[DO] 动作 @目标` / `[SAY] 台词 @人物`）交给 `TextActionParser` 真解析一遍；
+   解析不出来、或目标必需却没有解析到目标的，直接丢掉。
+
+不够三条时 `merge_options` 用规则层补位，响应里的 `suggestions_source` 会写明这次走的是 `model` 还是 `rules`。
+模型超时、报错、全部被拒都退回规则层——最差情况仍然有三条能点的路。
+`GET /api/v1/campaigns/{id}/suggestions` 始终只走规则、不花模型调用，适合低配机器与联调。
+
+规则层本身（`backend/app/services/suggestions.py`）从服务端已有的事实算出「现在能做哪三件事」：
+当前地点的出口、在场的角色与物品、背包里一件可以试试的东西、没开的门与该找的钥匙、能推进的剧情地点。
+它从不提交任何东西、不虚构不存在的名字。
 
 这一条存在的理由很具体：以前建议只来自叙事 JSON 字段和一次额外模型调用，
-模型一挂就双双消失，玩家只剩一个空输入框；规则链路则从来没有要过建议。现在最差情况也有三条能点的路。
+模型一挂就双双消失，玩家只剩一个空输入框；规则链路则从来没有要过建议。
+现在模型写得好就用模型，写不好就退回来，最差情况也有三条能点的路。
+
+### 叙事与选项都能改：面板，或者 `/api/prefs`
+
+侧栏「叙事与选项」（`NarrativeStudio`）把两层以前写死的东西暴露出来，改完**下一次行动生效**：
+
+| 页签 | 可改的 | 存储键（`POST /api/prefs`） |
+|------|--------|---------------------------|
+| 叙事 | 文风、人称、篇幅、语言提示、额外写作要求 | `narrator_style` / `narrator_perspective` / `narrator_length` / `narrator_language_hint` / `narrator_extra_rules` |
+| 叙事 | 最大输出 token、温度、超时、记忆轮数 | `narrator_max_tokens` / `narrator_temperature` / `narrator_timeout` / `narrator_history_turns` |
+| 叙事 | 采样与提示：top_p、存在/频率惩罚、是否显示规则条与 OOC 提示 | `top_p` / `presence_penalty` / `frequency_penalty` / `narrator_show_rules` / `narrator_allow_ooc` |
+| 选项 | 条数（2–5）、温度、最大 token、超时 | `suggestions_count` / `suggestions_temperature` / `suggestions_max_tokens` / `suggestions_timeout` |
+| 选项 | 额外要求；是否允许「说话」「检查」；是否用剧情线提示 | `suggestions_extra_rules` / `suggestions_allow_speech` / `suggestions_allow_investigate` / `suggestions_use_story` |
+
+越界值取最近边界，空着的字段回落到预设；这些覆盖项也出现在本回合的
+`narrative.diagnostics` 里——调试台显示的是这一回合真正用掉的预算，而不是构造函数默认值。
+
+### 学到的说法留在表里
+
+打开 `ENGINE_INTENT_ADVISOR=1` 后，解析器认不出的句子会问一次模型「这能不能翻译成白名单里的动作」。
+从这一版起，**顾问答对的那次会被记下来**：`backend/app/db/intent_memory_store.py` 的
+`intent_learnings` 表以世界为作用域（`scope_key=world_id`），存归一化后的短语 → 动作 + 目标片段。
+
+- 第一次：「我凑近看看那个歪掉的小药柜」→ 问顾问 4.3 秒 → 执行 `look`，同时写表；
+- 第二次：同一句 2.3 秒 → `parsed.note` 变成 `intent memory`，**不再调模型**；
+- 记录不放大权限：仍要过同一套解析与规则；过期或对不上的记录会被忽略，再问一次顾问。
+
+表可以在「叙事与选项 → 学习表」里增删改查，也可以直接走 `GET/POST /api/intent` 与
+`PATCH/DELETE /api/intent/{id}`；手写的记录 `source=manual`，顾问写的 `source=advisor`，
+命中次数 `hits` 会累加——可以据此判断哪些说法值得写进世界自己的动词表。
 
 ### 作品穿越：借一个世界的骨架
 
@@ -541,6 +588,10 @@ NEO4J_PASSWORD=
 # AGENTS_SYSTEM_ENABLED=0
 # AGENTS_SYSTEM_TIMEOUT=45
 
+# 意图顾问：解析器认不出的句子才问模型；答对的那次会写进学习表（按世界作用域）
+# ENGINE_INTENT_ADVISOR=0
+# ENGINE_INTENT_TIMEOUT=8
+
 # 调试/作者工具：手动推进任务目标、回滚快照、修复状态都受它控制
 # ENGINE_DEBUG_TOOLS=0
 
@@ -669,7 +720,7 @@ python launch.py --app     # 后端同时托管 frontend/dist，窗口开在 800
 |------|------|
 | 游玩 | 角色档案、背包、世界地图、任务日志 |
 | 叙事 | 剧情进度、剧情生成、时间流逝、NPC 心智、记忆结晶 |
-| 系统 | 世界工坊、LLM 调试台、设置 |
+| 系统 | 世界工坊、LLM 调试台、叙事与选项、设置 |
 
 其它值得知道的界面行为：
 
@@ -681,7 +732,10 @@ python launch.py --app     # 后端同时托管 frontend/dist，窗口开在 800
   改变不了任何状态），把玩家想做的事记进行动记录。写得明确但目标不存在（"拿起月亮"）仍然拒绝，
   并给出此刻真正可用的出口与目标。配了模型时可以打开 `ENGINE_INTENT_ADVISOR=1`，让模型在
   "尝试"之前先看一眼能不能把它翻译成真实动作。
-- **下一步建议**（`SuggestionList`）：输入框上方三个可点的选项，可以直接发送或先改再发。
+- **下一步建议**（`SuggestionList`）：输入框上方可点的选项（默认三条，可在 2–5 之间调），由模型按当前房间
+  事实写、引擎逐条复检可执行后才显示；没配模型或模型失手时退回规则层。可以直接发送或先改再发。
+- **叙事与选项**（`NarrativeStudio`）：侧栏「系统」组，三个页签分别管叙事参数、选项参数与意图学习表；
+  保存即写 `/api/prefs`（学习表走 `/api/intent`），下一次行动生效。
 - **调试台四个页签**：调用追踪、叙事与上下文、行动记录、模型调用。
 - **内容策略**在设置面板切换；切到「NSFW（本地）」后叙事整条走本地模型。
 
@@ -729,10 +783,12 @@ self-engine/
 │   │   ├── api/                 # routes_engine（facade）+ routes_engine_state / _actions /
 │   │   │                        # _campaigns / _authoring 等 9 个分组模块
 │   │   │                        # routes_knowledge / routes_works / routes_game /
-│   │   │                        # routes_scenarios / routes_characters
+│   │   │                        # routes_scenarios / routes_characters /
+│   │   │                        # routes_intent_memory
 │   │   ├── db/                  # scenario_store / game_state_store / event_store /
-│   │   │                        # trace_store / prefs_store / credential_store
-│   │   │                        # （prefs 与 credentials 复用 scenarios.db 连接）
+│   │   │                        # trace_store / prefs_store / credential_store /
+│   │   │                        # memory_fact_store / intent_memory_store
+│   │   │                        # （prefs、credentials、intent 复用 scenarios.db 连接）
 │   │   ├── engines/             # 规则与引擎层（30 个模块）
 │   │   ├── models/              # game.py / knowledge.py / work.py
 │   │   ├── services/            # 编排与服务层（action_service 是唯一写入口）
@@ -744,7 +800,7 @@ self-engine/
 │   ├── scripts/check-hook-order.mjs / check-agent-wiring.mjs
 │   └── src/
 │       ├── App.jsx / api.js / store.js
-│       ├── components/          # 画布、侧边栏与工具坞、各工坊、面板（29 个）
+│       ├── components/          # 画布、侧边栏与工具坞、各工坊、面板（30 个）
 │       ├── data/worldTemplates.js
 │       └── lib/                 # interpolate / theme / scenarioTypes
 ```
@@ -761,7 +817,8 @@ self-engine/
 `game_clock`（只有玩家行动才推进的时间）。
 
 **services/**：`action_service`（唯一写入口）、`text_action_service`（自然语言 → `ActionRequest`）、
-`rejection`（被拒绝时说人话）、`suggestions`（三步建议）、`knowledge_service`、`knowledge_extractor`、
+`rejection`（被拒绝时说人话）、`suggestions`（规则层的三步建议）、
+`suggestions_model`（模型写选项 + 可执行性复检）、`knowledge_service`、`knowledge_extractor`、
 `narrative_service`、`narrator_factory`、`summary_service`、`intent_advisor`、`interaction_planner`、
 `world_service`、`world_editor`、`world_evolution`（断言 → 校验过的提案 → 可审核落盘）、
 `authoring_session`（一句话变成编辑操作）、`scenario_author`、`scenario_service`、
@@ -773,7 +830,7 @@ self-engine/
 
 ## API 概览
 
-全部接口挂在 `/api` 下，共 **131 条路径 / 167 个操作**；设置 `API_TOKEN` 后除健康检查外都要求
+全部接口挂在 `/api` 下，共 **133 条路径 / 172 个操作**；设置 `API_TOKEN` 后除健康检查外都要求
 `Authorization: Bearer <token>` 或 `X-API-Token`。完整清单与请求/响应结构见 <http://127.0.0.1:8000/docs>，
 `/api/v1` 的每条路由都有类型化响应模型，并由 `backend/tests/api/test_routes_contracts.py` 守住。
 
@@ -785,10 +842,11 @@ self-engine/
 | `/api/memory` | 7 | 结构化事实、混合检索、NPC 视角 |
 | `/api/characters` | 6 | 角色卡与外观 |
 | `/api/providers` | 3 | 供应商密钥的写入 / 删除 / 连通性测试 |
+| `/api/intent` | 2 | 意图学习表：短语 → 动作，按世界作用域（5 个操作） |
 | `/api/health` | 2 | 存活探针与 Neo4j 连通性 |
 | `/api/settings`、`/api/prefs`、`/api/campaigns` | 各 1 | 全局设置、跨设备偏好、战役角色 |
 
-> 上表由 `app.openapi()` 实测得出（`131` 条路径 / `167` 个操作）；
+> 上表由 `app.openapi()` 实测得出（`133` 条路径 / `172` 个操作）；
 > `/api/v1` 是 `routes_engine`、`routes_knowledge`、`routes_works` 三个模块叠加的前缀，
 > 所以按模块数并不等于按前缀数。
 
@@ -800,10 +858,10 @@ self-engine/
 | POST | `/campaigns/{id}/world` | 为战役绑定世界 |
 | POST | `/campaigns/{id}/actions` | 提交结构化行动（唯一写入口） |
 | POST | `/campaigns/{id}/actions/preview` | 干运行：只看判定，不写状态 |
-| POST | `/campaigns/{id}/text-actions` | 自然语言行动，解析后走同一管线 |
+| POST | `/campaigns/{id}/text-actions` | 自然语言行动，解析后走同一管线；`stream: true` 时返回 SSE |
 | POST | `/campaigns/{id}/combat` | 战斗回合 |
 | GET | `/campaigns/{id}/state` | 权威状态（含 `version`） |
-| GET | `/campaigns/{id}/suggestions` | 此刻可以做的三件事（不调用模型） |
+| GET | `/campaigns/{id}/suggestions` | 此刻可以做的三件事（规则层，不调用模型） |
 | GET | `/campaigns/{id}/requests` | 请求记录（含 `applied/rejected/duplicate`） |
 | GET | `/actions/{request_id}` | 按幂等键查单条请求与结果 |
 | GET | `/campaigns/{id}/agent-calls` | 该战役的模型调用记录 |
@@ -907,8 +965,8 @@ self-engine/
 
 返回 `ActionResult`：`status`（`applied` / `rejected` / `duplicate` / `conflict`）、`ok`、`code`、
 `message`、`state_version`、`effects_applied`、`events_fired`、`quests`、`story_nodes_entered`、
-`narrative`（含 `diagnostics`）、`suggestions` 与提交后的 `state`；阶段 5 起还带
-`minutes_spent` 与 `clock`（老客户端可忽略）。
+`narrative`（含 `diagnostics`）、`suggestions`（另有 `suggestions_source`：`model` / `rules`）
+与提交后的 `state`；阶段 5 起还带 `minutes_spent` 与 `clock`（老客户端可忽略）。
 
 `request_id` 是幂等键：同一个 id 重放返回 `duplicate` 与**同一份**结果，不会重复扣物品或发奖励。
 
@@ -933,13 +991,13 @@ cd frontend && npx eslint src && npm run build
 > `TEMP` / `TMP` 必须设置：pytest 默认临时目录在部分 Windows 环境下不可写；
 > `-p no:cacheprovider` 同理，避免 `.pytest_cache` 写入失败。
 
-- 最近一次全量：**2069 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），热缓存约 **90 秒**、冷启动约 **250 秒**。
-  前端模块 **2984** 个，构建约 2.8 秒；eslint **0 error**（13 条既有的 `react-hooks/exhaustive-deps` 警告）。
+- 最近一次全量：**2102 passed / 8 skipped**（跳过项为未启动 Neo4j 的图谱测试），本机跑完约 **68 秒**。
+  前端模块 **2985** 个，构建约 2.5 秒；eslint **0 error**（13 条既有的 `react-hooks/exhaustive-deps` 警告）。
   `.github/workflows/` 里两条 CI（backend pytest / frontend lint+build）会守住这两个数字。
 - 验收走查集中在 `backend/tests/api/test_acceptance_story.py`（5 个用例），覆盖 14 条验收：
   建世界/钥匙/拾取/无钥匙被拒/有钥匙通过/门状态与事件/任务进度/叙事/存档重载/幂等/
   叙事失败不回滚/非法事件配置/模拟只读/中文世界读中文。
-- 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层（152 个测试文件），
+- 测试按 `backend/tests/{api,db,engines,models,services,scripts}` 分层（155 个测试文件），
   包括效果注册表对齐、事件分支、NPC 知识可见性、并发 CAS、幂等重放、内容策略与本地回退、
   角色路由与降级、NPC 档案的知识隔离、演化提案的「未写入不叫已采纳」、游戏时钟暂停即冻结等。
 - 架构场景跑成测试：`backend/tests/services/test_architecture_acceptance.py`（10 个用例）——
@@ -995,6 +1053,11 @@ cd frontend && npx eslint src && npm run build
 设置面板里填的令牌只存在当前标签页的 `sessionStorage`，关掉即失效）、
 **SQLite 单写者**（并发写会以版本冲突重试，不会静默覆盖）、
 **语义召回依赖外部 embedding 服务**（未配置时自动退回 BM25，不会静默降质成空结果）。
+
+**模型参与的两层各有边界。** 选项由模型写，但没有模型也能玩：规则层按同一组事实给出三条路，
+响应里的 `suggestions_source` 标明这一回合走的是哪条；模型写坏的选项逐条丢弃，不足三条用规则补。
+学习表按归一化后的短语精确匹配（去 `[DO]`/`[SAY]` 信封、NFKC、小写、压空白、去首尾标点），
+不做语义泛化，作用域是单个世界；意图顾问默认关闭，问一次失败就退化成一次 `improvise` 尝试。
 
 **后端只支持单进程运行。** `backend/app/api/routes_game.py:111` 的 `_sessions` 是进程内字典，
 挂载着每个战役的模型实例与内存态（`_ensure_session` 命中就直接复用），所以 `uvicorn --workers N`
@@ -1078,7 +1141,7 @@ cd frontend && npx eslint src && npm run build
 | --- | --- |
 | [`docs/knowledge_and_history.md`](docs/knowledge_and_history.md) | 叙事能看到什么：两条互不混合的上下文通道 |
 | [`docs/stage4_narration_degradation.md`](docs/stage4_narration_degradation.md) | 叙事降级与模型输出校验：叙事失败不影响事实 |
-| [`docs/intent_advisor.md`](docs/intent_advisor.md) | 意图建议器：确定性解析器兜不住时才问模型，且只读 |
+| [`docs/intent_advisor.md`](docs/intent_advisor.md) | 意图建议器与学习表：解析器兜不住时才问模型，答对的那次写进 `intent_learnings` |
 | [`docs/stage6_api_contracts.md`](docs/stage6_api_contracts.md) | 引擎响应契约：从 `Dict[str, Any]` 到具名模型 |
 | [`docs/stage6_effect_registry.md`](docs/stage6_effect_registry.md) | 效果注册表：`apply_effect` 从分支链变成查表 |
 | [`docs/stage3_combat_rules.md`](docs/stage3_combat_rules.md) | 战斗规则化：规则引擎判定、LLM 只描述 |
