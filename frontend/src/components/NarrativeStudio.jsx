@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { X, RefreshCw, Trash2, Plus, Save } from 'lucide-react'
 import {
-  fetchPrefs, savePrefs,
+  fetchPrefs, savePrefs, fetchCampaignEngineState,
   fetchIntentLearnings, addIntentLearning, updateIntentLearning,
   deleteIntentLearning, clearIntentLearnings,
 } from '../api'
@@ -108,7 +108,7 @@ function Toggle({ label, hint, checked, onChange }) {
   )
 }
 
-export default function NarrativeStudio({ open = true, onClose, context }) {
+export default function NarrativeStudio({ open = true, onClose, campaignId, context }) {
   const [tab, setTab] = useState('narrator')
   const [draft, setDraft] = useState({ ...DEFAULTS })
   const [busy, setBusy] = useState(false)
@@ -129,10 +129,24 @@ export default function NarrativeStudio({ open = true, onClose, context }) {
 
   const setField = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }))
 
+  // 学习表按世界作用域过滤。面板也可能开在叙事线，那时 context 里还没有引擎状态，
+  // 就直接问一次战役状态——否则用户看到的是所有世界的记录，还得手填世界 id。
   useEffect(() => {
-    if (!worldId) return
-    setScope((prev) => prev || worldId)
-  }, [worldId])
+    if (worldId) {
+      setScope((prev) => prev || worldId)
+      return undefined
+    }
+    if (!campaignId) return undefined
+    let alive = true
+    fetchCampaignEngineState(campaignId)
+      .then((state) => {
+        if (!alive) return
+        const id = state?.world_id || ''
+        if (id) setScope((prev) => prev || id)
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [worldId, campaignId])
 
   useEffect(() => {
     let alive = true
